@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Sistema telematico di assegnazione di spazi sportivi pubblici (palestre scolastiche di competenza provinciale). Obiettivo: eliminare discrezionalità umana nell'assegnazione, sostituendola con regole matematiche deterministiche, tracciabili e riproducibili da terzi.
 
-**Stato attuale**: analisi requisiti chiusa. Fase 1 (schema DB), Fase 2 (motore Go: calc + sorteggio + round-robin) e Fase 3 (persistenza Postgres + esposizione HTTP del motore) implementate, testate, verificate con Postgres reale. Fase 4 (Backend Node.js+TypeScript) in corso: scaffold, `GET /stagioni`, autenticazione locale backoffice completa (login/refresh/logout/rate-limit) — tutto verificato end-to-end. Residui noti: blocchi gara nel motore Go, OIDC SPID/CIE (dedicato), CORS/security headers, resto del CRUD nel backend Node.
+**Stato attuale**: analisi requisiti chiusa. Fase 1 (schema DB), Fase 2 (motore Go: calc + sorteggio + round-robin) e Fase 3 (persistenza Postgres + esposizione HTTP del motore) implementate, testate, verificate con Postgres reale. Fase 4 (Backend Node.js+TypeScript) in corso: scaffold, `GET /stagioni`, autenticazione locale backoffice **e** OIDC SPID/CIE pubblico (login/refresh/logout/rate-limit, entrambe) — tutto verificato end-to-end con Postgres reale e IdP mock realistico (mai contro il vero pa-sso-proxy, serve credenziali reali). Residui noti: blocchi gara nel motore Go, CORS/security headers, resto del CRUD nel backend Node, provider SPID/CIE/eIDAS ancora hardcoded a 'spid' (placeholder da confermare).
 
 ## Versioni target (verificate via web search, non da training data — ricontrollare a inizio di ogni fase nuova, l'ecosistema si muove in fretta)
 
@@ -56,6 +56,7 @@ I valori numerici sotto indicati sono **default**. Tutti i parametri di business
 - `000001_init.up/down.sql` — schema completo (stagioni, impianti/slot, persone/associazioni/abilitazioni, backoffice, domande/fabbisogni/coefficienti, elaborazioni/assegnazioni/sorteggi, concertazione, monitoraggio/convenzioni, audit log).
 - `000002_seed_valori_normativi.up/down.sql` — dati normativi reali da Allegato A (classi attività, scaglioni CRS/CAA) + prima versione parametrico con i placeholder 🔺.
 - `000003_auth_backoffice.up/down.sql` — `sessioni_backoffice` (refresh token hashati, per la rotation), `tentativi_login_backoffice` (audit sicurezza login, separata da `log_operazioni` — vedi sezione Backend Node).
+- `000004_oidc_pubblico.up/down.sql` — `oidc_stato_pkce` (state/code_verifier PKCE, TTL breve, consumo one-shot — Postgres al posto di Redis), `sessioni_persona_fisica` (refresh token hashati per il frontend pubblico, stesso pattern di `sessioni_backoffice`).
 
 Punti tecnici degni di nota per chi tocca lo schema:
 - `EXCLUDE USING gist` su `slot_settimana_tipo` (spazio + giorno + stagione + intervallo orario) impedisce sovrapposizioni fisiche a livello DB, non solo applicativo. Richiede `btree_gist`.
@@ -172,23 +173,37 @@ Fatto — **autenticazione locale backoffice** (`src/auth/`), NON OIDC/SPID (que
 
 Da fare: CORS + security headers (`helmet`) — rimandato, da decidere insieme al design della rete tra container, lockout per-account sui tentativi falliti (richiede migration), CRUD per le altre ~15 entità dello schema, orchestrazione delle 16 fasi procedurali (Allegato B), coda verso l'HTTP del motore Go (`internal/httpapi`) per istruttoria/prima-assegnazione.
 
-## OIDC SPID/CIE (frontend pubblico) — spec del proxy reale
+## OIDC SPID/CIE (frontend pubblico) — implementato
 
-Il proxy SPID/CIE→OIDC in uso è **pa-sso-proxy** (SATOSA), già in esercizio, gestito dall'Ente al di fuori di questo repo — non un IdP mock da simulare, è il provider reale. Standard OIDC lato nostro (Authorization Code + PKCE), niente SAML/SPID-specifico nel nostro codice: tutta la complessità SPID/CIE/eIDAS resta nel proxy.
+Il proxy SPID/CIE→OIDC in uso è **pa-sso-proxy** (SATOSA), già in esercizio, gestito dall'Ente al di fuori di questo repo — provider reale, non un mock da simulare. Standard OIDC lato nostro (Authorization Code + PKCE), niente SAML/SPID-specifico nel nostro codice: tutta la complessità SPID/CIE/eIDAS resta nel proxy.
 
-Riferimento diretto (stesso proxy, stesso stack TypeScript, licenza EUPL-1.2 come questo progetto): [Comune-di-Montesilvano/ComunicaPA](https://github.com/Comune-di-Montesilvano/ComunicaPA), in particolare `apps/backend/src/auth/oidc/oidc-flow.service.ts` e `apps/backend/src/auth/strategies/oidc-citizen.strategy.ts`. Loro non usano `openid-client`: flusso scritto a mano (fetch diretto sul token endpoint) + `jwks-rsa`/`passport-jwt` per la verifica firma. Vale la pena guardare quel codice prima di reinventare, non solo questa sintesi.
+Riferimento diretto usato in fase di analisi (stesso proxy, stesso stack TypeScript, licenza EUPL-1.2): [Comune-di-Montesilvano/ComunicaPA](https://github.com/Comune-di-Montesilvano/ComunicaPA) (`apps/backend/src/auth/oidc/oidc-flow.service.ts`, `.../strategies/oidc-citizen.strategy.ts`).
 
-**Interoperabilità pa-sso-proxy (vincoli protocollari confermati, non assunzioni):**
-- Issuer = radice del proxy **senza** `/OIDC` in fondo; discovery su `/.well-known/openid-configuration`; endpoint effettivi sotto `/OIDC/` (`authorization`, `token`, `jwks`, `end_session`).
-- Supporta **solo** `client_secret_basic` (credenziali nell'header `Authorization: Basic`) — client_secret nel body del token request → 401 con pagina HTML (non un errore OIDC leggibile).
-- Claim codice fiscale: `fiscal_number`, formato **`TINIT-<CF>`** (prefisso `TIN`+codice paese ISO, da strippare con regex tipo `^TIN[A-Z]{2}-`). Claim URI eIDAS alternativo: `https://attributes.eid.gov.it/fiscal_number`; SPID: `https://attributes.spid.gov.it/fiscalNumber`. Provare più chiavi in ordine di priorità, non assumerne una sola.
-- Claim nome: spesso **`given_name`/`family_name` separati, senza `name`** — comporre lato nostro se `name` assente.
+**Interoperabilità pa-sso-proxy (vincoli protocollari applicati nel codice, non assunzioni):**
+- Issuer = radice del proxy **senza** `/OIDC` in fondo; discovery su `/.well-known/openid-configuration`; endpoint effettivi sotto `/OIDC/`.
+- Supporta **solo** `client_secret_basic` (header `Authorization: Basic`) — client_secret nel body → 401 HTML. `oidc/flow.ts` usa sempre l'header, mai il body.
+- Claim codice fiscale: `fiscal_number` formato **`TINIT-<CF>`**, più varianti eIDAS/SPID URI-based — `oidc/claims.ts` prova più chiavi in ordine.
+- Claim nome: spesso `given_name`/`family_name` separati, senza `name` — gestito con fallback.
 
-**Pattern architetturali da riusare (validati in produzione su questo stesso proxy):**
-- Scambio del `code` sempre lato server (mai nel browser): il client_secret non deve mai raggiungere la SPA.
-- PKCE con `code_challenge_method=S256`; `state`+`code_verifier` salvati server-side con TTL breve (~5 min) e consumo one-shot (get-then-delete, non semplice lettura, per bloccare replay). Loro usano Redis (già presente nel loro stack per le code BullMQ) — **noi non abbiamo ancora Redis**: preferire una tabella Postgres dedicata (coerente con "riusa Postgres, non aggiungere infra" già seguito nel resto del progetto) a meno che emerga necessità reale di Redis altrove.
-- Verifica firma id_token via JWKS del proxy (`jwks-rsa` o equivalente), **non** verificare con un secret nostro — è un token emesso dal proxy, non da noi.
-- Config OIDC (issuer, client_id, client_secret, redirect_uri, jwks_uri) va in tabella DB configurabile da UI admin, **non** hardcoded/solo env — coerente con `impostazioni_sistema` (già nello schema, Fase 1) pensata proprio per questo (chiave `'oidc'`). Loro cifrano i secret at-rest con AES-256-GCM derivata da `JWT_SECRET`; valutare lo stesso per `client_secret`.
+**`backend-node/src/oidc/` + `src/auth/loginPubblico.ts` — implementazione completa:**
+- `crypto.ts` — AES-256-GCM per il `client_secret` at-rest, chiave derivata da `JWT_SECRET` via scrypt con context label dedicato (non i byte grezzi del secret: separazione di scopo firma-JWT/cifratura).
+- `config.ts` — config OIDC in `impostazioni_sistema` (chiave `'oidc'`, già nello schema Fase 1), secret sempre cifrato in scrittura/decifrato in lettura.
+- `pkce.ts` + `repository/oidcPkceState.ts` — PKCE S256, `state`/`code_verifier` in tabella Postgres dedicata (`oidc_stato_pkce`, migration `000004`) con TTL 5 min e consumo one-shot (`DELETE...RETURNING`, non Redis: coerente con "riusa Postgres" già seguito nel resto del progetto).
+- `discovery.ts` — `.well-known`, cache 10 min in memoria.
+- `idTokenVerify.ts` — verifica firma via JWKS del proxy (`jwks-rsa`), **mai** con un secret nostro. Testato con RSA vera generata al volo: issuer/audience/firma-manomessa/scadenza tutti verificati a rifiutare correttamente.
+- `flow.ts` — orchestrazione `costruisciUrlAutorizzazione`/`scambiaCode`.
+- `auth/loginPubblico.ts` + `repository/personeFisiche.ts` + `repository/sessioniPersonaFisica.ts` — dopo lo scambio, trova/crea `persone_fisiche`, emette JWT proprio (`jwtPubblico.ts`, **non** pass-through dell'id_token del proxy, a differenza di ComunicaPA — scelto per coerenza con lo stesso pattern già usato per il backoffice: JWT+refresh rotation nostri).
+- **`audience` sui JWT**: sia `jwt.ts` (backoffice, `aud:'backoffice'`) che `jwtPubblico.ts` (`aud:'pubblico'`) usano lo stesso `JWT_SECRET` ma audience diverse, controllate esplicitamente in verifica — un token pubblico non deve mai passare per un endpoint backoffice anche se la firma è valida. Gap reale trovato in retrospettiva: `jwt.ts` non aveva audience prima di costruire `jwtPubblico.ts`, aggiunta a entrambi.
+
+**Endpoint**: `GET /auth/oidc/start` (redirect, rate-limited), `POST /auth/oidc/callback` (`{code,state}`), `POST /auth/pubblico/refresh`, `POST /auth/pubblico/logout`, `GET /auth/pubblico/me` (protetta).
+
+**Due bug reali trovati dallo smoke test HTTP, non dai test automatici iniziali** (motivo per cui lo smoke test resta necessario anche con test di integrazione già verdi — i test iniziali non avevano esercitato "stesso codice fiscale, `oidc_subject` diverso", scenario realistico: stessa persona autenticata via SPID una volta e via CIE un'altra, o comunque il proxy che emette `sub` diversi tra sessioni):
+- `persone_fisiche` ha **due** vincoli UNIQUE indipendenti (`codice_fiscale`, e `(oidc_provider, oidc_subject)`). Un `ON CONFLICT` su uno solo dei due fallisce nell'altro caso. Fix in `repository/personeFisiche.ts`: due lookup espliciti in sequenza (per subject, poi per CF) prima di un eventuale INSERT — niente `ON CONFLICT` unico. Race TOCTOU teorica tra le richieste accettata (esito peggiore: errore di vincolo raro, non dato corrotto), non usata una transazione SERIALIZABLE per un login.
+- Verificato anche: cifratura config con un `JWT_SECRET` diverso da quello con cui è stata scritta produce un errore criptico Node (`Unsupported state or unable to authenticate data`) invece di un messaggio chiaro — comportamento strutturalmente corretto (fallisce, non decifra dati sbagliati) ma da tenere a mente: **cambiare `JWT_SECRET` in produzione rende irrecuperabile ogni `client_secret` già cifrato**, va reinserito da UI (stesso comportamento di ComunicaPA, per lo stesso motivo).
+
+**Placeholder esplicito da confermare con l'Ente**: `OIDC_PROVIDER_DEFAULT = 'spid'` in `loginPubblico.ts` — non sappiamo ancora come pa-sso-proxy segnala SPID vs CIE vs eIDAS nei claim reali, va verificato a integrazione con l'IdP vero.
+
+**Non verificato — richiede credenziali reali**: tutto il codice è stato testato con un IdP mock realistico (RSA vera, stesso protocollo, stesso vincolo `client_secret_basic`) ma **mai contro il vero pa-sso-proxy**. Serve un giro di verifica con `client_id`/`client_secret`/`issuer`/`redirect_uri` reali prima del go-live — non ne abbiamo l'accesso da qui.
 
 **Gotcha da tenere a mente per quando ci sarà un reverse proxy esterno davanti al backend** (non ancora rilevante, non c'è ancora): un proxy esterno può sostituire il body delle risposte non-2xx con una pagina HTML propria, rendendo illeggibili gli errori applicativi — pattern da valutare allora: rispondere comunque 200 con un flag tipo `{ok:false, errore:'...'}` per gli errori "previsti" che l'utente deve poter leggere, riservando i codici HTTP di errore veri a fallimenti non previsti.
 

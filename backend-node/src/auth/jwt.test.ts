@@ -37,3 +37,14 @@ test('verificaAccessToken rifiuta un token con algoritmo diverso da HS256', () =
   });
   assert.throws(() => verificaAccessToken(tokenAlgNone));
 });
+
+test('verificaAccessToken rifiuta un token con audience "pubblico" anche se firmato con lo stesso segreto', () => {
+  // stesso JWT_SECRET del frontend pubblico (jwtPubblico.ts): un token emesso per i
+  // cittadini non deve mai essere accettato da un endpoint backoffice.
+  const tokenAudiencePubblica = jsonwebtoken.sign(
+    { sub: 'persona-1', email: 'x@example.com', ruolo: 'admin' },
+    process.env.JWT_SECRET as string,
+    { algorithm: 'HS256', audience: 'pubblico' },
+  );
+  assert.throws(() => verificaAccessToken(tokenAudiencePubblica));
+});

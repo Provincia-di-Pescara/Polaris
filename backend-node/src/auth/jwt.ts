@@ -10,6 +10,10 @@ export interface PayloadAccessToken {
 // dichiarato nell'header del token (previene l'attacco di algorithm confusion, es. alg=none).
 const ALGORITMO = 'HS256' as const;
 const DURATA_ACCESS_TOKEN = '15m';
+// Stesso JWT_SECRET usato anche per i token del frontend pubblico (jwtPubblico.ts):
+// l'audience distingue i due tipi, un token pubblico non deve mai passare la verifica
+// di un endpoint backoffice anche se firmato con lo stesso segreto.
+const AUDIENCE = 'backoffice' as const;
 
 function segreto(): string {
   const s = process.env.JWT_SECRET;
@@ -20,11 +24,15 @@ function segreto(): string {
 }
 
 export function generaAccessToken(payload: PayloadAccessToken): string {
-  return jsonwebtoken.sign(payload, segreto(), { algorithm: ALGORITMO, expiresIn: DURATA_ACCESS_TOKEN });
+  return jsonwebtoken.sign(payload, segreto(), {
+    algorithm: ALGORITMO,
+    expiresIn: DURATA_ACCESS_TOKEN,
+    audience: AUDIENCE,
+  });
 }
 
 export function verificaAccessToken(token: string): PayloadAccessToken {
-  const decodificato = jsonwebtoken.verify(token, segreto(), { algorithms: [ALGORITMO] });
+  const decodificato = jsonwebtoken.verify(token, segreto(), { algorithms: [ALGORITMO], audience: AUDIENCE });
 
   if (typeof decodificato === 'string') {
     throw new Error('payload del token inatteso (stringa)');
