@@ -101,7 +101,15 @@ Testato con scenari comportamentali end-to-end (non solo unità isolate): distri
 
 Fatto: `internal/istruttoria/` — Fase 4 (art. B.8): orchestra i calcolatori di `calc/` per calcolare FR e coefficienti (CRS/CAA/CSD/CP) di una singola domanda, applicando i valori neutri di prima stagione (incremento squadre e CAA neutri, non il CRS — dipende solo dalla classe dichiarata quest'anno). **Assunzione esplicita da confermare con l'Ente**: Allegato A/B parlano di un unico "fabbisogno dichiarato (FD)" ma la domanda raccoglie sia un minimo che un ottimale (Doc Principale art. 5) — implementato FD = fabbisogno_ottimale_minuti, non il minimo. Vedi commento doc del package.
 
-Da fare (Fase 3, resto): layer di persistenza Postgres — `internal/istruttoria` e `internal/roundrobin` sono entrambi puri, senza dipendenza DB (voluto, per isolamento/determinismo testabile). Manca ancora: repository che legge domande/slot/richieste/blocchi da Postgres e li mappa ai tipi del motore, scrittura transazionale dei risultati (fabbisogni_riconosciuti, coefficienti_associazione, assegnazioni, sorteggi), esposizione HTTP/gRPC verso il backend Node. Da trattare con lo stesso rigore dello schema (container Postgres reale, non solo query scritte a occhio) — è un blocco di lavoro grande quanto lo schema stesso, non va affrettato insieme ad altro.
+Fatto: `internal/postgres/` — layer di persistenza (driver `jackc/pgx/v5`, nessun ORM, coerente con lo stile SQL puro dello schema):
+- `CaricaParametricoAttivo` — ultima versione parametrica pubblicata (`ORDER BY valida_dal DESC LIMIT 1`) + tutti gli scaglioni collegati (CSD versionati, CRS/CAA/incremento-squadre normativi globali). Valori NUMERIC sempre letti via `::text` + `decimal.NewFromString`, mai binding diretto — pgx v5 non ha supporto nativo per `shopspring/decimal` senza un pacchetto ponte aggiuntivo, e il cast testuale evita quella dipendenza in più.
+- `EseguiIstruttoria` — Fase 4 (art. B.8): carica le domande ammesse di una stagione (incluso il calcolo SQL di "prima stagione": nessuna domanda ammessa della stessa associazione in una stagione con `data_inizio` precedente), chiama `istruttoria.Calcola` per ciascuna, upserta `fabbisogni_riconosciuti`+`coefficienti_associazione` in un'unica transazione (`ON CONFLICT (domanda_id) DO UPDATE`).
+- `EseguiRoundRobin` — Fase 8 end-to-end: carica fasce/richieste/blocchi allenamento/associazioni (richiede istruttoria già eseguita, legge FR/CP da lì), chiama `roundrobin.Esegui`, persiste `elaborazioni`+`assegnazioni`+(se necessario)`sorteggi`+`sorteggio_candidati` in un'unica transazione.
+- Nota: `roundrobin.Assegnazione` non porta ancora l'ISF al momento dell'assegnazione — colonna `isf_al_momento` (nullable) lasciata NULL per ora, non blocca nulla ma andrà chiuso se serve in dashboard/audit.
+
+Validato con test di integrazione reale (non mockato): rete Docker dedicata, Postgres con schema+seed applicati, container Go connesso via rete, scenario end-to-end istruttoria→round-robin verificato sui dati effettivamente persistiti in DB (non solo sul valore di ritorno Go).
+
+Da fare (Fase 3, resto): esposizione HTTP/gRPC di queste funzioni verso il backend Node (oggi sono chiamabili solo come funzioni Go dirette, nessun server ancora). Blocchi gara (art. B.12-14) non ancora cablati nell'orchestrazione DB — serve prima il matching impianto/disciplina/omologazione, non ancora modellato.
 
 Comandi (container Postgres e Go possono girare in parallelo, porte diverse):
 ```
@@ -110,6 +118,18 @@ MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd)/engine-go:/app" -v palestre-go-mod
 MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd)/engine-go:/app" -v palestre-go-mod-cache:/go/pkg/mod -w /app golang:1.26-alpine sh -c "gofmt -w . && go vet ./..."
 ```
 (`MSYS_NO_PATHCONV=1` necessario solo da Git Bash su Windows, vedi nota ambiente sopra — qui serve perché `-w /app` è un path del container, non dell'host.)
+
+Test di integrazione `internal/postgres` (skippato di default, serve `TEST_DATABASE_URL`):
+```
+docker network create palestre-integration-net
+docker run -d --name pg-integration --network palestre-integration-net -e POSTGRES_PASSWORD=test -e POSTGRES_DB=palestre postgres:18-alpine
+# attendere pg_isready, poi applicare db/migrations/000001 e 000002 con psql dentro il container (vedi sezione Schema DB)
+MSYS_NO_PATHCONV=1 docker run --rm --network palestre-integration-net \
+  -v "$(pwd)/engine-go:/app" -v palestre-go-mod-cache:/go/pkg/mod \
+  -e TEST_DATABASE_URL="postgres://postgres:test@pg-integration:5432/palestre?sslmode=disable" \
+  -w /app golang:1.26-alpine go test ./internal/postgres/... -v
+# poi: docker rm -f pg-integration && docker network rm palestre-integration-net
+```
 
 ## Architettura target (5 container)
 
