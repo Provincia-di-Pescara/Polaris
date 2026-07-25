@@ -1,0 +1,7 @@
+# Sviluppo: sorgente montato via bind mount (docker-compose.override.yml), nessun
+# COPY. `go run` ricompila ad ogni riavvio del container — niente hot-reload
+# automatico (es. air), coerente con la scelta di minimizzare le dipendenze extra
+# già seguita nel resto del progetto.
+FROM golang:1.26-alpine
+WORKDIR /app
+CMD ["go", "run", "./cmd/service"]

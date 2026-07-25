@@ -1,0 +1,11 @@
+# Sviluppo: pnpm install già cotto nell'immagine (semina il volume named
+# node_modules montato da docker-compose.override.yml al primo avvio), poi il
+# codice arriva via bind mount per l'hot-reload di `node --watch` (script "dev").
+FROM node:24-alpine
+RUN corepack enable
+WORKDIR /app
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --ignore-scripts
+COPY . .
+EXPOSE 8080
+CMD ["pnpm", "dev"]

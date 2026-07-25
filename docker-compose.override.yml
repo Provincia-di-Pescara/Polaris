@@ -1,0 +1,39 @@
+# SVILUPPO: attivato da COMPOSE_FILE=docker-compose.yml;docker-compose.override.yml
+# in .env. Bind mount per hot-reload, build da Dockerfile.dev, porte DB/engine esposte.
+
+services:
+
+  postgres:
+    ports:
+      - "5432:5432"
+
+  engine:
+    image: polaris/engine:dev
+    build:
+      context: ./engine-go
+      dockerfile: Dockerfile.dev
+    # Porta interna (8081) resta identica alla produzione — deve combaciare con
+    # ENGINE_URL=http://engine:8081 nel docker-compose.yml base, la rete interna
+    # non cambia tra dev e prod. Solo il mapping verso l'host è dev-only.
+    ports:
+      - "${ENGINE_PORT:-8081}:8081"
+    volumes:
+      - ./engine-go:/app:delegated
+      - go_mod_cache:/go/pkg/mod
+
+  backend:
+    image: polaris/backend:dev
+    build:
+      context: ./backend-node
+      dockerfile: Dockerfile.dev
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./backend-node/src:/app/src:delegated
+      - ./backend-node/package.json:/app/package.json:ro
+      - ./backend-node/tsconfig.json:/app/tsconfig.json:ro
+      - backend_node_modules:/app/node_modules
+
+volumes:
+  go_mod_cache:
+  backend_node_modules:

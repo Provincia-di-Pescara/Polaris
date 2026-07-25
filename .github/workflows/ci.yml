@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  engine-go:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: palestre
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache-dependency-path: engine-go/go.sum
+
+      - name: Applica le migration
+        env:
+          PGPASSWORD: test
+        run: |
+          for f in db/migrations/*.up.sql; do
+            echo "-- $f"
+            psql -h localhost -U postgres -d palestre -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Build
+        working-directory: engine-go
+        run: go build ./...
+
+      - name: Vet
+        working-directory: engine-go
+        run: go vet ./...
+
+      - name: Formattazione (gofmt)
+        working-directory: engine-go
+        run: |
+          non_formattati=$(gofmt -l .)
+          if [ -n "$non_formattati" ]; then
+            echo "File non formattati con gofmt:"
+            echo "$non_formattati"
+            exit 1
+          fi
+
+      - name: Test (incluso internal/postgres contro Postgres reale)
+        working-directory: engine-go
+        env:
+          TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/palestre?sslmode=disable
+        run: go test ./... -v
+
+  backend-node:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: palestre
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: backend-node/pnpm-lock.yaml
+
+      - name: Installa dipendenze
+        working-directory: backend-node
+        run: pnpm install --frozen-lockfile
+
+      - name: Applica le migration
+        env:
+          PGPASSWORD: test
+        run: |
+          for f in db/migrations/*.up.sql; do
+            echo "-- $f"
+            psql -h localhost -U postgres -d palestre -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Typecheck
+        working-directory: backend-node
+        run: pnpm exec tsc
+
+      - name: Test (incluso il ciclo OIDC/auth contro Postgres reale)
+        working-directory: backend-node
+        env:
+          TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/palestre?sslmode=disable
+          JWT_SECRET: ci-test-secret-non-per-produzione
+        run: node --test src/**/*.test.ts
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Valida la configurazione di produzione (senza override dev)
+        run: |
+          cp .env.example .env
+          sed -i "s/change-me-in-production-use-openssl-rand-hex-32/$(openssl rand -hex 32)/" .env
+          docker compose -f docker-compose.yml config --quiet
