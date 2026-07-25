@@ -51,8 +51,8 @@ Confini architetturali fissi:
 | 3. Istruttoria — verifica di ammissibilità | B.7 | API backoffice ❌ · UI ❌ | Solo schema |
 | 4. Calcolo dei parametri (FR, CRS, CAA, CSD, CP) | B.8–B.9 | Motore Go ✅ (`internal/istruttoria`, `POST /stagioni/{id}/istruttoria`) | **Fatto** |
 | 5. Pubblicazione esiti istruttoria + osservazioni/riesame | B.10–B.11 | Schema ✅ (`osservazioni_istruttoria`) · API ❌ · UI ❌ | Solo schema |
-| 6. Assegnazione dei blocchi gara | B.12–B.14 | Catena vincitore Go ✅ (`SceglieVincitoreBloccoGara`) · matching soluzioni compatibili + orchestrazione DB ❌ | **Parziale** |
-| 7. Calcolo iniziale ISF (VA da blocchi gara) | B.15–B.16 | Calcolo ISF Go ✅ · VA iniziale da blocchi gara ❌ (dipende da fase 6) | Parziale |
+| 6. Assegnazione dei blocchi gara | B.12–B.14 | Motore Go ✅ (`internal/gara` + orchestrazione Postgres + endpoint HTTP) | **Fatto** |
+| 7. Calcolo iniziale ISF (VA da blocchi gara) | B.15–B.16 | Motore Go ✅ (VA + stato concentrazione iniziali nel round-robin) | **Fatto** |
 | 8. Assegnazione progressiva per round | B.17–B.21 | Motore Go ✅ (`internal/roundrobin`, incl. blocchi allenamento, tie-break live, sorteggio) | **Fatto** |
 | 9. Completamento (condizioni di chiusura) | B.22 | Motore Go ✅ (B.22.1/.2/.3 + tetto di sicurezza) | **Fatto** |
 | 10. Pubblicazione proposta provvisoria | B.23 | API ❌ · UI ❌ | Mancante |
@@ -84,10 +84,10 @@ Confini architetturali fissi:
 `engine-go/internal/{calc,sorteggio,roundrobin,istruttoria}` in TDD rigoroso. Residuo esplicito: **taratura CSD** (art. A.11 — formula demandata allo sviluppo) da chiudere con simulazioni su dataset realistici prima del collaudo (vedi Fase 7).
 
 ### Fase 3 — Persistenza e HTTP del motore (✅ completata, con residui)
-`internal/postgres` + `internal/httpapi` + `cmd/service`. Verificato end-to-end con Postgres reale.
+`internal/postgres` + `internal/httpapi` + `cmd/service`. Verificato end-to-end con Postgres reale. Blocchi gara (B.12–B.15) inclusi: `internal/gara`, `EseguiBlocchiGara`, endpoint `POST /stagioni/{id}/blocchi-gara`, VA/stato iniziali nel round-robin.
 Residui:
-- **Blocchi gara (B.12–B.14)**: matching richiesta↔soluzioni compatibili (impianto omologato per la disciplina — i dati ci sono: `spazi_sportivi.omologazioni`, `richieste_giornata_gara.necessita_impianto_omologato`, ≥2 slot consecutivi) e orchestrazione DB. Va fatto **prima** della Fase 7 normativa (VA iniziale dipende dai blocchi gara assegnati).
 - `assegnazioni.isf_al_momento` lasciato NULL — da valorizzare quando servirà in dashboard/audit.
+- Riassegnazione finale (B.29) — dopo la concertazione (Fase 4.7).
 
 ### Fase 4 — Backend Node (🔶 in corso)
 Fatto: scaffold, `GET /healthz`, `GET /stagioni`, autenticazione locale backoffice completa (scrypt, JWT HS256 pinnato con audience, refresh rotation, rate limit, no user enumeration), OIDC SPID/CIE completa (PKCE, state one-shot in Postgres, verifica JWKS, JWT propri, protezione login-CSRF con cookie firmato). Tutto verificato con Postgres reale e IdP mock realistico.
@@ -133,12 +133,12 @@ Runbook operativo (deploy, rollback, restore), formazione operatori, migrazione/
 
 Convenzioni: JSON, `camelCase` in uscita, zod su ogni input, errori `{errore, dettagli?}`, Bearer JWT (audience `backoffice` o `pubblico`), 401 generici (no enumeration).
 
-Esistenti: `GET /healthz`, `GET /stagioni`, `GET /auth/bootstrap/stato`, `POST /auth/bootstrap/primo-admin|verifica`, `POST /auth/login|refresh|logout`, `GET /auth/me`, `GET /auth/oidc/start`, `POST /auth/oidc/callback`, `POST /auth/pubblico/refresh|logout`, `GET /auth/pubblico/me`. Motore (interno): `GET /healthz`, `POST /stagioni/{id}/istruttoria`, `POST /stagioni/{id}/prima-assegnazione`.
+Esistenti: `GET /healthz`, `GET /stagioni`, `GET /auth/bootstrap/stato`, `POST /auth/bootstrap/primo-admin|verifica`, `POST /auth/login|refresh|logout`, `GET /auth/me`, `GET /auth/oidc/start`, `POST /auth/oidc/callback`, `POST /auth/pubblico/refresh|logout`, `GET /auth/pubblico/me`. Motore (interno): `GET /healthz`, `POST /stagioni/{id}/istruttoria`, `POST /stagioni/{id}/blocchi-gara`, `POST /stagioni/{id}/prima-assegnazione`.
 
 Previste (nomi indicativi, da consolidare in fase di implementazione):
 - Backoffice: `/backoffice/stagioni`, `/backoffice/istituzioni`, `/backoffice/impianti`, `/backoffice/impianti/{id}/spazi`, `/backoffice/spazi/{id}/slot`, `/backoffice/discipline`, `/backoffice/utenti`, `/backoffice/parametrico` (POST = nuova versione), `/backoffice/impostazioni/{smtp|oidc}`, `/backoffice/deleghe/{id}/approva|respingi`, `/backoffice/domande/{id}/ammetti|escludi`, `/backoffice/stagioni/{id}/procedura/*` (transizioni di fase, avvio elaborazioni, pubblicazioni), `/backoffice/monitoraggio/*`.
 - Pubblico: `/pubblico/associazioni` (accreditamento), `/pubblico/deleghe`, `/pubblico/domande` (+fabbisogni, preferenze, blocchi, giornate gara), `/pubblico/osservazioni`, `/pubblico/esiti`, `/pubblico/concertazione/*`, `/pubblico/calendario`.
-- Motore (da aggiungere): `POST /stagioni/{id}/blocchi-gara`, `POST /stagioni/{id}/riassegnazione-finale`.
+- Motore (da aggiungere): `POST /stagioni/{id}/riassegnazione-finale`.
 
 ## 6. Sicurezza — stato e piano
 
@@ -156,7 +156,7 @@ Da pianificare (tracciate nelle fasi sopra):
 |---|---|---|
 | ~~`log_operazioni` mai scritta (art. B.39)~~ | ~~Alta~~ **Risolta**: helper `registraOperazione` + wiring su login/logout (entrambi i mondi) e bootstrap; da estendere a ogni CRUD futuro | Fase 4.2 ✅ |
 | ~~Nessun modo di creare il primo admin senza SQL a mano~~ | ~~Alta~~ **Risolta**: wizard bootstrap (SMTP da `.env`, email con link di attivazione, token one-shot 24h) — endpoint `/auth/bootstrap/*`, migration 000005 | Fase 4.4 ✅ |
-| Blocchi gara non orchestrati (B.12–B.14) + VA iniziale (B.15) | Alta — spezza la catena del procedimento | Fase 3 residuo |
+| ~~Blocchi gara non orchestrati (B.12–B.14) + VA iniziale (B.15)~~ | ~~Alta~~ **Risolta**: `internal/gara` (blocco = 2 slot consecutivi, catena CRS→CP→sorteggio B.14), orchestrazione Postgres, endpoint `/stagioni/{id}/blocchi-gara`, VA e stato di concentrazione iniziali nel round-robin. Assunzione da confermare: blocco minimo di 2 slot, requisiti tecnici non modellati | Fase 3 ✅ |
 | Tutela nuove associazioni (art. 12) non modellata | Media — facoltativa, serve decisione Ente | §8 |
 | Retention/housekeeping non implementati (GDPR art. 23) | Media | Fase 4.9 |
 | Backup/restore non definiti | Media (Alta al go-live) | Fase 6 |

@@ -41,8 +41,11 @@ func TestIntegrazione_IstruttoriaERoundRobin(t *testing.T) {
 		return id
 	}
 
+	// suffisso per-esecuzione su ogni valore UNIQUE: il test deve restare rieseguibile
+	// su un DB locale persistente (in CI il DB è sempre fresco e non si vede)
+	sfx := suffissoCasuale(t)
 	stagioneID = must(`INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, $2, $3)`,
-		"2027/2028 - test integrazione", "2027-09-01", "2028-06-30")
+		"2027/2028 - test integrazione "+sfx, "2027-09-01", "2028-06-30")
 	impiantoID = must(`INSERT INTO impianti (denominazione) VALUES ($1)`, "Palestra Integrazione")
 	spazioID = must(`INSERT INTO spazi_sportivi (impianto_id, denominazione) VALUES ($1, $2)`, impiantoID, "Palestra grande")
 	slot1ID = must(`INSERT INTO slot_settimana_tipo (stagione_id, spazio_id, giorno_settimana, orario_inizio, orario_fine) VALUES ($1, $2, 1, '16:30', '18:00')`,
@@ -50,20 +53,20 @@ func TestIntegrazione_IstruttoriaERoundRobin(t *testing.T) {
 	slot2ID = must(`INSERT INTO slot_settimana_tipo (stagione_id, spazio_id, giorno_settimana, orario_inizio, orario_fine) VALUES ($1, $2, 1, '18:00', '19:30')`,
 		stagioneID, spazioID)
 	personaID = must(`INSERT INTO persone_fisiche (codice_fiscale, nome, cognome, oidc_subject, oidc_provider) VALUES ($1, 'Test', 'Integrazione', $2, 'spid')`,
-		"TSTNTG80A01H501U", "sub-integrazione-1")
-	assoc1ID = must(`INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ($1, $2)`, "ASD Integrazione Uno", "90000000001")
-	assoc2ID = must(`INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ($1, $2)`, "ASD Integrazione Due", "90000000002")
+		"TSTNTG-"+sfx, "sub-integrazione-"+sfx)
+	assoc1ID = must(`INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ($1, $2)`, "ASD Integrazione Uno "+sfx, "90"+sfx+"001")
+	assoc2ID = must(`INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ($1, $2)`, "ASD Integrazione Due "+sfx, "90"+sfx+"002")
 
 	domanda1ID := must(`
 		INSERT INTO domande (numero_protocollo, associazione_id, stagione_id, presentata_da_persona_fisica_id,
 			classe_attivita_codice, fabbisogno_minimo_minuti, fabbisogno_ottimale_minuti, stato)
 		VALUES ($1, $2, $3, $4, 'A', 60, 500, 'ammessa')`,
-		"PROT-TEST-0001", assoc1ID, stagioneID, personaID)
+		"PROT-TEST-"+sfx+"-1", assoc1ID, stagioneID, personaID)
 	domanda2ID := must(`
 		INSERT INTO domande (numero_protocollo, associazione_id, stagione_id, presentata_da_persona_fisica_id,
 			classe_attivita_codice, fabbisogno_minimo_minuti, fabbisogno_ottimale_minuti, stato)
 		VALUES ($1, $2, $3, $4, 'A', 60, 500, 'ammessa')`,
-		"PROT-TEST-0002", assoc2ID, stagioneID, personaID)
+		"PROT-TEST-"+sfx+"-2", assoc2ID, stagioneID, personaID)
 
 	for _, d := range []string{domanda1ID, domanda2ID} {
 		if _, err := pool.Exec(ctx, `INSERT INTO preferenze (domanda_id, slot_id, ordine_preferenza) VALUES ($1, $2, 1)`, d, slot1ID); err != nil {

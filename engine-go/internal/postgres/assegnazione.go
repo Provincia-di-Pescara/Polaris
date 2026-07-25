@@ -35,6 +35,12 @@ func caricaFasce(ctx context.Context, pool *pgxpool.Pool, stagioneID string, pes
 		FROM slot_settimana_tipo st
 		JOIN spazi_sportivi sp ON sp.id = st.spazio_id
 		WHERE st.stagione_id = $1 AND st.indisponibile_permanente = false
+		  -- esclusi gli slot con un'assegnazione attiva (blocchi gara della Fase 6):
+		  -- il round-robin lavora solo sulle fasce ancora libere
+		  AND NOT EXISTS (
+		      SELECT 1 FROM assegnazioni a
+		      WHERE a.slot_id = st.id AND a.stato IN ('provvisoria', 'validata')
+		  )
 	`, stagioneID)
 	if err != nil {
 		return nil, fmt.Errorf("caricamento fasce: %w", err)
@@ -135,6 +141,53 @@ func caricaAssociazioniConFabbisogno(ctx context.Context, pool *pgxpool.Pool, st
 	return associazioni, domandaIDPerAssociazione, rows.Err()
 }
 
+// caricaStatoIniziale ricostruisce dalle assegnazioni attive pregresse (blocchi gara,
+// Fase 6) il VA iniziale (art. B.15 — B.14: le fasce gara concorrono integralmente, in
+// minuti grezzi, al soddisfacimento del FR) e lo stato di concentrazione iniziale
+// (art. B.19: i minuti e gli slot gara contano nei limiti; art. B.20: l'impianto del
+// blocco gara conta come "già usato" nel tie-break di contiguità).
+func caricaStatoIniziale(ctx context.Context, pool *pgxpool.Pool, stagioneID string) (map[string]decimal.Decimal, map[string]roundrobin.StatoConcentrazione, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT a.associazione_id, a.valore_minuti::text, st.durata_minuti, sp.impianto_id, st.pregiata
+		FROM assegnazioni a
+		JOIN slot_settimana_tipo st ON st.id = a.slot_id
+		JOIN spazi_sportivi sp ON sp.id = st.spazio_id
+		WHERE st.stagione_id = $1 AND a.stato IN ('provvisoria', 'validata')
+	`, stagioneID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("caricamento stato iniziale: %w", err)
+	}
+	defer rows.Close()
+
+	vaIniziale := map[string]decimal.Decimal{}
+	statoIniziale := map[string]roundrobin.StatoConcentrazione{}
+	for rows.Next() {
+		var associazioneID, valoreTxt, impiantoID string
+		var durata int
+		var pregiata bool
+		if err := rows.Scan(&associazioneID, &valoreTxt, &durata, &impiantoID, &pregiata); err != nil {
+			return nil, nil, fmt.Errorf("caricamento stato iniziale: %w", err)
+		}
+		valore, err := decimalDaTesto(valoreTxt)
+		if err != nil {
+			return nil, nil, err
+		}
+		vaIniziale[associazioneID] = vaIniziale[associazioneID].Add(valore)
+
+		s, ok := statoIniziale[associazioneID]
+		if !ok {
+			s = roundrobin.StatoConcentrazione{SlotPerImpianto: map[string]int{}}
+		}
+		s.MinutiGrezziAssegnati += durata
+		s.SlotPerImpianto[impiantoID]++
+		if pregiata {
+			s.FascePregiateAssegnate++
+		}
+		statoIniziale[associazioneID] = s
+	}
+	return vaIniziale, statoIniziale, rows.Err()
+}
+
 // CaricaSnapshotRoundRobin legge tutto quanto serve alla Fase 8 (art. B.17-22) per una
 // stagione. Richiede che EseguiIstruttoria sia già stato eseguito (fabbisogni_riconosciuti
 // e coefficienti_associazione popolati per le domande ammesse).
@@ -155,6 +208,10 @@ func CaricaSnapshotRoundRobin(ctx context.Context, pool *pgxpool.Pool, stagioneI
 	if err != nil {
 		return SnapshotRoundRobin{}, err
 	}
+	vaIniziale, statoIniziale, err := caricaStatoIniziale(ctx, pool, stagioneID)
+	if err != nil {
+		return SnapshotRoundRobin{}, err
+	}
 
 	fasceByID := make(map[string]roundrobin.Fascia, len(fasce))
 	for _, f := range fasce {
@@ -167,6 +224,8 @@ func CaricaSnapshotRoundRobin(ctx context.Context, pool *pgxpool.Pool, stagioneI
 			Richieste:          richieste,
 			BlocchiAllenamento: blocchi,
 			Associazioni:       associazioni,
+			VAIniziale:         vaIniziale,
+			StatoIniziale:      statoIniziale,
 			Limiti:             parametrico.Limiti,
 			TolleranzaISF:      parametrico.TolleranzaISF,
 			SemeHex:            semeHex,
@@ -221,7 +280,8 @@ func PersistiEsitoRoundRobin(ctx context.Context, pool *pgxpool.Pool, stagioneID
 		}
 
 		if a.SorteggioVerbale != nil {
-			if err := persistiVerbaleSorteggio(ctx, tx, elaborazioneID, a.SorteggioVerbale); err != nil {
+			if err := persistiVerbaleSorteggio(ctx, tx, elaborazioneID, "B.21",
+				"parità totale nella catena di priorità della fascia", a.SorteggioVerbale); err != nil {
 				return "", err
 			}
 		}
@@ -233,14 +293,14 @@ func PersistiEsitoRoundRobin(ctx context.Context, pool *pgxpool.Pool, stagioneID
 	return elaborazioneID, nil
 }
 
-func persistiVerbaleSorteggio(ctx context.Context, tx pgx.Tx, elaborazioneID string, v *sorteggio.Verbale) error {
+func persistiVerbaleSorteggio(ctx context.Context, tx pgx.Tx, elaborazioneID, articolo, contesto string, v *sorteggio.Verbale) error {
 	var sorteggioID string
 	err := tx.QueryRow(ctx, `
 		INSERT INTO sorteggi
 			(elaborazione_id, articolo_riferimento, contesto, seme_hex, algoritmo, algoritmo_versione, vincitore_associazione_id, hash_verbale)
-		VALUES ($1, 'B.21', 'parità totale nella catena di priorità della fascia', $2, $3, $4, $5, $6)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id
-	`, elaborazioneID, v.SemeHex, v.Algoritmo, v.AlgoritmoVersione, v.VincitoreAssociazioneID, v.HashVerbale).Scan(&sorteggioID)
+	`, elaborazioneID, articolo, contesto, v.SemeHex, v.Algoritmo, v.AlgoritmoVersione, v.VincitoreAssociazioneID, v.HashVerbale).Scan(&sorteggioID)
 	if err != nil {
 		return fmt.Errorf("inserimento verbale sorteggio: %w", err)
 	}

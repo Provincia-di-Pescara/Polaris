@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/provincia/palestre-engine/internal/gara"
 	"github.com/provincia/palestre-engine/internal/httpapi"
 	"github.com/provincia/palestre-engine/internal/postgres"
 	"github.com/provincia/palestre-engine/internal/roundrobin"
@@ -38,6 +39,9 @@ func main() {
 	server := &httpapi.Server{
 		EseguiIstruttoria: func(ctx context.Context, stagioneID string) (int, error) {
 			return postgres.EseguiIstruttoria(ctx, pool, stagioneID)
+		},
+		EseguiBlocchiGara: func(ctx context.Context, stagioneID, semeHex string) (gara.Esito, string, error) {
+			return postgres.EseguiBlocchiGara(ctx, pool, stagioneID, semeHex)
 		},
 		EseguiRoundRobin: func(ctx context.Context, stagioneID, semeHex string) (roundrobin.Esito, string, error) {
 			return postgres.EseguiRoundRobin(ctx, pool, stagioneID, semeHex)

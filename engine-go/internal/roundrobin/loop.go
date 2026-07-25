@@ -17,7 +17,11 @@ type InputEsecuzione struct {
 	BlocchiAllenamento []BloccoAllenamento
 	Associazioni       []Associazione
 	// VAIniziale copre il valore già assegnato prima dell'avvio (es. blocchi gara, Fase 6-7).
-	VAIniziale    map[string]decimal.Decimal
+	VAIniziale map[string]decimal.Decimal
+	// StatoIniziale porta le assegnazioni pregresse (blocchi gara) dentro i limiti di
+	// concentrazione art. B.19 e nel tie-break di contiguità art. B.20: i minuti gara
+	// contano nel tetto settimanale e l'impianto del blocco gara conta come "già usato".
+	StatoIniziale map[string]StatoConcentrazione
 	Limiti        LimitiConcentrazione
 	TolleranzaISF decimal.Decimal
 	SemeHex       string
@@ -72,13 +76,24 @@ func Esegui(in InputEsecuzione) (Esito, error) {
 		if v, ok := in.VAIniziale[a.ID]; ok {
 			va = v
 		}
-		stati[a.ID] = &statoAssociazione{
+		s := &statoAssociazione{
 			fr:              a.FR,
 			cp:              a.CP,
 			va:              va,
 			slotPerImpianto: map[string]int{},
 			impiantiUsati:   map[string]bool{},
 		}
+		if iniziale, ok := in.StatoIniziale[a.ID]; ok {
+			s.minutiGrezzi = iniziale.MinutiGrezziAssegnati
+			s.fascePregiateAssegnate = iniziale.FascePregiateAssegnate
+			for impianto, n := range iniziale.SlotPerImpianto {
+				s.slotPerImpianto[impianto] = n
+				if n > 0 {
+					s.impiantiUsati[impianto] = true
+				}
+			}
+		}
+		stati[a.ID] = s
 	}
 
 	richiesteByFascia := make(map[string][]Richiesta)

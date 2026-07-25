@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/provincia/palestre-engine/internal/gara"
 	"github.com/provincia/palestre-engine/internal/roundrobin"
 )
 
@@ -18,6 +19,7 @@ import (
 // GeneraSemeCSPRNG di default (iniettabile nei test per un seme deterministico).
 type Server struct {
 	EseguiIstruttoria func(ctx context.Context, stagioneID string) (int, error)
+	EseguiBlocchiGara func(ctx context.Context, stagioneID, semeHex string) (gara.Esito, string, error)
 	EseguiRoundRobin  func(ctx context.Context, stagioneID, semeHex string) (roundrobin.Esito, string, error)
 	GeneraSeme        func() (string, error)
 }
@@ -37,6 +39,7 @@ func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("POST /stagioni/{id}/istruttoria", s.handleIstruttoria)
+	mux.HandleFunc("POST /stagioni/{id}/blocchi-gara", s.handleBlocchiGara)
 	mux.HandleFunc("POST /stagioni/{id}/prima-assegnazione", s.handlePrimaAssegnazione)
 	return mux
 }
@@ -57,6 +60,34 @@ func (s *Server) handleIstruttoria(w http.ResponseWriter, r *http.Request) {
 
 	scriviJSON(w, http.StatusOK, map[string]any{
 		"domande_calcolate": n,
+	})
+}
+
+// handleBlocchiGara esegue la Fase 6 (art. B.12-B.14): come per la prima assegnazione,
+// il seme del sorteggio è generato QUI, prima dell'elaborazione (art. B.38).
+func (s *Server) handleBlocchiGara(w http.ResponseWriter, r *http.Request) {
+	stagioneID := r.PathValue("id")
+
+	generaSeme := s.GeneraSeme
+	if generaSeme == nil {
+		generaSeme = GeneraSemeCSPRNG
+	}
+	seme, err := generaSeme()
+	if err != nil {
+		scriviErrore(w, err)
+		return
+	}
+
+	esito, elaborazioneID, err := s.EseguiBlocchiGara(r.Context(), stagioneID, seme)
+	if err != nil {
+		scriviErrore(w, err)
+		return
+	}
+
+	scriviJSON(w, http.StatusOK, map[string]any{
+		"elaborazione_id":         elaborazioneID,
+		"numero_assegnazioni":     len(esito.Assegnazioni),
+		"richieste_non_assegnate": len(esito.NonAssegnate),
 	})
 }
 
