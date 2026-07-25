@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Sistema telematico di assegnazione di spazi sportivi pubblici (palestre scolastiche di competenza provinciale). Obiettivo: eliminare discrezionalità umana nell'assegnazione, sostituendola con regole matematiche deterministiche, tracciabili e riproducibili da terzi.
 
-**Stato attuale**: analisi requisiti chiusa, Fase 1 (schema DB) implementata e validata. Fase 2 (motore Go) non ancora avviata.
+**Stato attuale**: analisi requisiti chiusa, Fase 1 (schema DB) implementata e validata. Fase 2 (motore Go) in corso: package `calc` (calcolatori puri FR/ISF/CRS/CAA/CSD/CP) completo e testato in TDD; round-robin, sorteggio tracciato e limiti di concentrazione ancora da fare.
 
 ## Versioni target (verificate via web search, non da training data — ricontrollare a inizio di ogni fase nuova, l'ecosistema si muove in fretta)
 
@@ -74,6 +74,27 @@ docker run -d --name pg-palestre -e POSTGRES_PASSWORD=test -e POSTGRES_DB=palest
 psql postgresql://postgres:test@localhost:5432/palestre -f db/migrations/000001_init.up.sql
 psql postgresql://postgres:test@localhost:5432/palestre -f db/migrations/000002_seed_valori_normativi.up.sql
 ```
+
+## Motore Go (Fase 2 — in corso)
+
+`engine-go/`, modulo `github.com/provincia/palestre-engine`, Go 1.26. Nessuna installazione Go locale in questo ambiente di sviluppo: build/test/format/vet vanno eseguiti via Docker (`golang:1.26-alpine`), come per Postgres. Sviluppato rigorosamente in TDD (skill `superpowers:test-driven-development`): ogni funzione ha test scritto e verificato RED prima dell'implementazione.
+
+Fatto: `internal/calc/` — calcolatori puri, nessuna dipendenza da DB/HTTP (coerente col vincolo di isolamento del motore), arrotondamento sempre con `github.com/shopspring/decimal` (mai float, mai `math`):
+- `IncrementoSquadre` — lookup scaglioni art. A.4
+- `LookupCRS` / `LookupCAA` / `LookupCSD` — lookup scaglioni art. A.6/A.7/A.11 (CSD su placeholder, valori da tarare)
+- `CalcolaCP` — art. A.12 (CRS×CAA×CSD, round 3 cifre)
+- `CalcolaFR` — art. A.5 (FR calcolato + FR finale = min(FD, calcolato))
+- `CalcolaISF`, `ISFMinore`, `ISFInTolleranza` — art. A.13/B.16/B.20, incluso il caso FR=0 (ISF non definito, decisione stakeholder)
+
+Da fare: ordine esame fasce (B.17), loop round-robin per round (B.18-22) con limiti di concentrazione, blocchi gara (B.12-14), blocchi allenamento indivisibili, sorteggio tracciato HMAC-SHA256 (vedi specifica sotto), tetto di sicurezza round.
+
+Comandi (container Postgres e Go possono girare in parallelo, porte diverse):
+```
+docker volume create palestre-go-mod-cache   # una tantum, cache moduli persistente
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd)/engine-go:/app" -v palestre-go-mod-cache:/go/pkg/mod -w /app golang:1.26-alpine go test ./... -v
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd)/engine-go:/app" -v palestre-go-mod-cache:/go/pkg/mod -w /app golang:1.26-alpine sh -c "gofmt -w . && go vet ./..."
+```
+(`MSYS_NO_PATHCONV=1` necessario solo da Git Bash su Windows, vedi nota ambiente sopra — qui serve perché `-w /app` è un path del container, non dell'host.)
 
 ## Architettura target (5 container)
 
