@@ -42,6 +42,27 @@ I valori numerici sotto indicati sono **default**. Tutti i parametri di business
 - **Tie-break contiguità/concentrazione** (art. B.20): valutato con stato **live** (ISF e assegnazioni aggiornate in tempo reale entro il round), non snapshot a inizio round. La presenza di un'assegnazione già ricevuta nello stesso round (anche in altro impianto) conta ai fini del tie-break di altre associazioni. _(regola logica, fissa)_
 - **Audit log**: registra **solo operazioni di scrittura** (non le letture). _(tecnico, fisso)_ Retention: 🔧 default **30 giorni** per il log operativo generico (login, CRUD). Verbali di sorteggio, assegnazioni e settimana tipo sono invece conservati per l'**intera stagione sportiva + termine di impugnazione** _(fisso, non derogabile da admin — requisito legale)_, essendo oggetto di possibile contestazione e di riproducibilità richiesta da terzi.
 
+## Schema DB (Fase 1 — implementata)
+
+`db/migrations/`, naming compatibile `golang-migrate` (`NNNNNN_nome.up.sql` / `.down.sql`, eseguibili anche a mano via `psql -f`). Niente ORM: SQL puro, per controllo diretto su exclusion constraint e CHECK complessi richiesti dal dominio.
+
+- `000001_init.up/down.sql` — schema completo (stagioni, impianti/slot, persone/associazioni/abilitazioni, backoffice, domande/fabbisogni/coefficienti, elaborazioni/assegnazioni/sorteggi, concertazione, monitoraggio/convenzioni, audit log).
+- `000002_seed_valori_normativi.up/down.sql` — dati normativi reali da Allegato A (classi attività, scaglioni CRS/CAA) + prima versione parametrico con i placeholder 🔺.
+
+Punti tecnici degni di nota per chi tocca lo schema:
+- `EXCLUDE USING gist` su `slot_settimana_tipo` (spazio + giorno + stagione + intervallo orario) impedisce sovrapposizioni fisiche a livello DB, non solo applicativo. Richiede `btree_gist`.
+- `durata_minuti` è colonna `GENERATED ALWAYS ... STORED`, mai scritta a mano.
+- **Gotcha verificato**: `boolean::int` non è castabile in Postgres stock (`cannot cast type boolean to integer`). Per i CHECK "esattamente uno tra N campi è valorizzato" si usa `num_nonnulls(a, b) = 1`, non `(a IS NOT NULL)::int + ...`.
+- `assegnazioni_slot_attiva_uq` è un indice unico parziale (`WHERE stato IN ('provvisoria','validata')`) — uno slot può avere una sola assegnazione attiva alla volta, ma la storia (decadute/sostituite) resta in tabella.
+- Schema validato funzionalmente (non solo sintatticamente) con Postgres 16 in Docker: migrazioni up/down pulite, EXCLUDE e CHECK testati con insert di prova che devono fallire/passare come da specifica.
+
+Test locale rapido:
+```
+docker run -d --name pg-palestre -e POSTGRES_PASSWORD=test -e POSTGRES_DB=palestre -p 5432:5432 postgres:16-alpine
+psql postgresql://postgres:test@localhost:5432/palestre -f db/migrations/000001_init.up.sql
+psql postgresql://postgres:test@localhost:5432/palestre -f db/migrations/000002_seed_valori_normativi.up.sql
+```
+
 ## Architettura target (5 container)
 
 1. **DB — PostgreSQL.** Single source of truth. Vincoli relazionali rigidi, exclusion constraint contro sovrapposizioni slot, lock transazionali per gestire concorrenza in fase di concertazione. Parametri di sistema (🔧 in sezione sopra) in tabella `allegato_parametrico` versionata, editabile da admin via UI backoffice — mai hardcoded, mai letta "current" da un'elaborazione storica (ogni run referenzia la versione vigente al momento dell'esecuzione).
