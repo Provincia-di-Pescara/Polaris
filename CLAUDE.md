@@ -67,6 +67,7 @@ Punti tecnici degni di nota per chi tocca lo schema:
 Note ambiente (Windows/Git Bash) per chi lancia questi comandi via Claude Code:
 - Docker Desktop su questa macchina non è avviato di default. Se `docker info` fallisce: lanciare `"/c/Program Files/Docker/Docker/Docker Desktop.exe"` in background e attendere (poll `docker info`) prima di usare `docker`.
 - `docker exec` con path dentro al container (es. `-f /tmp/x.sql`) da Git Bash: serve `MSYS_NO_PATHCONV=1` davanti al comando, altrimenti il path Unix viene riscritto come path Windows e il comando fallisce. Non applicarlo a `docker cp` quando l'argomento è un path Windows reale (va convertito).
+- `.gitattributes` forza `eol=lf` su `.go`/`.sql`/`.md` (bug reale: CRLF da Windows rompeva `gofmt -l` al primo clone). Aggiungere altri tipi di file testuale lì se necessario, non lasciarli a CRLF di default.
 
 Test locale rapido:
 ```
@@ -77,7 +78,7 @@ psql postgresql://postgres:test@localhost:5432/palestre -f db/migrations/000002_
 
 ## Motore Go (Fase 2 — in corso)
 
-`engine-go/`, modulo `github.com/provincia/palestre-engine`, Go 1.26. Nessuna installazione Go locale in questo ambiente di sviluppo: build/test/format/vet vanno eseguiti via Docker (`golang:1.26-alpine`), come per Postgres. Sviluppato rigorosamente in TDD (skill `superpowers:test-driven-development`): ogni funzione ha test scritto e verificato RED prima dell'implementazione.
+`engine-go/`, modulo `github.com/provincia/palestre-engine`, Go 1.26. Nessuna installazione Go locale in questo ambiente di sviluppo: build/test/format/vet vanno eseguiti via Docker (`golang:1.26-alpine`), come per Postgres. Sviluppato rigorosamente in TDD (skill `superpowers:test-driven-development`): ogni funzione ha test scritto e verificato RED prima dell'implementazione. In Go il RED spesso è un errore di compilazione (`undefined: NomeFunzione`), non un'asserzione a runtime — è comunque RED valido (fallisce perché manca la feature, non per typo).
 
 Fatto: `internal/calc/` — calcolatori puri, nessuna dipendenza da DB/HTTP (coerente col vincolo di isolamento del motore), arrotondamento sempre con `github.com/shopspring/decimal` (mai float, mai `math`):
 - `IncrementoSquadre` — lookup scaglioni art. A.4
