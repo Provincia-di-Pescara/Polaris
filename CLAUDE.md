@@ -11,7 +11,7 @@ Sistema telematico di assegnazione di spazi sportivi pubblici (palestre scolasti
 ## Versioni target (verificate via web search, non da training data — ricontrollare a inizio di ogni fase nuova, l'ecosistema si muove in fretta)
 
 - **PostgreSQL 18** (`postgres:18-alpine`). PostgreSQL 19 è in beta a luglio 2026, non da usare in produzione.
-- **Go 1.26** (patch più recente, es. 1.26.5) per il motore algoritmico — non ancora avviato.
+- **Go 1.26** (patch più recente, es. 1.26.5) per il motore algoritmico — Fase 2 completata.
 - **Node.js 24** (Active LTS) per il backend API. Node 26 esiste già come release "Current" ma entra in LTS solo da ottobre 2026 — non usarlo prima per un sistema in produzione.
 - **TypeScript 7.0** ovunque (backend Node e frontend), nessun blocco: **React 19.2** scelto come framework per entrambi i frontend (decisione presa proprio per evitare il vincolo Vue/Volar su TS7, non ancora supportato — atteso TS 7.1 ~ottobre 2026).
 
@@ -61,13 +61,14 @@ Punti tecnici degni di nota per chi tocca lo schema:
 - `durata_minuti` è colonna `GENERATED ALWAYS ... STORED`, mai scritta a mano.
 - **Gotcha verificato**: `boolean::int` non è castabile in Postgres stock (`cannot cast type boolean to integer`). Per i CHECK "esattamente uno tra N campi è valorizzato" si usa `num_nonnulls(a, b) = 1`, non `(a IS NOT NULL)::int + ...`.
 - `assegnazioni_slot_attiva_uq` è un indice unico parziale (`WHERE stato IN ('provvisoria','validata')`) — uno slot può avere una sola assegnazione attiva alla volta, ma la storia (decadute/sostituite) resta in tabella.
-- Schema validato funzionalmente (non solo sintatticamente) con Postgres 16 in Docker: migrazioni up/down pulite, EXCLUDE e CHECK testati con insert di prova che devono fallire/passare come da specifica.
+- Schema validato funzionalmente (non solo sintatticamente) con Postgres 16 e successivamente 18 in Docker: migrazioni up/down pulite, EXCLUDE e CHECK testati con insert di prova che devono fallire/passare come da specifica.
 - Ogni modifica a `db/migrations/` va validata contro un container Postgres reale (vedi comandi sotto), non solo controllata a occhio: la sintassi SQL può sembrare corretta e fallire a runtime (es. cast non supportati).
 
 Note ambiente (Windows/Git Bash) per chi lancia questi comandi via Claude Code:
 - Docker Desktop su questa macchina non è avviato di default. Se `docker info` fallisce: lanciare `"/c/Program Files/Docker/Docker/Docker Desktop.exe"` in background e attendere (poll `docker info`) prima di usare `docker`.
 - `docker exec` con path dentro al container (es. `-f /tmp/x.sql`) da Git Bash: serve `MSYS_NO_PATHCONV=1` davanti al comando, altrimenti il path Unix viene riscritto come path Windows e il comando fallisce. Non applicarlo a `docker cp` quando l'argomento è un path Windows reale (va convertito).
 - `.gitattributes` forza `eol=lf` su `.go`/`.sql`/`.md` (bug reale: CRLF da Windows rompeva `gofmt -l` al primo clone). Aggiungere altri tipi di file testuale lì se necessario, non lasciarli a CRLF di default.
+- Seed/chiavi hex nei test (es. seme sorteggio, 32 byte = 64 caratteri): non scriverli a mano, capita facilmente di sbagliare la lunghezza (successo 3 volte in questa sessione). Generarli con `python3 -c "import secrets; print(secrets.token_hex(32))"` e verificarne la lunghezza prima di incollarli.
 
 Test locale rapido:
 ```
@@ -76,7 +77,7 @@ psql postgresql://postgres:test@localhost:5432/palestre -f db/migrations/000001_
 psql postgresql://postgres:test@localhost:5432/palestre -f db/migrations/000002_seed_valori_normativi.up.sql
 ```
 
-## Motore Go (Fase 2 — in corso)
+## Motore Go (Fase 2 — completata)
 
 `engine-go/`, modulo `github.com/provincia/palestre-engine`, Go 1.26. Nessuna installazione Go locale in questo ambiente di sviluppo: build/test/format/vet vanno eseguiti via Docker (`golang:1.26-alpine`), come per Postgres. Sviluppato rigorosamente in TDD (skill `superpowers:test-driven-development`): ogni funzione ha test scritto e verificato RED prima dell'implementazione. In Go il RED spesso è un errore di compilazione (`undefined: NomeFunzione`), non un'asserzione a runtime — è comunque RED valido (fallisce perché manca la feature, non per typo).
 
