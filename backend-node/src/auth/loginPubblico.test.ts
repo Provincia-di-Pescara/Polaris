@@ -137,7 +137,8 @@ test(
     });
 
     await t.test('costruisciUrlAutorizzazione produce un URL con PKCE e state', async () => {
-      const url = new URL(await costruisciUrlAutorizzazione(pool));
+      const { url: urlAutorizzazione } = await costruisciUrlAutorizzazione(pool);
+      const url = new URL(urlAutorizzazione);
       assert.equal(url.origin + url.pathname, `${idp.issuer}/OIDC/authorization`);
       assert.equal(url.searchParams.get('client_id'), CLIENT_ID);
       assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
@@ -146,7 +147,8 @@ test(
     });
 
     await t.test('callback con state valido crea la persona fisica e restituisce i token', async () => {
-      const url = new URL(await costruisciUrlAutorizzazione(pool));
+      const { url: urlAutorizzazione } = await costruisciUrlAutorizzazione(pool);
+      const url = new URL(urlAutorizzazione);
       const state = url.searchParams.get('state');
       assert.ok(state);
 
@@ -166,7 +168,8 @@ test(
     });
 
     await t.test('stesso state riusato una seconda volta viene rifiutato (consumo one-shot)', async () => {
-      const url = new URL(await costruisciUrlAutorizzazione(pool));
+      const { url: urlAutorizzazione } = await costruisciUrlAutorizzazione(pool);
+      const url = new URL(urlAutorizzazione);
       const state = url.searchParams.get('state');
       assert.ok(state);
 
@@ -181,10 +184,12 @@ test(
         family_name: 'Verdi',
       });
 
-      const url1 = new URL(await costruisciUrlAutorizzazione(pool));
+      const { url: urlAutorizzazione1 } = await costruisciUrlAutorizzazione(pool);
+      const url1 = new URL(urlAutorizzazione1);
       const esito1 = await eseguiCallbackOidc(pool, 'code-a', url1.searchParams.get('state') as string, '127.0.0.1');
 
-      const url2 = new URL(await costruisciUrlAutorizzazione(pool));
+      const { url: urlAutorizzazione2 } = await costruisciUrlAutorizzazione(pool);
+      const url2 = new URL(urlAutorizzazione2);
       const esito2 = await eseguiCallbackOidc(pool, 'code-b', url2.searchParams.get('state') as string, '127.0.0.1');
 
       assert.equal(esito1.persona.id, esito2.persona.id);
@@ -201,11 +206,13 @@ test(
         family_name: 'Ferrari',
       });
       idp.impostaSub('sub-sessione-1');
-      const url1 = new URL(await costruisciUrlAutorizzazione(pool));
+      const { url: urlAutorizzazione1 } = await costruisciUrlAutorizzazione(pool);
+      const url1 = new URL(urlAutorizzazione1);
       const esito1 = await eseguiCallbackOidc(pool, 'code-cf-a', url1.searchParams.get('state') as string, '127.0.0.1');
 
       idp.impostaSub('sub-sessione-2-diverso');
-      const url2 = new URL(await costruisciUrlAutorizzazione(pool));
+      const { url: urlAutorizzazione2 } = await costruisciUrlAutorizzazione(pool);
+      const url2 = new URL(urlAutorizzazione2);
       const esito2 = await eseguiCallbackOidc(pool, 'code-cf-b', url2.searchParams.get('state') as string, '127.0.0.1');
 
       assert.equal(esito1.persona.id, esito2.persona.id);
@@ -218,7 +225,8 @@ test(
         given_name: 'Laura',
         family_name: 'Bianchi',
       });
-      const url = new URL(await costruisciUrlAutorizzazione(pool));
+      const { url: urlAutorizzazione } = await costruisciUrlAutorizzazione(pool);
+      const url = new URL(urlAutorizzazione);
       const login = await eseguiCallbackOidc(pool, 'code-refresh', url.searchParams.get('state') as string, '127.0.0.1');
 
       const dopoRefresh = await eseguiRefreshPubblico(pool, login.refreshToken, '127.0.0.1');
@@ -233,7 +241,8 @@ test(
         given_name: 'Giuseppe',
         family_name: 'Verdi',
       });
-      const url = new URL(await costruisciUrlAutorizzazione(pool));
+      const { url: urlAutorizzazione } = await costruisciUrlAutorizzazione(pool);
+      const url = new URL(urlAutorizzazione);
       const login = await eseguiCallbackOidc(pool, 'code-logout', url.searchParams.get('state') as string, '127.0.0.1');
 
       await eseguiLogoutPubblico(pool, login.refreshToken);

@@ -1,5 +1,7 @@
 import express, { type Express, type Request } from 'express';
 import rateLimit from 'express-rate-limit';
+import cookieParser from 'cookie-parser';
+import { timingSafeEqual } from 'node:crypto';
 import type { Pool } from 'pg';
 import { listaStagioni } from './stagioni.ts';
 import { eseguiLogin, eseguiLogout, eseguiRefresh } from './auth/login.ts';
@@ -14,8 +16,30 @@ import {
 } from './auth/middleware.ts';
 import { costruisciUrlAutorizzazione, ErroreOidcNonConfigurato, ErroreScambioCode, ErroreStatoNonValido } from './oidc/flow.ts';
 
+const COOKIE_STATE_OIDC = 'oidc_state';
+const COOKIE_PATH_OIDC = '/auth/oidc';
+
 function ipRichiesta(req: Request): string | null {
   return req.ip ?? null;
+}
+
+function segretoCookie(): string {
+  const s = process.env.JWT_SECRET;
+  if (!s) {
+    throw new Error('JWT_SECRET non impostata');
+  }
+  return s;
+}
+
+// Confronto a tempo costante: previene timing attack sul valore dello state (lo stesso
+// motivo per cui le password si confrontano con timingSafeEqual, non con ===).
+function confrontoSicuro(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
 }
 
 const limitatoreLogin = rateLimit({
@@ -38,6 +62,7 @@ const limitatoreOidcStart = rateLimit({
 export function creaApp(pool: Pool): Express {
   const app = express();
   app.use(express.json());
+  app.use(cookieParser(segretoCookie()));
 
   app.get('/healthz', (_req, res) => {
     res.status(200).send('ok');
@@ -115,7 +140,21 @@ export function creaApp(pool: Pool): Express {
 
   app.get('/auth/oidc/start', limitatoreOidcStart, async (_req, res) => {
     try {
-      const url = await costruisciUrlAutorizzazione(pool);
+      const { url, state } = await costruisciUrlAutorizzazione(pool);
+      // Lega lo state al browser che avvia il flusso (cookie firmato, HttpOnly): senza
+      // questo, un attaccante può completare il PROPRIO login legittimo (code+state veri)
+      // facendolo eseguire dal browser della vittima — la autenticherebbe come
+      // l'attaccante (login CSRF/session fixation). PKCE da solo non basta: il
+      // code_verifier è recuperato lato server via state, non dal browser, quindi
+      // combacia comunque se l'attaccante usa il proprio state autentico.
+      res.cookie(COOKIE_STATE_OIDC, state, {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
+        signed: true,
+        maxAge: 5 * 60 * 1000,
+        path: COOKIE_PATH_OIDC,
+      });
       res.redirect(url);
     } catch (err) {
       if (err instanceof ErroreOidcNonConfigurato) {
@@ -130,6 +169,14 @@ export function creaApp(pool: Pool): Express {
     const parsed = schemaOidcCallback.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+      return;
+    }
+
+    const stateCookie: unknown = req.signedCookies[COOKIE_STATE_OIDC];
+    res.clearCookie(COOKIE_STATE_OIDC, { path: COOKIE_PATH_OIDC });
+
+    if (typeof stateCookie !== 'string' || !confrontoSicuro(stateCookie, parsed.data.state)) {
+      res.status(401).json({ errore: 'sessione di login non riconosciuta, riprovare' });
       return;
     }
 

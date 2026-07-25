@@ -23,7 +23,19 @@ async function richiediConfig(pool: Pool) {
   return config;
 }
 
-export async function costruisciUrlAutorizzazione(pool: Pool): Promise<string> {
+export interface UrlAutorizzazione {
+  url: string;
+  state: string;
+}
+
+// Il chiamante (server.ts) DEVE legare `state` alla sessione browser che ha avviato il
+// flusso (cookie firmato) e verificarlo al callback PRIMA di chiamare scambiaCode —
+// altrimenti un attaccante può completare il PROPRIO login legittimo (code+state veri,
+// PKCE valido: il code_verifier è recuperato lato server, non dal browser) facendolo
+// però eseguire dal browser della vittima, autenticandola come l'attaccante
+// (login CSRF / session fixation). PKCE da solo non previene questo scenario: protegge
+// dall'intercettazione di un code altrui, non da un attaccante che usa il proprio.
+export async function costruisciUrlAutorizzazione(pool: Pool): Promise<UrlAutorizzazione> {
   const config = await richiediConfig(pool);
   const endpoint = await scopriEndpoint(config.issuer);
   const { state, codeVerifier, codeChallenge } = generaPkce();
@@ -37,7 +49,7 @@ export async function costruisciUrlAutorizzazione(pool: Pool): Promise<string> {
   url.searchParams.set('state', state);
   url.searchParams.set('code_challenge', codeChallenge);
   url.searchParams.set('code_challenge_method', 'S256');
-  return url.toString();
+  return { url: url.toString(), state };
 }
 
 interface RispostaTokenEndpoint {
