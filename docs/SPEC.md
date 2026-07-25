@@ -157,18 +157,44 @@ Da pianificare (tracciate nelle fasi sopra):
 | ~~`log_operazioni` mai scritta (art. B.39)~~ | ~~Alta~~ **Risolta**: helper `registraOperazione` + wiring su login/logout (entrambi i mondi) e bootstrap; da estendere a ogni CRUD futuro | Fase 4.2 ✅ |
 | ~~Nessun modo di creare il primo admin senza SQL a mano~~ | ~~Alta~~ **Risolta**: wizard bootstrap (SMTP da `.env`, email con link di attivazione, token one-shot 24h) — endpoint `/auth/bootstrap/*`, migration 000005 | Fase 4.4 ✅ |
 | ~~Blocchi gara non orchestrati (B.12–B.14) + VA iniziale (B.15)~~ | ~~Alta~~ **Risolta**: `internal/gara` (blocco = 2 slot consecutivi, catena CRS→CP→sorteggio B.14), orchestrazione Postgres, endpoint `/stagioni/{id}/blocchi-gara`, VA e stato di concentrazione iniziali nel round-robin. Assunzione da confermare: blocco minimo di 2 slot, requisiti tecnici non modellati | Fase 3 ✅ |
-| Tutela nuove associazioni (art. 12) non modellata | Media — facoltativa, serve decisione Ente | §8 |
-| Retention/housekeeping non implementati (GDPR art. 23) | Media | Fase 4.9 |
-| Backup/restore non definiti | Media (Alta al go-live) | Fase 6 |
+| Tutela nuove associazioni (art. 12) non modellata | Media — **decisa e pianificata**, design in §7-bis.1 | §7-bis |
+| Retention/housekeeping non implementati (GDPR art. 23) | Media — **pianificata**, design in §7-bis.2 | §7-bis |
+| Backup/restore non definiti | Media (Alta al go-live) — **decisa e pianificata**, design in §7-bis.3 | §7-bis |
 | `pnpm-workspace.yaml` assente | Bassa — serve con i frontend | Fase 5 |
 | Righe `oidc_stato_pkce` scadute mai ripulite | Bassa | Fase 4.9 |
 | `isf_al_momento` sempre NULL | Bassa | Fase 3 residuo |
+
+## 7-bis. Prossima fase pianificata — lacune a media priorità (decisioni prese il 2026-07-25, da implementare)
+
+Le tre lacune a media priorità sono state decise col committente; il design è chiuso, l'implementazione è il prossimo blocco di lavoro.
+
+### 1. Quota nuove associazioni (art. 12 Doc Principale)
+**Decisione**: si implementa subito come parametro 🔧 con **default 0 = disattivata** — l'Ente la attiva da UI cambiando il valore, senza migrazione futura.
+- Migration `000006`: colonna `quota_nuove_associazioni_pct NUMERIC(6,4) NOT NULL DEFAULT 0` in `parametrico_versioni` (stesso pattern degli altri parametri, versionata).
+- **Meccanismo (assunzione da documentare, il testo non lo specifica)**: precedenza dinamica, non riserva statica di fasce specifiche. `N = floor(pct × numero fasce disponibili)`. Durante il round-robin, finché il totale di fasce assegnate ad associazioni `prima_stagione` è `< N`, su ogni fascia contesa il pool di candidati si restringe alle sole prima-stagione **se almeno una è candidata** (altrimenti la fascia va al pool generale: la quota non spreca fasce che nessuna nuova richiede). Poi catena B.20 normale sul pool ristretto.
+- Motore: campo `PrimaStagione bool` su `roundrobin.Associazione` (il dato c'è già: `coefficienti_associazione.prima_stagione`), parametro `QuotaNuoveAssociazioniPct` in `InputEsecuzione`, contatore fasce assegnate a nuove (un blocco allenamento conta per tutte le sue fasce). Loader in `internal/postgres/parametrico.go`.
+- Gli altri due punti dell'art. 12 sono già coperti: coefficienti neutri prima stagione (istruttoria, fatto), verifica utilizzo effettivo (Fase 15, futuro).
+
+### 2. Job housekeeping / retention GDPR (art. 23 Doc Principale)
+Nel backend Node: funzioni di pulizia pure e testabili + scheduler interno (intervallo giornaliero, partenza al boot, skippabile via env nei test).
+- `oidc_stato_pkce`: DELETE righe scadute mai consumate (i flussi abbandonati oggi si accumulano per sempre).
+- `sessioni_backoffice` / `sessioni_persona_fisica`: DELETE righe scadute o revocate da oltre N giorni (tenerle un minimo per audit di sicurezza).
+- `log_operazioni`: DELETE righe più vecchie di `retention_log_operazioni_giorni` (**parametro già esistente** in `parametrico_versioni`, default 30 🔧).
+- **Mai toccare**: verbali di sorteggio, assegnazioni, settimana tipo — retention legale = intera stagione + termine impugnazione (fisso, non derogabile).
+- TDD contro Postgres reale (fixture con date artificiali nel passato).
+
+### 3. Backup Postgres nel compose di produzione
+**Decisione**: container dedicato nel `docker-compose.yml` (non solo runbook).
+- Servizio `backup`: `pg_dump` schedulato giornaliero, output compresso su volume named dedicato (`postgres_backups`), rotazione (default: 7 giornalieri + 4 settimanali), nessun bind mount (coerente col vincolo prod).
+- Candidato: immagine `prodrigestivill/postgres-backup-local` (schedulazione+rotazione built-in) — da verificare versione/manutenzione al momento dell'implementazione, altrimenti sidecar `postgres:18-alpine` + cron con script nostro.
+- Runbook `docs/RUNBOOK-backup.md`: procedura di restore passo-passo, **verificata davvero** con un ciclo completo backup→drop→restore su container reale prima di dichiararla chiusa.
+- Nota: al deploy reale valutare anche backup a livello infrastruttura (VM/storage snapshot) come secondo livello — non sostituisce il dump logico.
 
 ## 8. Decisioni aperte (bloccanti per le fasi indicate)
 
 Richiedono l'Ente/stakeholder:
 1. **FD = fabbisogno ottimale o minimo?** (art. 5 Doc Principale vs "FD" unico di Allegato A) — implementato ottimale, da confermare. [Fase 7]
-2. **Quota nuove associazioni (art. 12)**: si implementa? Con quale quota? [Fase 4/motore]
+2. ~~Quota nuove associazioni (art. 12)~~ **Decisa** (2026-07-25): parametro con default 0, vedi §7-bis. Resta all'Ente solo la scelta del valore.
 3. **Allegato parametrico ufficiale**: tutti i valori 🔺 (moltiplicatore peso→minuti 60, peso fasce pregiate 1,25, limiti concentrazione 600/4/2/1, CSD, soglie mancato utilizzo 1/2/3, scostamento 20%, soglia compensazione ISF 0,20). [prima del go-live, non blocca lo sviluppo]
 4. **Credenziali pa-sso-proxy** per la verifica OIDC reale. [Fase 7]
 5. **Infrastruttura di produzione** (dove gira, come il runner CI raggiunge il DB). [Fase 6]
