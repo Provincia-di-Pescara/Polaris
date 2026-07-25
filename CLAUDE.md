@@ -99,7 +99,9 @@ Fatto: `internal/roundrobin/` — Fase 8-9 completa (art. B.17-22):
 
 Testato con scenari comportamentali end-to-end (non solo unità isolate): distribuzione bilanciata tra associazioni pari, vincolo "una assegnazione per round", blocco vinto intero, blocco rotto e ricandidatura, tutte e 3 le condizioni di chiusura.
 
-Da fare (Fase 3): service layer HTTP/gRPC attorno al motore (lettura snapshot da Postgres, scrittura transazionale dei risultati, esposizione verso il backend Node).
+Fatto: `internal/istruttoria/` — Fase 4 (art. B.8): orchestra i calcolatori di `calc/` per calcolare FR e coefficienti (CRS/CAA/CSD/CP) di una singola domanda, applicando i valori neutri di prima stagione (incremento squadre e CAA neutri, non il CRS — dipende solo dalla classe dichiarata quest'anno). **Assunzione esplicita da confermare con l'Ente**: Allegato A/B parlano di un unico "fabbisogno dichiarato (FD)" ma la domanda raccoglie sia un minimo che un ottimale (Doc Principale art. 5) — implementato FD = fabbisogno_ottimale_minuti, non il minimo. Vedi commento doc del package.
+
+Da fare (Fase 3, resto): layer di persistenza Postgres — `internal/istruttoria` e `internal/roundrobin` sono entrambi puri, senza dipendenza DB (voluto, per isolamento/determinismo testabile). Manca ancora: repository che legge domande/slot/richieste/blocchi da Postgres e li mappa ai tipi del motore, scrittura transazionale dei risultati (fabbisogni_riconosciuti, coefficienti_associazione, assegnazioni, sorteggi), esposizione HTTP/gRPC verso il backend Node. Da trattare con lo stesso rigore dello schema (container Postgres reale, non solo query scritte a occhio) — è un blocco di lavoro grande quanto lo schema stesso, non va affrettato insieme ad altro.
 
 Comandi (container Postgres e Go possono girare in parallelo, porte diverse):
 ```
