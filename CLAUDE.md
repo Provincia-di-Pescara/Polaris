@@ -87,7 +87,9 @@ Fatto: `internal/calc/` — calcolatori puri, nessuna dipendenza da DB/HTTP (coe
 - `CalcolaFR` — art. A.5 (FR calcolato + FR finale = min(FD, calcolato))
 - `CalcolaISF`, `ISFMinore`, `ISFInTolleranza` — art. A.13/B.16/B.20, incluso il caso FR=0 (ISF non definito, decisione stakeholder)
 
-Da fare: ordine esame fasce (B.17), loop round-robin per round (B.18-22) con limiti di concentrazione, blocchi gara (B.12-14), blocchi allenamento indivisibili, sorteggio tracciato HMAC-SHA256 (vedi specifica sotto), tetto di sicurezza round.
+Fatto: `internal/sorteggio/` — sorteggio tracciato art. B.38 (HMAC-SHA256 rank-asc), formato `hash_verbale` finalizzato (vedi specifica sotto). Testato con test basati su proprietà (determinismo, indipendenza dall'ordine input, ranking valido, sensibilità a seme/candidati) invece di hash hardcoded — verificare a mano un digest SHA-256 non è affidabile, la logica sopra la stdlib crypto è quello che va testato.
+
+Da fare: ordine esame fasce (B.17), loop round-robin per round (B.18-22) con limiti di concentrazione, blocchi gara (B.12-14), blocchi allenamento indivisibili, tetto di sicurezza round.
 
 Comandi (container Postgres e Go possono girare in parallelo, porte diverse):
 ```
@@ -147,7 +149,8 @@ Algoritmo: HMAC-SHA256(seme, candidato_id), ranking crescente sul valore esadeci
 - **Ordine canonico candidati**: lista candidati ordinata per `associazione_id` (UUID) ASC prima del calcolo — garantisce che il verbale pubblicato sia riproducibile indipendentemente dall'ordine di iterazione/inserimento DB.
 - **Calcolo per candidato**: `hmac = HMAC-SHA256(key = decode_hex(seme), message = UTF8(associazione_id))`, rappresentato come stringa hex lowercase.
 - **Ranking**: ordinamento crescente per confronto lessicografico della stringa hex (equivalente a confronto numerico big-endian). Vince il candidato con hmac più basso.
-- **Verbale (record persistito)**: `sorteggio_id`, `procedura_id`, `articolo_riferimento` (es. "B.21", "B.14"), `contesto` (motivo del sorteggio), `seme_hex`, `timestamp_generazione_seme`, `candidati[]` (in ordine canonico), `algoritmo` = `"hmac-sha256-rank-asc"`, `algoritmo_versione` = `"v1"`, `risultati[]` (associazione_id + hmac_hex + rank, ordinati per rank), `vincitore_associazione_id`, `hash_verbale` (SHA256 del payload JSON canonico, per tamper-evidence).
+- **Verbale (record persistito)**: `sorteggio_id`, `procedura_id`, `articolo_riferimento` (es. "B.21", "B.14"), `contesto` (motivo del sorteggio), `seme_hex`, `timestamp_generazione_seme`, `candidati[]` (in ordine canonico), `algoritmo` = `"hmac-sha256-rank-asc"`, `algoritmo_versione` = `"v1"`, `risultati[]` (associazione_id + hmac_hex + rank, ordinati per rank), `vincitore_associazione_id`, `hash_verbale` (per tamper-evidence).
+- **`hash_verbale`** (implementato in `engine-go/internal/sorteggio`): **non** JSON — concatenazione testuale deterministica (JSON "canonico" è ambiguo tra implementazioni/linguaggi diversi, inaccettabile per un hash che terzi devono poter ricalcolare). Formato esatto: `algoritmo + "\n" + algoritmo_versione + "\n" + seme_hex + "\n"`, poi per ciascun candidato in ordine di rank crescente `associazione_id + "|" + hmac_hex + "|" + rank + "\n"`; SHA-256 del risultato, hex lowercase. Pareggio HMAC (probabilità trascurabile): risolto su `associazione_id` crescente, per mantenere un ordine totale sempre definito.
 - Retention: intera stagione + termine di impugnazione (vedi sezione retention sopra), mai 30gg.
 
 Tutte le 20 domande analitiche del giro di revisione iniziale sono chiuse. Nessun blocco tecnico residuo per avvio Fase 1 (schema DB) e Fase 2 (motore Go). I valori 🔺 restano da validare con l'Ente ma non impediscono lo sviluppo, essendo parametrici e modificabili post-deploy senza migrazione di schema.
