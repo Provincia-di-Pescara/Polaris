@@ -228,6 +228,14 @@ CREATE TABLE abilitazioni (
 );
 CREATE INDEX abilitazioni_persona_idx ON abilitazioni (persona_fisica_id);
 CREATE INDEX abilitazioni_associazione_idx ON abilitazioni (associazione_id);
+-- una stessa persona fisica può gestire più associazioni (e viceversa) nella stessa stagione:
+-- il vincolo blocca solo la doppia richiesta/approvazione duplicata sulla STESSA coppia persona-associazione.
+CREATE UNIQUE INDEX abilitazioni_persona_associazione_attiva_uq
+    ON abilitazioni (persona_fisica_id, associazione_id, stagione_id)
+    WHERE associazione_id IS NOT NULL AND stato IN ('in_attesa', 'approvata');
+CREATE UNIQUE INDEX abilitazioni_persona_scuola_attiva_uq
+    ON abilitazioni (persona_fisica_id, istituzione_scolastica_id, stagione_id)
+    WHERE istituzione_scolastica_id IS NOT NULL AND stato IN ('in_attesa', 'approvata');
 
 -- ============================================================
 -- BACKOFFICE (utenti provincia — auth locale, no OIDC)
