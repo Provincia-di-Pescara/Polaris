@@ -170,7 +170,27 @@ Fatto — **autenticazione locale backoffice** (`src/auth/`), NON OIDC/SPID (que
 - Rate limiting su `/auth/login` con `express-rate-limit` (10 tentativi/15 min per IP) — protezione volumetrica di base, non sostituisce un lockout per-account (non implementato, richiederebbe altre colonne schema).
 - Validato end-to-end reale, non solo unit test: `node --test` contro Postgres reale (intero ciclo login→refresh→logout→riuso-token-revocato), più smoke test HTTP con server vero (`node src/index.ts`) + `curl` su tutti gli scenari (login ok/sbagliato/inesistente/malformato, `/auth/me` con e senza token, refresh, riuso post-rotation).
 
-Da fare: OIDC SPID/CIE per il frontend pubblico (sistema separato, serve IdP reale o mock — dedicato), CORS + security headers (`helmet`) — rimandato, da decidere insieme al design della rete tra container, lockout per-account sui tentativi falliti (richiede migration), CRUD per le altre ~15 entità dello schema, orchestrazione delle 16 fasi procedurali (Allegato B), coda verso l'HTTP del motore Go (`internal/httpapi`) per istruttoria/prima-assegnazione.
+Da fare: CORS + security headers (`helmet`) — rimandato, da decidere insieme al design della rete tra container, lockout per-account sui tentativi falliti (richiede migration), CRUD per le altre ~15 entità dello schema, orchestrazione delle 16 fasi procedurali (Allegato B), coda verso l'HTTP del motore Go (`internal/httpapi`) per istruttoria/prima-assegnazione.
+
+## OIDC SPID/CIE (frontend pubblico) — spec del proxy reale
+
+Il proxy SPID/CIE→OIDC in uso è **pa-sso-proxy** (SATOSA), già in esercizio, gestito dall'Ente al di fuori di questo repo — non un IdP mock da simulare, è il provider reale. Standard OIDC lato nostro (Authorization Code + PKCE), niente SAML/SPID-specifico nel nostro codice: tutta la complessità SPID/CIE/eIDAS resta nel proxy.
+
+Riferimento diretto (stesso proxy, stesso stack TypeScript, licenza EUPL-1.2 come questo progetto): [Comune-di-Montesilvano/ComunicaPA](https://github.com/Comune-di-Montesilvano/ComunicaPA), in particolare `apps/backend/src/auth/oidc/oidc-flow.service.ts` e `apps/backend/src/auth/strategies/oidc-citizen.strategy.ts`. Loro non usano `openid-client`: flusso scritto a mano (fetch diretto sul token endpoint) + `jwks-rsa`/`passport-jwt` per la verifica firma. Vale la pena guardare quel codice prima di reinventare, non solo questa sintesi.
+
+**Interoperabilità pa-sso-proxy (vincoli protocollari confermati, non assunzioni):**
+- Issuer = radice del proxy **senza** `/OIDC` in fondo; discovery su `/.well-known/openid-configuration`; endpoint effettivi sotto `/OIDC/` (`authorization`, `token`, `jwks`, `end_session`).
+- Supporta **solo** `client_secret_basic` (credenziali nell'header `Authorization: Basic`) — client_secret nel body del token request → 401 con pagina HTML (non un errore OIDC leggibile).
+- Claim codice fiscale: `fiscal_number`, formato **`TINIT-<CF>`** (prefisso `TIN`+codice paese ISO, da strippare con regex tipo `^TIN[A-Z]{2}-`). Claim URI eIDAS alternativo: `https://attributes.eid.gov.it/fiscal_number`; SPID: `https://attributes.spid.gov.it/fiscalNumber`. Provare più chiavi in ordine di priorità, non assumerne una sola.
+- Claim nome: spesso **`given_name`/`family_name` separati, senza `name`** — comporre lato nostro se `name` assente.
+
+**Pattern architetturali da riusare (validati in produzione su questo stesso proxy):**
+- Scambio del `code` sempre lato server (mai nel browser): il client_secret non deve mai raggiungere la SPA.
+- PKCE con `code_challenge_method=S256`; `state`+`code_verifier` salvati server-side con TTL breve (~5 min) e consumo one-shot (get-then-delete, non semplice lettura, per bloccare replay). Loro usano Redis (già presente nel loro stack per le code BullMQ) — **noi non abbiamo ancora Redis**: preferire una tabella Postgres dedicata (coerente con "riusa Postgres, non aggiungere infra" già seguito nel resto del progetto) a meno che emerga necessità reale di Redis altrove.
+- Verifica firma id_token via JWKS del proxy (`jwks-rsa` o equivalente), **non** verificare con un secret nostro — è un token emesso dal proxy, non da noi.
+- Config OIDC (issuer, client_id, client_secret, redirect_uri, jwks_uri) va in tabella DB configurabile da UI admin, **non** hardcoded/solo env — coerente con `impostazioni_sistema` (già nello schema, Fase 1) pensata proprio per questo (chiave `'oidc'`). Loro cifrano i secret at-rest con AES-256-GCM derivata da `JWT_SECRET`; valutare lo stesso per `client_secret`.
+
+**Gotcha da tenere a mente per quando ci sarà un reverse proxy esterno davanti al backend** (non ancora rilevante, non c'è ancora): un proxy esterno può sostituire il body delle risposte non-2xx con una pagina HTML propria, rendendo illeggibili gli errori applicativi — pattern da valutare allora: rispondere comunque 200 con un flag tipo `{ok:false, errore:'...'}` per gli errori "previsti" che l'utente deve poter leggere, riservando i codici HTTP di errore veri a fallimenti non previsti.
 
 ## Architettura target (5 container)
 
