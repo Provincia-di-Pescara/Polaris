@@ -109,7 +109,16 @@ Fatto: `internal/postgres/` — layer di persistenza (driver `jackc/pgx/v5`, nes
 
 Validato con test di integrazione reale (non mockato): rete Docker dedicata, Postgres con schema+seed applicati, container Go connesso via rete, scenario end-to-end istruttoria→round-robin verificato sui dati effettivamente persistiti in DB (non solo sul valore di ritorno Go).
 
-Da fare (Fase 3, resto): esposizione HTTP/gRPC di queste funzioni verso il backend Node (oggi sono chiamabili solo come funzioni Go dirette, nessun server ancora). Blocchi gara (art. B.12-14) non ancora cablati nell'orchestrazione DB — serve prima il matching impianto/disciplina/omologazione, non ancora modellato.
+Fatto: `internal/httpapi/` + `cmd/service/` — esposizione HTTP verso il backend Node. Niente router esterno: `http.ServeMux` con pattern nativi Go 1.22+ (`"POST /stagioni/{id}/istruttoria"`). Le dipendenze Postgres sono iniettate come funzioni (`Server.EseguiIstruttoria`, `Server.EseguiRoundRobin`), non un'interfaccia — i test della logica HTTP non richiedono un DB reale. `GeneraSeme` iniettabile per test deterministici; default `GeneraSemeCSPRNG` (`crypto/rand`, 32 byte hex, coerente col requisito CSPRNG dell'art. B.38).
+
+Endpoint:
+- `GET /healthz`
+- `POST /stagioni/{id}/istruttoria` → `{"domande_calcolate": N}`
+- `POST /stagioni/{id}/prima-assegnazione` → genera il seme, esegue il round-robin, `{"elaborazione_id", "numero_assegnazioni", "round_eseguiti"}`
+
+`cmd/service/main.go` legge `DATABASE_URL`/`PORT`, shutdown pulito su SIGTERM. Verificato con smoke test reale (non solo `go build`): binario avviato con `go run` contro Postgres vero su rete Docker dedicata, tutti e 3 gli scenari chiamati via `curl` — healthz 200, istruttoria/prima-assegnazione su stagione vuota (0 domande, chiusura round-robin corretta con 0 fasce), stagione inesistente propaga correttamente il vincolo FK come errore 500 leggibile (non un crash).
+
+Da fare (Fase 3, resto): blocchi gara (art. B.12-14) non ancora cablati nell'orchestrazione DB — serve prima il matching impianto/disciplina/omologazione, non ancora modellato. Nessuna autenticazione/autorizzazione sull'HTTP del motore ancora (accettabile per ora: è un servizio interno, il backend Node farà da gatekeeper — da rivedere quando si disegna la rete tra i container).
 
 Comandi (container Postgres e Go possono girare in parallelo, porte diverse):
 ```

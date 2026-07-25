@@ -1,0 +1,99 @@
+// Package httpapi espone il motore (istruttoria + round-robin) via HTTP/JSON verso il
+// backend Node. Le dipendenze verso Postgres sono iniettate come funzioni (non
+// un'interfaccia con più metodi), così i test della logica HTTP non richiedono un DB reale.
+package httpapi
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+
+	"github.com/provincia/palestre-engine/internal/roundrobin"
+)
+
+// Server raccoglie le dipendenze necessarie agli handler. GeneraSeme, se nil, usa
+// GeneraSemeCSPRNG di default (iniettabile nei test per un seme deterministico).
+type Server struct {
+	EseguiIstruttoria func(ctx context.Context, stagioneID string) (int, error)
+	EseguiRoundRobin  func(ctx context.Context, stagioneID, semeHex string) (roundrobin.Esito, string, error)
+	GeneraSeme        func() (string, error)
+}
+
+// GeneraSemeCSPRNG implementa il requisito dell'art. B.38: seme casuale generato con
+// CSPRNG prima dell'elaborazione, 32 byte, encoding esadecimale.
+func GeneraSemeCSPRNG() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generazione seme: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// Routes registra gli endpoint. Pattern con path param nativi (Go 1.22+), nessun router esterno.
+func (s *Server) Routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("POST /stagioni/{id}/istruttoria", s.handleIstruttoria)
+	mux.HandleFunc("POST /stagioni/{id}/prima-assegnazione", s.handlePrimaAssegnazione)
+	return mux
+}
+
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok"))
+}
+
+func (s *Server) handleIstruttoria(w http.ResponseWriter, r *http.Request) {
+	stagioneID := r.PathValue("id")
+
+	n, err := s.EseguiIstruttoria(r.Context(), stagioneID)
+	if err != nil {
+		scriviErrore(w, err)
+		return
+	}
+
+	scriviJSON(w, http.StatusOK, map[string]any{
+		"domande_calcolate": n,
+	})
+}
+
+func (s *Server) handlePrimaAssegnazione(w http.ResponseWriter, r *http.Request) {
+	stagioneID := r.PathValue("id")
+
+	generaSeme := s.GeneraSeme
+	if generaSeme == nil {
+		generaSeme = GeneraSemeCSPRNG
+	}
+	seme, err := generaSeme()
+	if err != nil {
+		scriviErrore(w, err)
+		return
+	}
+
+	esito, elaborazioneID, err := s.EseguiRoundRobin(r.Context(), stagioneID, seme)
+	if err != nil {
+		scriviErrore(w, err)
+		return
+	}
+
+	scriviJSON(w, http.StatusOK, map[string]any{
+		"elaborazione_id":     elaborazioneID,
+		"numero_assegnazioni": len(esito.Assegnazioni),
+		"round_eseguiti":      esito.RoundEseguiti,
+	})
+}
+
+func scriviJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+func scriviErrore(w http.ResponseWriter, err error) {
+	scriviJSON(w, http.StatusInternalServerError, map[string]any{
+		"errore": err.Error(),
+	})
+}
