@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Sistema telematico di assegnazione di spazi sportivi pubblici (palestre scolastiche di competenza provinciale). Obiettivo: eliminare discrezionalità umana nell'assegnazione, sostituendola con regole matematiche deterministiche, tracciabili e riproducibili da terzi.
 
-**Stato attuale**: analisi requisiti chiusa, Fase 1 (schema DB) implementata e validata, Fase 2 (motore Go: calc + sorteggio + round-robin) implementata e testata. Fase 3 (service layer HTTP/gRPC attorno al motore) non ancora avviata.
+**Stato attuale**: analisi requisiti chiusa. Fase 1 (schema DB), Fase 2 (motore Go: calc + sorteggio + round-robin) e Fase 3 (persistenza Postgres + esposizione HTTP del motore) implementate, testate, verificate con Postgres reale. Fase 4 (Backend API/Backoffice Node.js+TypeScript, consuma l'HTTP del motore) non ancora avviata. Residuo noto in Fase 3: orchestrazione blocchi gara (serve matching impianto/disciplina/omologazione, non ancora modellato).
 
 ## Versioni target (verificate via web search, non da training data — ricontrollare a inizio di ogni fase nuova, l'ecosistema si muove in fretta)
 
