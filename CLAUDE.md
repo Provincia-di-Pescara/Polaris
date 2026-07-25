@@ -15,6 +15,8 @@ Sistema telematico di assegnazione di spazi sportivi pubblici (palestre scolasti
 - **Node.js 24** (Active LTS) per il backend API. Node 26 esiste già come release "Current" ma entra in LTS solo da ottobre 2026 — non usarlo prima per un sistema in produzione.
 - **TypeScript 7.0** ovunque (backend Node e frontend), nessun blocco: **React 19.2** scelto come framework per entrambi i frontend (decisione presa proprio per evitare il vincolo Vue/Volar su TS7, non ancora supportato — atteso TS 7.1 ~ottobre 2026).
 
+**Specifica di progetto**: `docs/SPEC.md` — piano completo di tutte le fasi (1–8), mappatura articolo-per-articolo verso Allegato B/Doc Principale, lacune note con priorità, decisioni aperte. Aggiornarla alla chiusura di ogni fase; questo file resta la memoria operativa fine-grained.
+
 ## Documenti di riferimento (fonte di verità normativa)
 
 Cartella `documenti/`, formato .docx (leggere con estrazione XML via zipfile+regex, il tool Read nativo non gestisce binari .docx):
@@ -72,6 +74,7 @@ Note ambiente (Windows/Git Bash) per chi lancia questi comandi via Claude Code:
 - `.gitattributes` forza `eol=lf` su `.go`/`.sql`/`.md` (bug reale: CRLF da Windows rompeva `gofmt -l` al primo clone). Aggiungere altri tipi di file testuale lì se necessario, non lasciarli a CRLF di default.
 - Seed/chiavi hex nei test (es. seme sorteggio, 32 byte = 64 caratteri): non scriverli a mano, capita facilmente di sbagliare la lunghezza (successo 3 volte in questa sessione). Generarli con `python3 -c "import secrets; print(secrets.token_hex(32))"` e verificarne la lunghezza prima di incollarli.
 - `go get` una dipendenza prima di usarla nel codice: `go mod tidy` la rimuove da `go.mod` finché nessun file la importa davvero. Non è un bug, va solo richiamato `go get` di nuovo quando si scrive il codice che la usa.
+- Glob `src/**/*.test.ts` NON quotato in bash (CI incluso): senza globstar `**` degrada a `*` e i test top-level spariscono silenziosamente (successo davvero: CI verde con `server.test.ts` mai eseguito). Sempre quotare il pattern e lasciare il glob al test runner di Node.
 - `jq` non disponibile in questo ambiente. Per estrarre campi da risposte JSON di `curl` negli smoke test (es. incatenare login→token): `curl ... | node -e "process.stdin.on('data', d => console.log(JSON.parse(d).campo))"`.
 
 Test locale rapido:

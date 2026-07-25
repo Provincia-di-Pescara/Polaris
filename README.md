@@ -27,7 +27,7 @@ In sviluppo attivo.
 - **Fase 6 — Docker Compose e CI/CD**: parziale — build/test automatizzati, pubblicazione immagini su GHCR
 - **Frontend pubblico e backoffice (React/TypeScript)**: da avviare
 
-Dettagli su regole di business, decisioni tecniche e stato di avanzamento in [`CLAUDE.md`](./CLAUDE.md).
+Specifica completa del progetto (tutte le fasi, mappatura normativa, lacune note, decisioni aperte) in [`docs/SPEC.md`](./docs/SPEC.md). Dettagli operativi su regole di business, decisioni tecniche e stato di avanzamento in [`CLAUDE.md`](./CLAUDE.md).
 
 ## Architettura
 

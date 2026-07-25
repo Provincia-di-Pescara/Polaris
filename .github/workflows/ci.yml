@@ -107,7 +107,11 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/palestre?sslmode=disable
           JWT_SECRET: ci-test-secret-non-per-produzione
-        run: node --test src/**/*.test.ts
+        # Pattern QUOTATO: bash senza globstar espande src/**/*.test.ts come src/*/*.test.ts,
+        # perdendo i test top-level (server.test.ts, stagioni.test.ts — incluso il test di
+        # regressione login-CSRF). Quotato, il glob lo risolve il test runner di Node, che
+        # gestisce ** correttamente. Bug reale: CI verde con 2 file di test mai eseguiti.
+        run: node --test "src/**/*.test.ts"
 
   compose-config:
     runs-on: ubuntu-latest

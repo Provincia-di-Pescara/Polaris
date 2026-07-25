@@ -1,0 +1,183 @@
+# POLARIS — Specifica di progetto completa
+
+Piattaforma Organizzativa per la Localizzazione e l'Assegnazione delle Risorse e degli Impianti Sportivi — Provincia di Pescara.
+
+Questo documento è la specifica tecnica completa del progetto: copre tutte le fasi di sviluppo (fatte, in corso, future), la mappatura verso i documenti normativi e le lacune note. Fonte di verità normativa: `documenti/` (Documento Principale, Allegato A, Allegato B). Fonte di verità operativa per lo stato corrente e i gotcha d'ambiente: `CLAUDE.md`.
+
+**Regola fondante** (istruzione esplicita del committente): ogni regola di business implementata deve essere riconducibile a un articolo preciso dei documenti normativi. Non si introducono logiche non scritte.
+
+---
+
+## 1. Obiettivo e principi vincolanti
+
+Sistema telematico di assegnazione degli spazi sportivi pubblici (palestre scolastiche di competenza provinciale) che sostituisce la discrezionalità amministrativa con regole matematiche deterministiche, tracciabili e riproducibili da terzi.
+
+Vincoli non negoziabili (Doc Principale art. 1, 13, 22; Allegato B art. B.1, B.38, B.39):
+
+- **Determinismo**: stesso input → stesso output, sempre. Nessuna fonte di non-determinismo non seedata nel motore di calcolo (orologio, ordine di iterazione di map, float).
+- **Sorteggio tracciato**: seme CSPRNG pubblicato prima dell'elaborazione, algoritmo pubblico (HMAC-SHA256 rank-asc), verbale automatico con hash di integrità, esito riproducibile da terzi.
+- **Tracciabilità**: ogni operazione di scrittura registrata con persona fisica, associazione rappresentata, ruolo, data/ora (art. 53 Doc Principale, art. B.39).
+- **Unità di misura**: minuti, mai numero di slot (le fasce hanno durate diverse).
+- **Aritmetica**: `decimal` ovunque (mai float), arrotondamento a 3 cifre decimali.
+- **Denaro**: i corrispettivi non transitano mai dalla piattaforma.
+- **Parametri di business versionati**: mai hardcoded; tabella `parametrico_versioni` versionata, editabile da admin via UI; ogni elaborazione congela la versione vigente al momento dell'esecuzione (rielaborazioni storiche riproducibili).
+
+## 2. Architettura (5 container)
+
+| # | Componente | Tecnologia | Stato |
+|---|---|---|---|
+| 1 | Database | PostgreSQL 18 (`postgres:18-alpine`) | ✅ Schema completo (4 migration) |
+| 2 | Motore algoritmico | Go 1.26, `shopspring/decimal`, `pgx/v5`, HTTP nativo | ✅ Calcolo+persistenza+HTTP; ❌ blocchi gara non orchestrati |
+| 3 | Backend API | Node.js 24 (esecuzione `.ts` nativa, no build), TypeScript 7.0.2, Express 5, zod, pnpm | 🔶 Auth completa (locale+OIDC); ❌ CRUD e orchestrazione procedimento |
+| 4 | Frontend pubblico | React 19.2 + TypeScript 7 | ❌ Da avviare |
+| 5 | Frontend backoffice | React 19.2 + TypeScript 7 | ❌ Da avviare |
+
+Infrastruttura: Docker Compose (prod: immagini GHCR, zero bind mount; dev: override con hot-reload), GitHub Actions (CI + release su GHCR), reverse proxy davanti a frontend/API (❌ non ancora nel compose).
+
+Confini architetturali fissi:
+- Il motore Go resta puro: solo calcolo, nessuna auth/CRUD. Il backend Node è l'unico gatekeeper; il motore non è mai esposto fuori dalla rete interna dei container.
+- Nessuna logica di calcolo duplicata in Node: il backend orchestra il motore via HTTP interno (`ENGINE_URL`).
+- Nessun ORM da nessuna parte: SQL puro parametrizzato (controllo diretto su exclusion constraint e CHECK di dominio).
+- Configurazione applicativa (OIDC, SMTP, branding, parametrico) in DB (`impostazioni_sistema`, `parametrico_versioni`), mai in variabili d'ambiente. In env solo bootstrap: `DATABASE_URL`, `JWT_SECRET`, porte.
+
+## 3. Mappatura normativa → componenti e stato
+
+### Allegato B — le 16 fasi della procedura operativa
+
+| Fase normativa | Articoli | Componente responsabile | Stato |
+|---|---|---|---|
+| 1. Quadro delle disponibilità (censimento impianti, settimana tipo, fasce pregiate) | B.2–B.4 | Schema ✅ · CRUD backoffice ❌ · UI ❌ | Solo schema |
+| 2. Presentazione delle domande | B.5–B.6 | Schema ✅ · API pubblica ❌ · UI ❌ | Solo schema |
+| 3. Istruttoria — verifica di ammissibilità | B.7 | API backoffice ❌ · UI ❌ | Solo schema |
+| 4. Calcolo dei parametri (FR, CRS, CAA, CSD, CP) | B.8–B.9 | Motore Go ✅ (`internal/istruttoria`, `POST /stagioni/{id}/istruttoria`) | **Fatto** |
+| 5. Pubblicazione esiti istruttoria + osservazioni/riesame | B.10–B.11 | Schema ✅ (`osservazioni_istruttoria`) · API ❌ · UI ❌ | Solo schema |
+| 6. Assegnazione dei blocchi gara | B.12–B.14 | Catena vincitore Go ✅ (`SceglieVincitoreBloccoGara`) · matching soluzioni compatibili + orchestrazione DB ❌ | **Parziale** |
+| 7. Calcolo iniziale ISF (VA da blocchi gara) | B.15–B.16 | Calcolo ISF Go ✅ · VA iniziale da blocchi gara ❌ (dipende da fase 6) | Parziale |
+| 8. Assegnazione progressiva per round | B.17–B.21 | Motore Go ✅ (`internal/roundrobin`, incl. blocchi allenamento, tie-break live, sorteggio) | **Fatto** |
+| 9. Completamento (condizioni di chiusura) | B.22 | Motore Go ✅ (B.22.1/.2/.3 + tetto di sicurezza) | **Fatto** |
+| 10. Pubblicazione proposta provvisoria | B.23 | API ❌ · UI ❌ | Mancante |
+| 11. Concertazione tra associazioni | B.24–B.26 | Schema ✅ (`concertazione_*`) · logica ❌ (lock ottimistico, FIFO) | Solo schema |
+| 12. Validazione delle proposte | B.27–B.28 | Schema ✅ · logica ❌ (verifica compatibilità serializzata FIFO) | Solo schema |
+| 13. Assegnazione fasce residue (riassegnazione finale) | B.29 | ❌ — riusa il round-robin sui soli slot liberi post-concertazione | Mancante |
+| 14. Settimana tipo definitiva | B.30–B.31 | API ❌ · UI ❌ | Mancante |
+| 15. Gestione stagionale: variazioni, indisponibilità, monitoraggio, decadenza | B.32–B.36 | Schema ✅ (`indisponibilita_sopravvenute`, `utilizzi_effettivi`, `provvedimenti_mancato_utilizzo`) · logica ❌ | Solo schema |
+| 16. Disposizioni comuni: parametrico, sorteggio, tracciabilità | B.37–B.39 | Parametrico versionato ✅ · sorteggio ✅ · **audit log: schema ✅ ma nessun codice scrive `log_operazioni`** ❌ | Parziale |
+
+### Documento Principale — articoli con impatti realizzativi non coperti dall'Allegato B
+
+| Art. | Tema | Stato |
+|---|---|---|
+| 3 | Identità digitale SPID/CIE/eIDAS, deleghe con approvazione operatore | OIDC ✅ · workflow deleghe/abilitazioni ❌ (schema `abilitazioni` pronto) |
+| 4 | Accreditamento associazioni (esistenza, affiliazioni, assicurazione, responsabili) | Schema ✅ (`associazioni`, `associazioni_documenti`) · API/UI ❌ |
+| 5 | Dichiarazione fabbisogno (minimo + ottimale) | Schema ✅ · **assunzione aperta: FD = fabbisogno ottimale** (da confermare con l'Ente) |
+| 12 | Tutela nuove associazioni (quota fasce riservabile) | **Non modellata** né in schema né nel motore. Facoltativa ("l'Ente può") — serve decisione: si implementa? Se sì: parametro 🔧 quota + ramo dedicato nel round-robin |
+| 19 | Rapporti con istituzioni scolastiche (convenzioni) | Schema ✅ (`convenzioni`) · logica ❌ |
+| 23 | GDPR: retention differenziata, minimizzazione | Regole definite (30gg log operativo 🔧 / stagione+impugnazione per verbali-assegnazioni, fisso) · **job di retention non implementato** ❌ |
+| 24 | Consultazione annuale associazioni | Fuori piattaforma (processo organizzativo, nessun requisito software) |
+
+## 4. Piano di progetto — tutte le fasi
+
+### Fase 1 — Schema dati (✅ completata)
+`db/migrations/000001–000004`, SQL puro compatibile golang-migrate. Validata funzionalmente con Postgres 18 reale (migrazioni up/down, EXCLUDE e CHECK testati con insert che devono fallire/passare). Ogni modifica futura va validata contro container reale.
+
+### Fase 2 — Motore algoritmico Go (✅ completata)
+`engine-go/internal/{calc,sorteggio,roundrobin,istruttoria}` in TDD rigoroso. Residuo esplicito: **taratura CSD** (art. A.11 — formula demandata allo sviluppo) da chiudere con simulazioni su dataset realistici prima del collaudo (vedi Fase 7).
+
+### Fase 3 — Persistenza e HTTP del motore (✅ completata, con residui)
+`internal/postgres` + `internal/httpapi` + `cmd/service`. Verificato end-to-end con Postgres reale.
+Residui:
+- **Blocchi gara (B.12–B.14)**: matching richiesta↔soluzioni compatibili (impianto omologato per la disciplina — i dati ci sono: `spazi_sportivi.omologazioni`, `richieste_giornata_gara.necessita_impianto_omologato`, ≥2 slot consecutivi) e orchestrazione DB. Va fatto **prima** della Fase 7 normativa (VA iniziale dipende dai blocchi gara assegnati).
+- `assegnazioni.isf_al_momento` lasciato NULL — da valorizzare quando servirà in dashboard/audit.
+
+### Fase 4 — Backend Node (🔶 in corso)
+Fatto: scaffold, `GET /healthz`, `GET /stagioni`, autenticazione locale backoffice completa (scrypt, JWT HS256 pinnato con audience, refresh rotation, rate limit, no user enumeration), OIDC SPID/CIE completa (PKCE, state one-shot in Postgres, verifica JWKS, JWT propri, protezione login-CSRF con cookie firmato). Tutto verificato con Postgres reale e IdP mock realistico.
+
+Da fare (ordine consigliato):
+1. **Middleware autorizzazione per ruolo** (`richiedeRuolo('admin')`) — il ruolo è già nel JWT, manca solo il middleware. Prerequisito di ogni endpoint impostazioni.
+2. **Audit log** (art. B.39): helper + integrazione su ogni scrittura (solo scritture, non letture). Oggi `log_operazioni` non è scritta da nessuno — lacuna normativa, non tecnica.
+3. **CRUD backoffice**: stagioni, istituzioni scolastiche, impianti/spazi/slot settimana tipo (incl. fasce pregiate — Fase normativa 1), discipline, utenti backoffice, parametrico versionato (nuova versione, mai update in place), impostazioni (SMTP, OIDC).
+4. **Wizard primo avvio**: seeding SMTP + creazione primo admin con validazione via link email. Oggi il primo utente backoffice si crea solo con SQL a mano — bloccante per qualunque deploy reale. Richiede modulo email (SMTP da `impostazioni_sistema`).
+5. **Flusso pubblico**: accreditamento associazione + richiesta delega (art. 3–4), approvazione deleghe lato operatore, domanda con fabbisogni/preferenze/blocchi/giornate gara (B.5–B.6), osservazioni (B.11).
+6. **Orchestrazione procedimento**: macchina a stati della procedura per stagione (le 16 fasi normative come stati espliciti con transizioni registrate), chiamate al motore Go (istruttoria, blocchi gara, prima assegnazione), pubblicazioni (B.10, B.23, B.30).
+7. **Concertazione** (B.24–B.28): proposte multilaterali, accettazioni, validazione serializzata FIFO, lock ottimistico con retry. Poi riassegnazione finale (B.29) sui soli slot liberi.
+8. **Gestione stagionale** (B.32–B.36): indisponibilità sopravvenute, rilevazione utilizzi, escalation giustificazione→diffida→decadenza (soglie 🔧), effetti su CAA stagione successiva.
+9. **Job housekeeping**: pulizia `oidc_stato_pkce` scadute non consumate, sessioni scadute, retention `log_operazioni` (30gg 🔧) — mai su verbali/assegnazioni/settimana tipo (retention legale fissa).
+10. **Hardening rimandato**: CORS + helmet (insieme al design del reverse proxy), `app.set('trust proxy', ...)` quando c'è il proxy (senza, `req.ip` e il rate limiting per IP vedono l'IP del proxy), lockout per-account (migration dedicata).
+
+### Fase 5 — Frontend (❌ da avviare)
+Due app React 19.2 + TS 7 in pnpm workspace (da creare `pnpm-workspace.yaml`; oggi `backend-node` è un pacchetto singolo).
+- **Pubblico**: login SPID/CIE (redirect flow già pronto lato backend), onboarding associazione/delega, domanda, preferenze slot, dashboard esiti/ISF, concertazione, calendario.
+- **Backoffice**: wizard primo avvio, login locale, gestione per ruolo (admin: impostazioni+parametri+utenti; operatore: deleghe, CRUD impianti/slot, istruttoria, avvio elaborazioni, monitoraggio).
+- Requisiti PA: accessibilità (AGID/WCAG), i18n non richiesta (solo italiano).
+
+### Fase 6 — Infrastruttura e CI/CD (🔶 parziale)
+Fatto: compose prod/dev verificati con bring-up reale, CI (test Go+Node contro Postgres 18 reale, typecheck, gofmt/vet, validazione compose) e release (build+push GHCR, job migrate) verdi su GitHub.
+Da fare:
+- Reverse proxy (Caddy/Traefik/nginx — da decidere) davanti a backend+frontend: TLS, security headers, insieme a CORS/helmet.
+- Secret `PRODUCTION_DATABASE_URL` + decisione raggiungibilità DB di produzione dal runner (self-hosted vs endpoint con allowlist).
+- Deploy effettivo (target infrastrutturale dell'Ente non ancora noto).
+- **Backup/restore Postgres**: strategia non ancora definita (pg_dump schedulato? volume snapshot?) — obbligatoria prima del go-live, i verbali hanno valore legale.
+
+### Fase 7 — Collaudo e taratura (❌ da pianificare)
+- **Dataset realistico**: generatore di dati di test (N associazioni, impianti reali della provincia, domande verosimili) per simulazioni end-to-end.
+- **Taratura CSD** (art. A.11): iterazioni sul dataset verificando assenza di incentivi a dichiarazioni strategiche (FD gonfiato).
+- **Verifica OIDC contro il vero pa-sso-proxy** con credenziali reali (client_id/secret/issuer/redirect_uri) — mai testato, solo mock protocol-faithful. Include conferma di come il proxy segnala SPID vs CIE vs eIDAS nei claim (oggi `OIDC_PROVIDER_DEFAULT='spid'` placeholder).
+- **Validazione parametri 🔺 con l'Ente** → produzione dell'allegato parametrico ufficiale → nuova versione in `parametrico_versioni`.
+- **Riproducibilità da terzi**: esercizio pratico — ricalcolo di un sorteggio e di un'elaborazione completa da parte di un verificatore esterno con soli dati pubblicati.
+- Security review complessiva + test di carico sulla concertazione (unico punto con concorrenza reale).
+
+### Fase 8 — Go-live ed esercizio (❌ da pianificare)
+Runbook operativo (deploy, rollback, restore), formazione operatori, migrazione/inserimento dati primo anno (impianti, slot, istituzioni), apertura prima stagione. Primo anno = valori neutri (incremento squadre 0, CAA 1,00 — art. A.4/A.7).
+
+## 5. Contratto API (superficie prevista)
+
+Convenzioni: JSON, `camelCase` in uscita, zod su ogni input, errori `{errore, dettagli?}`, Bearer JWT (audience `backoffice` o `pubblico`), 401 generici (no enumeration).
+
+Esistenti: `GET /healthz`, `GET /stagioni`, `POST /auth/login|refresh|logout`, `GET /auth/me`, `GET /auth/oidc/start`, `POST /auth/oidc/callback`, `POST /auth/pubblico/refresh|logout`, `GET /auth/pubblico/me`. Motore (interno): `GET /healthz`, `POST /stagioni/{id}/istruttoria`, `POST /stagioni/{id}/prima-assegnazione`.
+
+Previste (nomi indicativi, da consolidare in fase di implementazione):
+- Backoffice: `/backoffice/stagioni`, `/backoffice/istituzioni`, `/backoffice/impianti`, `/backoffice/impianti/{id}/spazi`, `/backoffice/spazi/{id}/slot`, `/backoffice/discipline`, `/backoffice/utenti`, `/backoffice/parametrico` (POST = nuova versione), `/backoffice/impostazioni/{smtp|oidc}`, `/backoffice/deleghe/{id}/approva|respingi`, `/backoffice/domande/{id}/ammetti|escludi`, `/backoffice/stagioni/{id}/procedura/*` (transizioni di fase, avvio elaborazioni, pubblicazioni), `/backoffice/monitoraggio/*`.
+- Pubblico: `/pubblico/associazioni` (accreditamento), `/pubblico/deleghe`, `/pubblico/domande` (+fabbisogni, preferenze, blocchi, giornate gara), `/pubblico/osservazioni`, `/pubblico/esiti`, `/pubblico/concertazione/*`, `/pubblico/calendario`.
+- Motore (da aggiungere): `POST /stagioni/{id}/blocchi-gara`, `POST /stagioni/{id}/riassegnazione-finale`.
+
+## 6. Sicurezza — stato e piano
+
+Fatto: scrypt self-describing, JWT HS256 pinnato + audience separate, refresh rotation con hash SHA-256, rate limit login/OIDC-start, no user enumeration, PKCE S256 + state one-shot, verifica id_token via JWKS, client_secret cifrato AES-256-GCM at rest (chiave derivata con context label), protezione login-CSRF (cookie firmato + timingSafeEqual), `tentativi_login_backoffice` per il monitoraggio.
+
+Da fare: autorizzazione per ruolo, audit log applicativo, CORS/helmet/trust-proxy (col reverse proxy), lockout per-account, autenticazione o segregazione di rete formale verso il motore Go (oggi: fiducia nella rete interna compose — accettabile, da rivedere col reverse proxy), gestione rotazione `JWT_SECRET` documentata (invalida sessioni E rende irrecuperabile il client_secret OIDC cifrato — va reinserito da UI).
+
+## 7. Lacune rilevate dall'audit (2026-07-25)
+
+Risolte subito:
+- **CI non eseguiva 2 file di test** (`server.test.ts` — incluso il regression test login-CSRF — e `stagioni.test.ts`): bash senza globstar espande `src/**/*.test.ts` come `src/*/*.test.ts`. Fix: pattern quotato (lo risolve il test runner Node) in `ci.yml` e `package.json`.
+
+Da pianificare (tracciate nelle fasi sopra):
+| Lacuna | Gravità | Dove |
+|---|---|---|
+| `log_operazioni` mai scritta (art. B.39) | Alta — requisito normativo | Fase 4.2 |
+| Nessun modo di creare il primo admin senza SQL a mano | Alta — bloccante deploy | Fase 4.4 |
+| Blocchi gara non orchestrati (B.12–B.14) + VA iniziale (B.15) | Alta — spezza la catena del procedimento | Fase 3 residuo |
+| Tutela nuove associazioni (art. 12) non modellata | Media — facoltativa, serve decisione Ente | §8 |
+| Retention/housekeeping non implementati (GDPR art. 23) | Media | Fase 4.9 |
+| Backup/restore non definiti | Media (Alta al go-live) | Fase 6 |
+| `pnpm-workspace.yaml` assente | Bassa — serve con i frontend | Fase 5 |
+| Righe `oidc_stato_pkce` scadute mai ripulite | Bassa | Fase 4.9 |
+| `isf_al_momento` sempre NULL | Bassa | Fase 3 residuo |
+
+## 8. Decisioni aperte (bloccanti per le fasi indicate)
+
+Richiedono l'Ente/stakeholder:
+1. **FD = fabbisogno ottimale o minimo?** (art. 5 Doc Principale vs "FD" unico di Allegato A) — implementato ottimale, da confermare. [Fase 7]
+2. **Quota nuove associazioni (art. 12)**: si implementa? Con quale quota? [Fase 4/motore]
+3. **Allegato parametrico ufficiale**: tutti i valori 🔺 (moltiplicatore peso→minuti 60, peso fasce pregiate 1,25, limiti concentrazione 600/4/2/1, CSD, soglie mancato utilizzo 1/2/3, scostamento 20%, soglia compensazione ISF 0,20). [prima del go-live, non blocca lo sviluppo]
+4. **Credenziali pa-sso-proxy** per la verifica OIDC reale. [Fase 7]
+5. **Infrastruttura di produzione** (dove gira, come il runner CI raggiunge il DB). [Fase 6]
+
+Tecniche (si decidono in sviluppo):
+6. Scelta reverse proxy e design rete container (con CORS/helmet/trust-proxy).
+7. Formato ed esposizione pubblica dei verbali di sorteggio (pagina di verifica per terzi?).
+8. Modellazione della macchina a stati della procedura (tabella `procedure_stagione` dedicata o stato su `stagioni_sportive`).
+
+---
+
+*Aggiornare questo documento alla chiusura di ogni fase o decisione aperta. Lo stato operativo fine-grained resta in `CLAUDE.md`.*
