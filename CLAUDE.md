@@ -6,7 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Sistema telematico di assegnazione di spazi sportivi pubblici (palestre scolastiche di competenza provinciale). Obiettivo: eliminare discrezionalità umana nell'assegnazione, sostituendola con regole matematiche deterministiche, tracciabili e riproducibili da terzi.
 
-**Stato attuale: pre-implementazione, analisi requisiti chiusa.** Nessun codice ancora scritto. Tutte le domande analitiche e i punti aperti sono stati chiusi (vedi sezioni sotto) — pronti per avvio Fase 1 (schema DB) e Fase 2 (motore Go).
+**Stato attuale**: analisi requisiti chiusa, Fase 1 (schema DB) implementata e validata. Fase 2 (motore Go) non ancora avviata.
+
+## Versioni target (verificate via web search, non da training data — ricontrollare a inizio di ogni fase nuova, l'ecosistema si muove in fretta)
+
+- **PostgreSQL 18** (`postgres:18-alpine`). PostgreSQL 19 è in beta a luglio 2026, non da usare in produzione.
+- **Go 1.26** (patch più recente, es. 1.26.5) per il motore algoritmico — non ancora avviato.
+- **Node.js 24** (Active LTS) per il backend API. Node 26 esiste già come release "Current" ma entra in LTS solo da ottobre 2026 — non usarlo prima per un sistema in produzione.
+- **TypeScript 7.0** ovunque (backend Node e frontend), nessun blocco: **React 19.2** scelto come framework per entrambi i frontend (decisione presa proprio per evitare il vincolo Vue/Volar su TS7, non ancora supportato — atteso TS 7.1 ~ottobre 2026).
 
 ## Documenti di riferimento (fonte di verità normativa)
 
@@ -55,10 +62,15 @@ Punti tecnici degni di nota per chi tocca lo schema:
 - **Gotcha verificato**: `boolean::int` non è castabile in Postgres stock (`cannot cast type boolean to integer`). Per i CHECK "esattamente uno tra N campi è valorizzato" si usa `num_nonnulls(a, b) = 1`, non `(a IS NOT NULL)::int + ...`.
 - `assegnazioni_slot_attiva_uq` è un indice unico parziale (`WHERE stato IN ('provvisoria','validata')`) — uno slot può avere una sola assegnazione attiva alla volta, ma la storia (decadute/sostituite) resta in tabella.
 - Schema validato funzionalmente (non solo sintatticamente) con Postgres 16 in Docker: migrazioni up/down pulite, EXCLUDE e CHECK testati con insert di prova che devono fallire/passare come da specifica.
+- Ogni modifica a `db/migrations/` va validata contro un container Postgres reale (vedi comandi sotto), non solo controllata a occhio: la sintassi SQL può sembrare corretta e fallire a runtime (es. cast non supportati).
+
+Note ambiente (Windows/Git Bash) per chi lancia questi comandi via Claude Code:
+- Docker Desktop su questa macchina non è avviato di default. Se `docker info` fallisce: lanciare `"/c/Program Files/Docker/Docker/Docker Desktop.exe"` in background e attendere (poll `docker info`) prima di usare `docker`.
+- `docker exec` con path dentro al container (es. `-f /tmp/x.sql`) da Git Bash: serve `MSYS_NO_PATHCONV=1` davanti al comando, altrimenti il path Unix viene riscritto come path Windows e il comando fallisce. Non applicarlo a `docker cp` quando l'argomento è un path Windows reale (va convertito).
 
 Test locale rapido:
 ```
-docker run -d --name pg-palestre -e POSTGRES_PASSWORD=test -e POSTGRES_DB=palestre -p 5432:5432 postgres:16-alpine
+docker run -d --name pg-palestre -e POSTGRES_PASSWORD=test -e POSTGRES_DB=palestre -p 5432:5432 postgres:18-alpine
 psql postgresql://postgres:test@localhost:5432/palestre -f db/migrations/000001_init.up.sql
 psql postgresql://postgres:test@localhost:5432/palestre -f db/migrations/000002_seed_valori_normativi.up.sql
 ```
@@ -68,8 +80,8 @@ psql postgresql://postgres:test@localhost:5432/palestre -f db/migrations/000002_
 1. **DB — PostgreSQL.** Single source of truth. Vincoli relazionali rigidi, exclusion constraint contro sovrapposizioni slot, lock transazionali per gestire concorrenza in fase di concertazione. Parametri di sistema (🔧 in sezione sopra) in tabella `allegato_parametrico` versionata, editabile da admin via UI backoffice — mai hardcoded, mai letta "current" da un'elaborazione storica (ogni run referenzia la versione vigente al momento dell'esecuzione).
 2. **Motore algoritmico — Go.** Microservizio puro, isolato: solo calcolo (FR/ISF/CP, ordine esame fasce, loop round-robin, sorteggio tracciato). Nessuna dipendenza da HTTP/auth/CRUD — deve restare testabile in isolamento per garantire determinismo e riproducibilità bit-esatta (requisito esplicito e ripetuto nei documenti: art. 28 Doc Principale, art. B.1 Allegato B).
 3. **Backend API/Backoffice — Node.js + TypeScript.** Autenticazione OIDC (SPID/CIE) per frontend pubblico, autenticazione locale per frontend admin, validazione, CRUD, orchestrazione delle fasi procedurali, coda verso il motore Go. Riusa le regole di business del motore Go via RPC — non duplicare logica di calcolo in Node.
-4. **Frontend pubblico — React/Vue + TypeScript.** Accesso associazioni (e scuole, che seguono iter di delega manuale) via SPID/CIE/eIDAS. Richiesta delega/abilitazione per una o più associazioni, domanda, preferenze, concertazione, calendario.
-5. **Frontend admin (backoffice provincia) — React/Vue + TypeScript.** Login locale (no OIDC). Primo avvio: wizard di seeding SMTP + creazione primo account admin con validazione via link email (niente credenziali in `.env`). Due ruoli: **admin** (tutto, incluse impostazioni/parametri: SMTP, OIDC, parametri di sistema, loghi, utenti backoffice) e **operatore** (operatività pratica: deleghe, CRUD palestre/slot, istruttoria — non impostazioni/parametri).
+4. **Frontend pubblico — React 19 + TypeScript 7.** Accesso associazioni (e scuole, che seguono iter di delega manuale) via SPID/CIE/eIDAS. Richiesta delega/abilitazione per una o più associazioni, domanda, preferenze, concertazione, calendario.
+5. **Frontend admin (backoffice provincia) — React 19 + TypeScript 7.** Login locale (no OIDC). Primo avvio: wizard di seeding SMTP + creazione primo account admin con validazione via link email (niente credenziali in `.env`). Due ruoli: **admin** (tutto, incluse impostazioni/parametri: SMTP, OIDC, parametri di sistema, loghi, utenti backoffice) e **operatore** (operatività pratica: deleghe, CRUD palestre/slot, istruttoria — non impostazioni/parametri).
 
 Infrastruttura: Docker, CI/CD via GitHub Actions → GHCR, reverse proxy davanti ai frontend/API.
 
