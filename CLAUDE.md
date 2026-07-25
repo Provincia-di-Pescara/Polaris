@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Sistema telematico di assegnazione di spazi sportivi pubblici (palestre scolastiche di competenza provinciale). Obiettivo: eliminare discrezionalità umana nell'assegnazione, sostituendola con regole matematiche deterministiche, tracciabili e riproducibili da terzi.
 
-**Stato attuale**: analisi requisiti chiusa. Fase 1 (schema DB), Fase 2 (motore Go: calc + sorteggio + round-robin) e Fase 3 (persistenza Postgres + esposizione HTTP del motore) implementate, testate, verificate con Postgres reale. Fase 4 (Backend API/Backoffice Node.js+TypeScript, consuma l'HTTP del motore) non ancora avviata. Residuo noto in Fase 3: orchestrazione blocchi gara (serve matching impianto/disciplina/omologazione, non ancora modellato).
+**Stato attuale**: analisi requisiti chiusa. Fase 1 (schema DB), Fase 2 (motore Go: calc + sorteggio + round-robin) e Fase 3 (persistenza Postgres + esposizione HTTP del motore) implementate, testate, verificate con Postgres reale. Fase 4 (Backend Node.js+TypeScript) avviata: scaffold + primo endpoint verticale (`GET /stagioni`) verificato end-to-end. Residui noti: blocchi gara nel motore Go (serve matching impianto/disciplina/omologazione), autenticazione OIDC/locale e resto del CRUD nel backend Node.
 
 ## Versioni target (verificate via web search, non da training data — ricontrollare a inizio di ogni fase nuova, l'ecosistema si muove in fretta)
 
@@ -142,6 +142,20 @@ MSYS_NO_PATHCONV=1 docker run --rm --network palestre-integration-net \
 ```
 
 Smoke test del binario reale (`cmd/service`) contro Postgres vero: stessa rete Docker+migrazioni del test di integrazione sopra, ma al posto di `go test` si lancia `go run ./cmd/service` con `-p HOSTPORT:8080 -e DATABASE_URL=...`, poi `curl localhost:HOSTPORT/...` dall'host. Utile per verificare il wiring di `main.go` (mai coperto da unit test).
+
+## Backend Node (Fase 4 — in corso)
+
+`backend-node/`, Node.js 24 (disponibile **in locale** su questa macchina, a differenza di Go/Postgres — niente Docker necessario per lo sviluppo Node, solo per Postgres di test). TypeScript 7.0.2 esatto (`--save-exact`, coerente con la ricerca versioni fatta a inizio progetto).
+
+Scelte tecniche:
+- **Niente ORM**: `pg` diretto con query parametrizzate, stessa disciplina SQL puro di `db/migrations` e `internal/postgres`.
+- **Niente build step**: Node 24 esegue `.ts` nativamente (type-stripping). `tsc` usato **solo** per il typecheck (`noEmit: true`, `allowImportingTsExtensions: true`) — mai per emettere JS. Import sempre con estensione `.ts` esplicita (richiesta dalla risoluzione ESM nativa di Node); questo è in conflitto con la convenzione tsc classica ("importa come .js anche se il sorgente è .ts") se si prova a compilare con `tsc` normale — da qui la scelta di non compilare affatto.
+- **Express** per il routing (a differenza di Go, Node non ha un router nativo con path pattern come `http.ServeMux` di Go 1.22+ — qui un router esterno è giustificato, non un'eccezione alla minimalità).
+- Test con `node:test` nativo (`node --test`), niente Jest/Vitest. Stesso pattern Go: test contro Postgres reale via `TEST_DATABASE_URL`, skip pulito se non impostata.
+
+Fatto: scaffold + primo endpoint verticale verificato end-to-end (non solo typecheck): `GET /healthz`, `GET /stagioni` (legge da Postgres reale, mappa `snake_case`→`camelCase`). Validato sia con `node --test` reale contro Postgres reale, sia con `npm start` reale + `curl` (stesso rigore "verifica contro infra vera" del resto del progetto).
+
+Da fare: autenticazione (OIDC SPID/CIE per frontend pubblico, locale per backoffice — sistema separato e sensibile, merita giro dedicato), CRUD per le altre ~15 entità dello schema, orchestrazione delle 16 fasi procedurali (Allegato B), coda verso l'HTTP del motore Go (`internal/httpapi`) per istruttoria/prima-assegnazione.
 
 ## Architettura target (5 container)
 
