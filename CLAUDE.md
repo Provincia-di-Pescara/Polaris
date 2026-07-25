@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Sistema telematico di assegnazione di spazi sportivi pubblici (palestre scolastiche di competenza provinciale). Obiettivo: eliminare discrezionalità umana nell'assegnazione, sostituendola con regole matematiche deterministiche, tracciabili e riproducibili da terzi.
 
-**Stato attuale**: analisi requisiti chiusa, Fase 1 (schema DB) implementata e validata. Fase 2 (motore Go) in corso: package `calc` (calcolatori puri FR/ISF/CRS/CAA/CSD/CP) completo e testato in TDD; round-robin, sorteggio tracciato e limiti di concentrazione ancora da fare.
+**Stato attuale**: analisi requisiti chiusa, Fase 1 (schema DB) implementata e validata, Fase 2 (motore Go: calc + sorteggio + round-robin) implementata e testata. Fase 3 (service layer HTTP/gRPC attorno al motore) non ancora avviata.
 
 ## Versioni target (verificate via web search, non da training data — ricontrollare a inizio di ogni fase nuova, l'ecosistema si muove in fretta)
 
@@ -89,7 +89,16 @@ Fatto: `internal/calc/` — calcolatori puri, nessuna dipendenza da DB/HTTP (coe
 
 Fatto: `internal/sorteggio/` — sorteggio tracciato art. B.38 (HMAC-SHA256 rank-asc), formato `hash_verbale` finalizzato (vedi specifica sotto). Testato con test basati su proprietà (determinismo, indipendenza dall'ordine input, ranking valido, sensibilità a seme/candidati) invece di hash hardcoded — verificare a mano un digest SHA-256 non è affidabile, la logica sopra la stdlib crypto è quello che va testato.
 
-Da fare: ordine esame fasce (B.17), loop round-robin per round (B.18-22) con limiti di concentrazione, blocchi gara (B.12-14), blocchi allenamento indivisibili, tetto di sicurezza round.
+Fatto: `internal/roundrobin/` — Fase 8-9 completa (art. B.17-22):
+- `OrdineEsameFasce` — ordine di esame (decrescente richiedenti, poi pregiate, poi cronologico), determinato una sola volta
+- `RispettaLimiti` / `RispettaLimiteGiornateGara` — limiti di concentrazione (minuti grezzi, slot per impianto, fasce pregiate, giornate gara)
+- `SceglieVincitore` — catena di priorità completa art. B.20-21 (ISF→contiguità/presenza impianto→preferenza→CP→sorteggio), narrowing progressivo per criterio
+- `SceglieVincitoreBloccoGara` — catena **diversa** art. B.14 per i blocchi gara (CRS→CP→sorteggio, niente ISF)
+- `Esegui` — loop round completo: una assegnazione per round per associazione, blocco allenamento assegnato/atomico su tutte le sue fasce se disponibile (decisione Q17), rottura blocco + ricandidatura individuale automatica sulle fasce libere se una fascia del blocco va ad altri (decisione Q18), chiusura su B.22.1/.2/.3, tetto di sicurezza = numero totale fasce
+
+Testato con scenari comportamentali end-to-end (non solo unità isolate): distribuzione bilanciata tra associazioni pari, vincolo "una assegnazione per round", blocco vinto intero, blocco rotto e ricandidatura, tutte e 3 le condizioni di chiusura.
+
+Da fare (Fase 3): service layer HTTP/gRPC attorno al motore (lettura snapshot da Postgres, scrittura transazionale dei risultati, esposizione verso il backend Node).
 
 Comandi (container Postgres e Go possono girare in parallelo, porte diverse):
 ```
