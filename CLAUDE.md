@@ -71,6 +71,7 @@ Note ambiente (Windows/Git Bash) per chi lancia questi comandi via Claude Code:
 - `.gitattributes` forza `eol=lf` su `.go`/`.sql`/`.md` (bug reale: CRLF da Windows rompeva `gofmt -l` al primo clone). Aggiungere altri tipi di file testuale lì se necessario, non lasciarli a CRLF di default.
 - Seed/chiavi hex nei test (es. seme sorteggio, 32 byte = 64 caratteri): non scriverli a mano, capita facilmente di sbagliare la lunghezza (successo 3 volte in questa sessione). Generarli con `python3 -c "import secrets; print(secrets.token_hex(32))"` e verificarne la lunghezza prima di incollarli.
 - `go get` una dipendenza prima di usarla nel codice: `go mod tidy` la rimuove da `go.mod` finché nessun file la importa davvero. Non è un bug, va solo richiamato `go get` di nuovo quando si scrive il codice che la usa.
+- `jq` non disponibile in questo ambiente. Per estrarre campi da risposte JSON di `curl` negli smoke test (es. incatenare login→token): `curl ... | node -e "process.stdin.on('data', d => console.log(JSON.parse(d).campo))"`.
 
 Test locale rapido:
 ```
