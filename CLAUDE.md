@@ -69,6 +69,7 @@ Note ambiente (Windows/Git Bash) per chi lancia questi comandi via Claude Code:
 - `docker exec` con path dentro al container (es. `-f /tmp/x.sql`) da Git Bash: serve `MSYS_NO_PATHCONV=1` davanti al comando, altrimenti il path Unix viene riscritto come path Windows e il comando fallisce. Non applicarlo a `docker cp` quando l'argomento è un path Windows reale (va convertito).
 - `.gitattributes` forza `eol=lf` su `.go`/`.sql`/`.md` (bug reale: CRLF da Windows rompeva `gofmt -l` al primo clone). Aggiungere altri tipi di file testuale lì se necessario, non lasciarli a CRLF di default.
 - Seed/chiavi hex nei test (es. seme sorteggio, 32 byte = 64 caratteri): non scriverli a mano, capita facilmente di sbagliare la lunghezza (successo 3 volte in questa sessione). Generarli con `python3 -c "import secrets; print(secrets.token_hex(32))"` e verificarne la lunghezza prima di incollarli.
+- `go get` una dipendenza prima di usarla nel codice: `go mod tidy` la rimuove da `go.mod` finché nessun file la importa davvero. Non è un bug, va solo richiamato `go get` di nuovo quando si scrive il codice che la usa.
 
 Test locale rapido:
 ```
@@ -139,6 +140,8 @@ MSYS_NO_PATHCONV=1 docker run --rm --network palestre-integration-net \
   -w /app golang:1.26-alpine go test ./internal/postgres/... -v
 # poi: docker rm -f pg-integration && docker network rm palestre-integration-net
 ```
+
+Smoke test del binario reale (`cmd/service`) contro Postgres vero: stessa rete Docker+migrazioni del test di integrazione sopra, ma al posto di `go test` si lancia `go run ./cmd/service` con `-p HOSTPORT:8080 -e DATABASE_URL=...`, poi `curl localhost:HOSTPORT/...` dall'host. Utile per verificare il wiring di `main.go` (mai coperto da unit test).
 
 ## Architettura target (5 container)
 
