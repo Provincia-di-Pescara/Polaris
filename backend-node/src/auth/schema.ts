@@ -16,3 +16,16 @@ export const schemaOidcCallback = z.object({
   state: z.string().min(1),
 });
 export type OidcCallbackRequest = z.infer<typeof schemaOidcCallback>;
+
+export const schemaBootstrapPrimoAdmin = z.object({
+  email: z.string().email(),
+  password: z.string().min(12),
+  nome: z.string().min(1),
+  cognome: z.string().min(1),
+});
+export type BootstrapPrimoAdminRequest = z.infer<typeof schemaBootstrapPrimoAdmin>;
+
+export const schemaBootstrapVerifica = z.object({
+  token: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export type BootstrapVerificaRequest = z.infer<typeof schemaBootstrapVerifica>;

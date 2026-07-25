@@ -7,7 +7,21 @@ import { listaStagioni } from './stagioni.ts';
 import { eseguiLogin, eseguiLogout, eseguiRefresh } from './auth/login.ts';
 import { eseguiCallbackOidc, eseguiLogoutPubblico, eseguiRefreshPubblico } from './auth/loginPubblico.ts';
 import { ErroreCredenzialiNonValide, ErroreRefreshTokenNonValido, ErroreUtenteDisattivato } from './auth/errori.ts';
-import { schemaLoginRequest, schemaOidcCallback, schemaRefreshRequest } from './auth/schema.ts';
+import {
+  schemaBootstrapPrimoAdmin,
+  schemaBootstrapVerifica,
+  schemaLoginRequest,
+  schemaOidcCallback,
+  schemaRefreshRequest,
+} from './auth/schema.ts';
+import {
+  bootstrapDisponibile,
+  richiediPrimoAdmin,
+  verificaPrimoAdmin,
+  ErroreBootstrapNonDisponibile,
+  ErroreTokenVerificaNonValido,
+} from './auth/bootstrapAdmin.ts';
+import { creaTrasportoDaEnv, inviaEmail, type Email } from './email/smtp.ts';
 import {
   richiedeAutenticazione,
   richiedeAutenticazionePubblico,
@@ -59,7 +73,25 @@ const limitatoreOidcStart = rateLimit({
   legacyHeaders: false,
 });
 
-export function creaApp(pool: Pool): Express {
+// Dipendenze iniettabili nei test (email finta, base URL fisso); i default arrivano
+// dall'ambiente (SMTP_* per il trasporto di bootstrap, BACKOFFICE_BASE_URL per i link).
+export interface DipendenzeApp {
+  inviaEmail?: (email: Email) => Promise<void>;
+  backofficeBaseUrl?: string;
+}
+
+function inviaEmailDaEnv(): ((email: Email) => Promise<void>) | null {
+  const trasporto = creaTrasportoDaEnv();
+  if (!trasporto) {
+    return null;
+  }
+  return (email) => inviaEmail(trasporto, email);
+}
+
+export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
+  const inviaEmailFn = dipendenze.inviaEmail ?? inviaEmailDaEnv();
+  const backofficeBaseUrl = dipendenze.backofficeBaseUrl ?? process.env.BACKOFFICE_BASE_URL ?? null;
+
   const app = express();
   app.use(express.json());
   app.use(cookieParser(segretoCookie()));
@@ -73,6 +105,58 @@ export function creaApp(pool: Pool): Express {
       const stagioni = await listaStagioni(pool);
       res.status(200).json(stagioni);
     } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // --- Bootstrap primo admin (wizard primo avvio) ---
+  // Disponibile solo finché non esiste alcun utente backoffice verificato; l'account
+  // viene creato inattivo e attivato dal link inviato all'email dichiarata.
+
+  app.get('/auth/bootstrap/stato', async (_req, res) => {
+    try {
+      res.status(200).json({ disponibile: await bootstrapDisponibile(pool) });
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post('/auth/bootstrap/primo-admin', limitatoreLogin, async (req, res) => {
+    const parsed = schemaBootstrapPrimoAdmin.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+      return;
+    }
+    if (!inviaEmailFn || !backofficeBaseUrl) {
+      res.status(503).json({ errore: 'SMTP di bootstrap non configurato (SMTP_HOST/BACKOFFICE_BASE_URL in .env)' });
+      return;
+    }
+    try {
+      await richiediPrimoAdmin(pool, parsed.data, inviaEmailFn, backofficeBaseUrl);
+      res.status(204).send();
+    } catch (err) {
+      if (err instanceof ErroreBootstrapNonDisponibile) {
+        res.status(409).json({ errore: 'esiste già un account backoffice' });
+        return;
+      }
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post('/auth/bootstrap/verifica', limitatoreLogin, async (req, res) => {
+    const parsed = schemaBootstrapVerifica.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+      return;
+    }
+    try {
+      const utente = await verificaPrimoAdmin(pool, parsed.data.token);
+      res.status(200).json({ email: utente.email });
+    } catch (err) {
+      if (err instanceof ErroreTokenVerificaNonValido) {
+        res.status(401).json({ errore: 'token di verifica non valido o scaduto' });
+        return;
+      }
       res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
     }
   });

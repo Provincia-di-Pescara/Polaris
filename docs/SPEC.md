@@ -96,7 +96,7 @@ Da fare (ordine consigliato):
 1. **Middleware autorizzazione per ruolo** (`richiedeRuolo('admin')`) — il ruolo è già nel JWT, manca solo il middleware. Prerequisito di ogni endpoint impostazioni.
 2. **Audit log** (art. B.39): helper + integrazione su ogni scrittura (solo scritture, non letture). Oggi `log_operazioni` non è scritta da nessuno — lacuna normativa, non tecnica.
 3. **CRUD backoffice**: stagioni, istituzioni scolastiche, impianti/spazi/slot settimana tipo (incl. fasce pregiate — Fase normativa 1), discipline, utenti backoffice, parametrico versionato (nuova versione, mai update in place), impostazioni (SMTP, OIDC).
-4. **Wizard primo avvio**: seeding SMTP + creazione primo admin con validazione via link email. Oggi il primo utente backoffice si crea solo con SQL a mano — bloccante per qualunque deploy reale. Richiede modulo email (SMTP da `impostazioni_sistema`).
+4. ~~Wizard primo avvio~~ ✅ **Fatto** (lato backend): endpoint `/auth/bootstrap/{stato,primo-admin,verifica}`, account attivato via link email, SMTP di bootstrap da `.env` (decisione committente — al primo avvio non c'è un admin che possa configurare SMTP da UI). Resta la UI del wizard (Fase 5).
 5. **Flusso pubblico**: accreditamento associazione + richiesta delega (art. 3–4), approvazione deleghe lato operatore, domanda con fabbisogni/preferenze/blocchi/giornate gara (B.5–B.6), osservazioni (B.11).
 6. **Orchestrazione procedimento**: macchina a stati della procedura per stagione (le 16 fasi normative come stati espliciti con transizioni registrate), chiamate al motore Go (istruttoria, blocchi gara, prima assegnazione), pubblicazioni (B.10, B.23, B.30).
 7. **Concertazione** (B.24–B.28): proposte multilaterali, accettazioni, validazione serializzata FIFO, lock ottimistico con retry. Poi riassegnazione finale (B.29) sui soli slot liberi.
@@ -133,7 +133,7 @@ Runbook operativo (deploy, rollback, restore), formazione operatori, migrazione/
 
 Convenzioni: JSON, `camelCase` in uscita, zod su ogni input, errori `{errore, dettagli?}`, Bearer JWT (audience `backoffice` o `pubblico`), 401 generici (no enumeration).
 
-Esistenti: `GET /healthz`, `GET /stagioni`, `POST /auth/login|refresh|logout`, `GET /auth/me`, `GET /auth/oidc/start`, `POST /auth/oidc/callback`, `POST /auth/pubblico/refresh|logout`, `GET /auth/pubblico/me`. Motore (interno): `GET /healthz`, `POST /stagioni/{id}/istruttoria`, `POST /stagioni/{id}/prima-assegnazione`.
+Esistenti: `GET /healthz`, `GET /stagioni`, `GET /auth/bootstrap/stato`, `POST /auth/bootstrap/primo-admin|verifica`, `POST /auth/login|refresh|logout`, `GET /auth/me`, `GET /auth/oidc/start`, `POST /auth/oidc/callback`, `POST /auth/pubblico/refresh|logout`, `GET /auth/pubblico/me`. Motore (interno): `GET /healthz`, `POST /stagioni/{id}/istruttoria`, `POST /stagioni/{id}/prima-assegnazione`.
 
 Previste (nomi indicativi, da consolidare in fase di implementazione):
 - Backoffice: `/backoffice/stagioni`, `/backoffice/istituzioni`, `/backoffice/impianti`, `/backoffice/impianti/{id}/spazi`, `/backoffice/spazi/{id}/slot`, `/backoffice/discipline`, `/backoffice/utenti`, `/backoffice/parametrico` (POST = nuova versione), `/backoffice/impostazioni/{smtp|oidc}`, `/backoffice/deleghe/{id}/approva|respingi`, `/backoffice/domande/{id}/ammetti|escludi`, `/backoffice/stagioni/{id}/procedura/*` (transizioni di fase, avvio elaborazioni, pubblicazioni), `/backoffice/monitoraggio/*`.
@@ -154,8 +154,8 @@ Risolte subito:
 Da pianificare (tracciate nelle fasi sopra):
 | Lacuna | Gravità | Dove |
 |---|---|---|
-| `log_operazioni` mai scritta (art. B.39) | Alta — requisito normativo | Fase 4.2 |
-| Nessun modo di creare il primo admin senza SQL a mano | Alta — bloccante deploy | Fase 4.4 |
+| ~~`log_operazioni` mai scritta (art. B.39)~~ | ~~Alta~~ **Risolta**: helper `registraOperazione` + wiring su login/logout (entrambi i mondi) e bootstrap; da estendere a ogni CRUD futuro | Fase 4.2 ✅ |
+| ~~Nessun modo di creare il primo admin senza SQL a mano~~ | ~~Alta~~ **Risolta**: wizard bootstrap (SMTP da `.env`, email con link di attivazione, token one-shot 24h) — endpoint `/auth/bootstrap/*`, migration 000005 | Fase 4.4 ✅ |
 | Blocchi gara non orchestrati (B.12–B.14) + VA iniziale (B.15) | Alta — spezza la catena del procedimento | Fase 3 residuo |
 | Tutela nuove associazioni (art. 12) non modellata | Media — facoltativa, serve decisione Ente | §8 |
 | Retention/housekeeping non implementati (GDPR art. 23) | Media | Fase 4.9 |

@@ -9,6 +9,7 @@ import {
 import { generaAccessTokenPubblico } from './jwtPubblico.ts';
 import { generaRefreshToken, hashRefreshToken } from './refreshToken.ts';
 import { ErroreRefreshTokenNonValido } from './errori.ts';
+import { registraOperazione } from '../repository/logOperazioni.ts';
 
 const DURATA_REFRESH_TOKEN_MS = 7 * 24 * 60 * 60 * 1000;
 // Placeholder: pa-sso-proxy federa sia SPID che CIE, la distinzione esatta nel claim
@@ -58,6 +59,18 @@ export async function eseguiCallbackOidc(
     oidcProvider: OIDC_PROVIDER_DEFAULT,
   });
 
+  // Audit log art. B.39. L'associazione rappresentata qui non c'è ancora: al login la
+  // persona non ha selezionato una delega — le operazioni per conto di un'associazione
+  // la registreranno quando esisteranno gli endpoint di dominio.
+  await registraOperazione(pool, {
+    attore: { tipo: 'pubblico', personaFisicaId: persona.id },
+    azione: 'login',
+    entitaTipo: 'persone_fisiche',
+    entitaId: persona.id,
+    dettaglio: { provider: OIDC_PROVIDER_DEFAULT },
+    ipAddress,
+  });
+
   return emettiTokenPerPersona(pool, persona, ipAddress);
 }
 
@@ -88,5 +101,11 @@ export async function eseguiLogoutPubblico(pool: Pool, refreshToken: string): Pr
   const sessione = await trovaSessionePersonaFisicaPerHash(pool, hash);
   if (sessione) {
     await revocaSessionePersonaFisica(pool, sessione.id);
+    await registraOperazione(pool, {
+      attore: { tipo: 'pubblico', personaFisicaId: sessione.personaFisicaId },
+      azione: 'logout',
+      entitaTipo: 'persone_fisiche',
+      entitaId: sessione.personaFisicaId,
+    });
   }
 }

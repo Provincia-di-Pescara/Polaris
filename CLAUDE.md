@@ -59,6 +59,7 @@ I valori numerici sotto indicati sono **default**. Tutti i parametri di business
 - `000002_seed_valori_normativi.up/down.sql` — dati normativi reali da Allegato A (classi attività, scaglioni CRS/CAA) + prima versione parametrico con i placeholder 🔺.
 - `000003_auth_backoffice.up/down.sql` — `sessioni_backoffice` (refresh token hashati, per la rotation), `tentativi_login_backoffice` (audit sicurezza login, separata da `log_operazioni` — vedi sezione Backend Node).
 - `000004_oidc_pubblico.up/down.sql` — `oidc_stato_pkce` (state/code_verifier PKCE, TTL breve, consumo one-shot — Postgres al posto di Redis), `sessioni_persona_fisica` (refresh token hashati per il frontend pubblico, stesso pattern di `sessioni_backoffice`).
+- `000005_bootstrap_primo_admin.up/down.sql` — stato `in_attesa_verifica` su `utenti_backoffice` + colonne `token_verifica_hash`/`token_verifica_scade_il` (CHECK di coerenza: token presente ⟺ in attesa). Per il wizard primo avvio.
 
 Punti tecnici degni di nota per chi tocca lo schema:
 - `EXCLUDE USING gist` su `slot_settimana_tipo` (spazio + giorno + stagione + intervallo orario) impedisce sovrapposizioni fisiche a livello DB, non solo applicativo. Richiede `btree_gist`.
@@ -174,7 +175,16 @@ Fatto — **autenticazione locale backoffice** (`src/auth/`), NON OIDC/SPID (que
 - Rate limiting su `/auth/login` con `express-rate-limit` (10 tentativi/15 min per IP) — protezione volumetrica di base, non sostituisce un lockout per-account (non implementato, richiederebbe altre colonne schema).
 - Validato end-to-end reale, non solo unit test: `node --test` contro Postgres reale (intero ciclo login→refresh→logout→riuso-token-revocato), più smoke test HTTP con server vero (`node src/index.ts`) + `curl` su tutti gli scenari (login ok/sbagliato/inesistente/malformato, `/auth/me` con e senza token, refresh, riuso post-rotation).
 
-Da fare: CORS + security headers (`helmet`) — rimandato, da decidere insieme al design della rete tra container, lockout per-account sui tentativi falliti (richiede migration), CRUD per le altre ~15 entità dello schema, orchestrazione delle 16 fasi procedurali (Allegato B), coda verso l'HTTP del motore Go (`internal/httpapi`) per istruttoria/prima-assegnazione.
+Fatto — **audit log applicativo** (art. B.39): `repository/logOperazioni.ts` (`registraOperazione`, attore = union backoffice XOR persona fisica, coerente col CHECK `num_nonnulls` dello schema), agganciato a login/logout di entrambi i mondi (solo esiti riusciti — i login falliti restano in `tentativi_login_backoffice`, non hanno attore certo). Accetta `Db` (interfaccia minima Pool|PoolClient in `db.ts`) per poter girare dentro transazioni.
+
+Fatto — **bootstrap primo admin (wizard primo avvio)**: migration `000005`, flusso `auth/bootstrapAdmin.ts` + endpoint `GET /auth/bootstrap/stato`, `POST /auth/bootstrap/primo-admin` (crea admin `in_attesa_verifica`, invia email con link, 409 se esiste già un utente verificato; una nuova richiesta sostituisce un pendente mai verificato), `POST /auth/bootstrap/verifica` (token one-shot SHA-256 hashato, TTL 24h → account attivo + audit log). **SMTP di bootstrap da `.env`** (`SMTP_*`, `BACKOFFICE_BASE_URL` — decisione esplicita del committente: al primo avvio non esiste un admin che possa configurare SMTP da UI; senza `SMTP_HOST` l'endpoint risponde 503). Modulo email `src/email/smtp.ts` (nodemailer, trasporto iniettabile). Verificato: unit+HTTP con Postgres reale, SMTP con Mailpit reale (container `axllent/mailpit`, API su :8025 per leggere le email nei test), smoke test end-to-end completo (server vero + email vera + curl: stato→richiesta→link dalla mail→verifica→login→riuso token 401).
+
+Note test (gotcha reali):
+- I test che richiedono il controllo di un'intera tabella (es. bootstrap: "nessun utente esiste") NON possono girare sul DB condiviso: i file di test girano **in paralleli** e READ COMMITTED rende visibili gli insert committati dagli altri anche dopo una DELETE locale. Soluzione: `src/testutil/dbDedicato.ts` (CREATE DATABASE usa-e-getta + migration reali + DROP).
+- Fixture con valori UNIQUE (email, nomi stagione): sempre con suffisso random per-esecuzione — il DB locale di sviluppo persiste tra i run, valori fissi = duplicate key al secondo run (successo davvero). In CI non si vede perché il DB è sempre fresco.
+- La search di Mailpit matcha per sottostringa e il catcher accumula tra i run: nei test filtrare per oggetto esatto univoco, mai `assert total === 1`.
+
+Da fare: CORS + security headers (`helmet`) — rimandato, da decidere insieme al design della rete tra container, lockout per-account sui tentativi falliti (richiede migration), middleware `richiedeRuolo('admin')` (il ruolo è già nel JWT), CRUD per le altre ~15 entità dello schema, orchestrazione delle 16 fasi procedurali (Allegato B), coda verso l'HTTP del motore Go (`internal/httpapi`) per istruttoria/prima-assegnazione, audit log sulle scritture CRUD future (helper pronto).
 
 ## OIDC SPID/CIE (frontend pubblico) — implementato
 
