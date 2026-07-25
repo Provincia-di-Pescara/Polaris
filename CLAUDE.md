@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Sistema telematico di assegnazione di spazi sportivi pubblici (palestre scolastiche di competenza provinciale). Obiettivo: eliminare discrezionalità umana nell'assegnazione, sostituendola con regole matematiche deterministiche, tracciabili e riproducibili da terzi.
 
-**Stato attuale**: analisi requisiti chiusa. Fase 1 (schema DB), Fase 2 (motore Go: calc + sorteggio + round-robin) e Fase 3 (persistenza Postgres + esposizione HTTP del motore) implementate, testate, verificate con Postgres reale. Fase 4 (Backend Node.js+TypeScript) avviata: scaffold + primo endpoint verticale (`GET /stagioni`) verificato end-to-end. Residui noti: blocchi gara nel motore Go (serve matching impianto/disciplina/omologazione), autenticazione OIDC/locale e resto del CRUD nel backend Node.
+**Stato attuale**: analisi requisiti chiusa. Fase 1 (schema DB), Fase 2 (motore Go: calc + sorteggio + round-robin) e Fase 3 (persistenza Postgres + esposizione HTTP del motore) implementate, testate, verificate con Postgres reale. Fase 4 (Backend Node.js+TypeScript) in corso: scaffold, `GET /stagioni`, autenticazione locale backoffice completa (login/refresh/logout/rate-limit) — tutto verificato end-to-end. Residui noti: blocchi gara nel motore Go, OIDC SPID/CIE (dedicato), CORS/security headers, resto del CRUD nel backend Node.
 
 ## Versioni target (verificate via web search, non da training data — ricontrollare a inizio di ogni fase nuova, l'ecosistema si muove in fretta)
 
@@ -55,6 +55,7 @@ I valori numerici sotto indicati sono **default**. Tutti i parametri di business
 
 - `000001_init.up/down.sql` — schema completo (stagioni, impianti/slot, persone/associazioni/abilitazioni, backoffice, domande/fabbisogni/coefficienti, elaborazioni/assegnazioni/sorteggi, concertazione, monitoraggio/convenzioni, audit log).
 - `000002_seed_valori_normativi.up/down.sql` — dati normativi reali da Allegato A (classi attività, scaglioni CRS/CAA) + prima versione parametrico con i placeholder 🔺.
+- `000003_auth_backoffice.up/down.sql` — `sessioni_backoffice` (refresh token hashati, per la rotation), `tentativi_login_backoffice` (audit sicurezza login, separata da `log_operazioni` — vedi sezione Backend Node).
 
 Punti tecnici degni di nota per chi tocca lo schema:
 - `EXCLUDE USING gist` su `slot_settimana_tipo` (spazio + giorno + stagione + intervallo orario) impedisce sovrapposizioni fisiche a livello DB, non solo applicativo. Richiede `btree_gist`.
@@ -147,15 +148,28 @@ Smoke test del binario reale (`cmd/service`) contro Postgres vero: stessa rete D
 
 `backend-node/`, Node.js 24 (disponibile **in locale** su questa macchina, a differenza di Go/Postgres — niente Docker necessario per lo sviluppo Node, solo per Postgres di test). TypeScript 7.0.2 esatto (`--save-exact`, coerente con la ricerca versioni fatta a inizio progetto).
 
+**Package manager: pnpm** (direttiva esplicita) — non npm. Repo avrà 3 pacchetti Node/TS nel tempo (backend + 2 frontend), pnpm workspaces è pensato per questo (link tra pacchetti, store condiviso, niente dipendenze fantasma). Installato via `npm install -g pnpm` (non `corepack enable`: su questa macchina Windows fallisce con EPERM scrivendo in `Program Files`, servono permessi admin che non ci sono). Comandi: `pnpm install`, `pnpm add <pkg>`, `pnpm add -D <pkg>`, `pnpm exec tsc`.
+
 Scelte tecniche:
 - **Niente ORM**: `pg` diretto con query parametrizzate, stessa disciplina SQL puro di `db/migrations` e `internal/postgres`.
 - **Niente build step**: Node 24 esegue `.ts` nativamente (type-stripping). `tsc` usato **solo** per il typecheck (`noEmit: true`, `allowImportingTsExtensions: true`) — mai per emettere JS. Import sempre con estensione `.ts` esplicita (richiesta dalla risoluzione ESM nativa di Node); questo è in conflitto con la convenzione tsc classica ("importa come .js anche se il sorgente è .ts") se si prova a compilare con `tsc` normale — da qui la scelta di non compilare affatto.
 - **Express** per il routing (a differenza di Go, Node non ha un router nativo con path pattern come `http.ServeMux` di Go 1.22+ — qui un router esterno è giustificato, non un'eccezione alla minimalità).
-- Test con `node:test` nativo (`node --test`), niente Jest/Vitest. Stesso pattern Go: test contro Postgres reale via `TEST_DATABASE_URL`, skip pulito se non impostata.
+- **zod** per la validazione runtime di ogni input HTTP — i tipi TypeScript spariscono a runtime, non proteggono da body malformati.
+- Test con `node:test` nativo (`node --test`), niente Jest/Vitest. Stesso pattern Go: test contro Postgres reale via `TEST_DATABASE_URL`, skip pulito se non impostata. Test HTTP end-to-end con `fetch` nativo di Node contro il server vero (`app.listen`), niente supertest.
 
-Fatto: scaffold + primo endpoint verticale verificato end-to-end (non solo typecheck): `GET /healthz`, `GET /stagioni` (legge da Postgres reale, mappa `snake_case`→`camelCase`). Validato sia con `node --test` reale contro Postgres reale, sia con `npm start` reale + `curl` (stesso rigore "verifica contro infra vera" del resto del progetto).
+Fatto — scaffold + primo endpoint verticale: `GET /healthz`, `GET /stagioni` (legge da Postgres reale, mappa `snake_case`→`camelCase`).
 
-Da fare: autenticazione (OIDC SPID/CIE per frontend pubblico, locale per backoffice — sistema separato e sensibile, merita giro dedicato), CRUD per le altre ~15 entità dello schema, orchestrazione delle 16 fasi procedurali (Allegato B), coda verso l'HTTP del motore Go (`internal/httpapi`) per istruttoria/prima-assegnazione.
+Fatto — **autenticazione locale backoffice** (`src/auth/`), NON OIDC/SPID (quello resta a parte, serve un IdP reale o mock, sistema diverso):
+- `password.ts` — hash con `node:crypto` scrypt nativo (niente bcrypt/argon2, niente dipendenza compilata). Formato self-describing `scrypt:N:r:p:salt:hash`: se in futuro si alzano i parametri per hardware più veloce, gli hash vecchi restano verificabili con i propri parametri originali invece di rompersi. **Gotcha reale incontrato**: `promisify(crypto.scrypt)` sceglie l'overload TS sbagliato (perde le opzioni N/r/p) — usare una `Promise` scritta a mano attorno alla callback-form. Altro gotcha: `128*N*r` deve stare sotto `maxmem` — con N=32768,r=8 si tocca **esattamente** il default di Node (32 MiB) e fallisce; serve passare `maxmem` esplicito con margine.
+- `jwt.ts` — access token JWT, algoritmo **pinnato a `HS256`** sia in firma che in verifica (mai fidarsi dell'`alg` nell'header del token: previene l'attacco di algorithm-confusion tipo `alg=none`). Scadenza breve, 15 minuti.
+- `refreshToken.ts` — refresh token casuale ad alta entropia, **hash SHA-256** (non scrypt: è già casuale, non serve un KDF lento, solo un digest per confronto sicuro). Salvato hashato in `sessioni_backoffice` (migration `000003`), mai in chiaro.
+- Refresh con **rotation**: ogni refresh revoca il token usato e ne emette uno nuovo — un refresh token rubato resta valido una sola volta.
+- `tentativi_login_backoffice` (migration `000003`) — tabella **separata** da `log_operazioni`: quest'ultima richiede sempre un attore noto (CHECK `num_nonnulls`), ma un login con email inesistente non ha nessun `utente_backoffice_id` da collegare. Non si è toccato il CHECK esistente (giusto per il suo scopo di audit di business) — nuova tabella dedicata al monitoraggio sicurezza.
+- **No enumerazione utenti**: email inesistente e password sbagliata restituiscono lo **stesso** errore HTTP (401 generico) — l'esito specifico è distinto solo internamente in `tentativi_login_backoffice`, mai esposto al client.
+- Rate limiting su `/auth/login` con `express-rate-limit` (10 tentativi/15 min per IP) — protezione volumetrica di base, non sostituisce un lockout per-account (non implementato, richiederebbe altre colonne schema).
+- Validato end-to-end reale, non solo unit test: `node --test` contro Postgres reale (intero ciclo login→refresh→logout→riuso-token-revocato), più smoke test HTTP con server vero (`node src/index.ts`) + `curl` su tutti gli scenari (login ok/sbagliato/inesistente/malformato, `/auth/me` con e senza token, refresh, riuso post-rotation).
+
+Da fare: OIDC SPID/CIE per il frontend pubblico (sistema separato, serve IdP reale o mock — dedicato), CORS + security headers (`helmet`) — rimandato, da decidere insieme al design della rete tra container, lockout per-account sui tentativi falliti (richiede migration), CRUD per le altre ~15 entità dello schema, orchestrazione delle 16 fasi procedurali (Allegato B), coda verso l'HTTP del motore Go (`internal/httpapi`) per istruttoria/prima-assegnazione.
 
 ## Architettura target (5 container)
 
