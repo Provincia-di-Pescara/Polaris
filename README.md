@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.png" alt="Logo POLARIS" width="220">
+</p>
+
 # POLARIS
 
 **P**iattaforma **O**rganizzativa per la **L**ocalizzazione e l'**A**ssegnazione delle **R**isorse e degli **I**mpianti **S**portivi
@@ -18,8 +22,10 @@ In sviluppo attivo.
 
 - **Fase 1 — Schema dati (PostgreSQL)**: completata
 - **Fase 2 — Motore algoritmico (Go)**: completata — calcolo fabbisogno riconosciuto e indice di soddisfazione, sorteggio tracciato, assegnazione progressiva per round con gestione di blocchi gara e blocchi allenamento
-- **Fase 3 — Backend API (Node.js/TypeScript)**: da avviare
-- **Fase 4 — Frontend pubblico e backoffice (React/TypeScript)**: da avviare
+- **Fase 3 — Persistenza e API del motore (Go + Postgres)**: completata
+- **Fase 4 — Backend API (Node.js/TypeScript)**: in corso — autenticazione locale (backoffice) e OIDC SPID/CIE (pubblico) completate, resto del CRUD e orchestrazione del procedimento da fare
+- **Fase 6 — Docker Compose e CI/CD**: parziale — build/test automatizzati, pubblicazione immagini su GHCR
+- **Frontend pubblico e backoffice (React/TypeScript)**: da avviare
 
 Dettagli su regole di business, decisioni tecniche e stato di avanzamento in [`CLAUDE.md`](./CLAUDE.md).
 
