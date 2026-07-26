@@ -1,0 +1,10 @@
+packages:
+  - 'backend-node'
+  - 'frontend-backoffice'
+  - 'frontend-pubblico'
+
+allowBuilds:
+  esbuild: set this to true or false
+
+onlyBuiltDependencies:
+  - esbuild

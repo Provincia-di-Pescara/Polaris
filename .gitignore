@@ -16,6 +16,8 @@ build/
 .vite/
 .next/
 coverage/
+test-results/
+playwright-report/
 
 # IDE / OS
 .vscode/
