@@ -28,3 +28,6 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Subagent-driven-development scratch workspace (briefs, reports, ledger)
+.superpowers/
