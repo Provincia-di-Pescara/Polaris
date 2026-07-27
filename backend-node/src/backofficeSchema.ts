@@ -34,3 +34,20 @@ export type AggiornaImpiantoRequest = z.infer<typeof schemaAggiornaImpianto>;
 export const schemaQueryListaImpianti = z.object({
   istituzioneScolasticaId: z.string().uuid().optional(),
 });
+
+export const schemaCreaSpazio = z.object({
+  impiantoId: z.string().uuid(),
+  denominazione: z.string().min(1),
+  omologazioni: z.array(z.string().min(1)).optional(),
+  note: z.string().min(1).optional(),
+  disciplineCompatibili: z.array(z.string().min(1)).optional(),
+});
+export type CreaSpazioRequest = z.infer<typeof schemaCreaSpazio>;
+
+export const schemaAggiornaSpazio = z.object({
+  denominazione: z.string().min(1),
+  omologazioni: z.array(z.string().min(1)).optional(),
+  note: z.string().min(1).optional(),
+  disciplineCompatibili: z.array(z.string().min(1)).optional(),
+});
+export type AggiornaSpazioRequest = z.infer<typeof schemaAggiornaSpazio>;

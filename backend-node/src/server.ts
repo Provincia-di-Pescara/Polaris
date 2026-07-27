@@ -35,7 +35,8 @@ import { ErroreValoreDuplicato, ErroreNonTrovato } from './erroriDominio.ts';
 import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './discipline.ts';
 import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstituzione } from './istituzioni.ts';
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti } from './backofficeSchema.ts';
+import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio } from './backofficeSchema.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
 const COOKIE_PATH_OIDC = '/auth/oidc';
@@ -566,6 +567,92 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           dettaglio: impianto as unknown as Record<string, unknown>,
         });
         res.status(200).json(impianto);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.post(
+    '/backoffice/impianti/:impiantoId/spazi',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaCreaSpazio.omit({ impiantoId: true }).safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const impiantoId = typeof req.params.impiantoId === 'string' ? req.params.impiantoId : '';
+        const spazio = await creaSpazio(pool, { ...parsed.data, impiantoId } as { denominazione: string; omologazioni?: string[]; note?: string; disciplineCompatibili?: string[]; impiantoId: string });
+        await registraOperazione(pool, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+          azione: 'crea_spazio_sportivo',
+          entitaTipo: 'spazi_sportivi',
+          entitaId: spazio.id,
+          dettaglio: spazio as unknown as Record<string, unknown>,
+        });
+        res.status(201).json(spazio);
+      } catch (err) {
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/backoffice/impianti/:impiantoId/spazi',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req, res) => {
+      try {
+        const impiantoId = typeof req.params.impiantoId === 'string' ? req.params.impiantoId : '';
+        res.status(200).json(await listaSpaziPerImpianto(pool, impiantoId));
+      } catch (err) {
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get('/backoffice/spazi/:id', richiedeAutenticazione, richiedeRuolo('admin', 'operatore'), async (req, res) => {
+    try {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      const spazio = await trovaSpazioPerId(pool, id);
+      if (!spazio) {
+        res.status(404).json({ errore: 'spazio sportivo non trovato' });
+        return;
+      }
+      res.status(200).json(spazio);
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.put(
+    '/backoffice/spazi/:id',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaAggiornaSpazio.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const id = typeof req.params.id === 'string' ? req.params.id : '';
+        const spazio = await aggiornaSpazio(pool, id, parsed.data as { denominazione: string; omologazioni?: string[]; note?: string; disciplineCompatibili?: string[] });
+        await registraOperazione(pool, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+          azione: 'aggiorna_spazio_sportivo',
+          entitaTipo: 'spazi_sportivi',
+          entitaId: spazio.id,
+          dettaglio: spazio as unknown as Record<string, unknown>,
+        });
+        res.status(200).json(spazio);
       } catch (err) {
         if (err instanceof ErroreNonTrovato) {
           res.status(404).json({ errore: err.message });

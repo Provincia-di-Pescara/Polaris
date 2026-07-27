@@ -246,3 +246,57 @@ test(
     });
   },
 );
+
+test(
+  'CRUD backoffice: spazi sportivi (server vero, ruolo)',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const pool = new Pool({ connectionString: dsn });
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return pool.end();
+    });
+
+    const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+    const impianto = await pool.query<{ id: string }>(
+      `INSERT INTO impianti (denominazione) VALUES ('Impianto Spazi HTTP') RETURNING id`,
+    );
+    const impiantoId = impianto.rows[0]!.id;
+    let spazioId = '';
+
+    await t.test('crea uno spazio dentro l\'impianto: 201', async () => {
+      const r = await fetch(`${base}/backoffice/impianti/${impiantoId}/spazi`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ denominazione: 'Campo HTTP Test' }),
+      });
+      assert.equal(r.status, 201);
+      const body = (await r.json()) as { id: string; impiantoId: string };
+      spazioId = body.id;
+      assert.equal(body.impiantoId, impiantoId);
+    });
+
+    await t.test('lista spazi dell\'impianto', async () => {
+      const r = await fetch(`${base}/backoffice/impianti/${impiantoId}/spazi`, {
+        headers: { Authorization: `Bearer ${operatore.token}` },
+      });
+      const lista = (await r.json()) as { id: string }[];
+      assert.ok(lista.some((s) => s.id === spazioId));
+    });
+
+    await t.test('get per id', async () => {
+      const r = await fetch(`${base}/backoffice/spazi/${spazioId}`, { headers: { Authorization: `Bearer ${operatore.token}` } });
+      assert.equal(r.status, 200);
+    });
+
+    await t.test('aggiorna: 200', async () => {
+      const r = await fetch(`${base}/backoffice/spazi/${spazioId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ denominazione: 'Campo Rinominato' }),
+      });
+      assert.equal(r.status, 200);
+    });
+  },
+);
