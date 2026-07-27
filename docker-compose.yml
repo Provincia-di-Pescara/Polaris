@@ -72,8 +72,40 @@ services:
     networks:
       - polaris-net
 
+  # Backup logico giornaliero (pg_dump, mai bind mount — output su volume named
+  # dedicato). Rotazione 7 giornalieri/4 settimanali/6 mensili di default (immagine
+  # verificata attiva e con supporto Postgres 18 al momento della scelta, luglio 2026 —
+  # vedi CLAUDE.md). Secondo livello di backup (snapshot storage/VM) da valutare
+  # separatamente in infrastruttura, non sostituito da questo. Restore verificato:
+  # docs/RUNBOOK-backup.md.
+  backup:
+    image: prodrigestivill/postgres-backup-local:18-alpine
+    restart: unless-stopped
+    # NIENTE "user: postgres:postgres" (esempio nella doc dell'immagine): bug reale
+    # trovato testando con bring-up vero — su un volume named appena creato (proprietario
+    # root di default) il container non riesce a scrivere e fallisce subito con
+    # "insufficient permissions". Senza override l'entrypoint gira come root e sistema
+    # da sé i permessi di /backups al primo avvio.
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SCHEDULE: ${BACKUP_SCHEDULE:-@daily}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+      BACKUP_KEEP_WEEKS: ${BACKUP_KEEP_WEEKS:-4}
+      BACKUP_KEEP_MONTHS: ${BACKUP_KEEP_MONTHS:-6}
+    volumes:
+      - postgres_backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - polaris-net
+
 volumes:
   postgres_data:
+  postgres_backups:
 
 networks:
   polaris-net:

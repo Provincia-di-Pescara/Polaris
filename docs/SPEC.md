@@ -159,7 +159,7 @@ Da pianificare (tracciate nelle fasi sopra):
 | ~~Blocchi gara non orchestrati (B.12–B.14) + VA iniziale (B.15)~~ | ~~Alta~~ **Risolta**: `internal/gara` (blocco = 2 slot consecutivi, catena CRS→CP→sorteggio B.14), orchestrazione Postgres, endpoint `/stagioni/{id}/blocchi-gara`, VA e stato di concentrazione iniziali nel round-robin. Assunzione da confermare: blocco minimo di 2 slot, requisiti tecnici non modellati | Fase 3 ✅ |
 | Tutela nuove associazioni (art. 12) non modellata | Media — **decisa e pianificata**, design in §7-bis.1 | §7-bis |
 | ~~Retention/housekeeping non implementati (GDPR art. 23)~~ | ~~Media~~ **Risolta**: `backend-node/src/housekeeping/` (pulizia + scheduler interno giornaliero) | §7-bis ✅ |
-| Backup/restore non definiti | Media (Alta al go-live) — **decisa e pianificata**, design in §7-bis.3 | §7-bis |
+| ~~Backup/restore non definiti~~ | ~~Media~~ **Risolta**: servizio `backup` nel compose, ciclo backup→drop→restore verificato reale, `docs/RUNBOOK-backup.md` | §7-bis ✅ |
 | `pnpm-workspace.yaml` assente | Bassa — serve con i frontend | Fase 5 |
 | Righe `oidc_stato_pkce` scadute mai ripulite | Bassa | Fase 4.9 |
 | `isf_al_momento` sempre NULL | Bassa | Fase 3 residuo |
@@ -183,7 +183,7 @@ Nel backend Node: funzioni di pulizia pure e testabili + scheduler interno (inte
 - **Mai toccare**: verbali di sorteggio, assegnazioni, settimana tipo — retention legale = intera stagione + termine impugnazione (fisso, non derogabile).
 - TDD contro Postgres reale (fixture con date artificiali nel passato).
 
-### 3. Backup Postgres nel compose di produzione
+### 3. Backup Postgres nel compose di produzione — ✅ implementata
 **Decisione**: container dedicato nel `docker-compose.yml` (non solo runbook).
 - Servizio `backup`: `pg_dump` schedulato giornaliero, output compresso su volume named dedicato (`postgres_backups`), rotazione (default: 7 giornalieri + 4 settimanali), nessun bind mount (coerente col vincolo prod).
 - Candidato: immagine `prodrigestivill/postgres-backup-local` (schedulazione+rotazione built-in) — da verificare versione/manutenzione al momento dell'implementazione, altrimenti sidecar `postgres:18-alpine` + cron con script nostro.
