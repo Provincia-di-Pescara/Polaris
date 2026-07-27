@@ -164,9 +164,7 @@ Da pianificare (tracciate nelle fasi sopra):
 | Righe `oidc_stato_pkce` scadute mai ripulite | Bassa | Fase 4.9 |
 | `isf_al_momento` sempre NULL | Bassa | Fase 3 residuo |
 
-## 7-bis. Prossima fase pianificata — lacune a media priorità (decisioni prese il 2026-07-25, da implementare)
-
-Le tre lacune a media priorità sono state decise col committente; il design è chiuso, l'implementazione è il prossimo blocco di lavoro.
+## 7-bis. Lacune a media priorità — ✅ tutte e tre implementate (decise il 2026-07-25, chiuse il 2026-07-27)
 
 ### 1. Quota nuove associazioni (art. 12 Doc Principale) — ✅ implementata
 **Decisione**: si implementa subito come parametro 🔧 con **default 0 = disattivata** — l'Ente la attiva da UI cambiando il valore, senza migrazione futura.
