@@ -34,7 +34,8 @@ import { registraOperazione } from './repository/logOperazioni.ts';
 import { ErroreValoreDuplicato, ErroreNonTrovato } from './erroriDominio.ts';
 import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './discipline.ts';
 import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstituzione } from './istituzioni.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione } from './backofficeSchema.ts';
+import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti } from './backofficeSchema.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
 const COOKIE_PATH_OIDC = '/auth/oidc';
@@ -479,6 +480,95 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         }
         if (err instanceof ErroreValoreDuplicato) {
           res.status(409).json({ errore: err.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.post(
+    '/backoffice/impianti',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaCreaImpianto.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const impianto = await creaImpianto(pool, parsed.data as { denominazione: string; istituzioneScolasticaId?: string; indirizzo?: string });
+        await registraOperazione(pool, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+          azione: 'crea_impianto',
+          entitaTipo: 'impianti',
+          entitaId: impianto.id,
+          dettaglio: impianto as unknown as Record<string, unknown>,
+        });
+        res.status(201).json(impianto);
+      } catch (err) {
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get('/backoffice/impianti', richiedeAutenticazione, richiedeRuolo('admin', 'operatore'), async (req, res) => {
+    const parsed = schemaQueryListaImpianti.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+      return;
+    }
+    try {
+      res.status(200).json(await listaImpianti(pool, parsed.data.istituzioneScolasticaId));
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get(
+    '/backoffice/impianti/:id',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req, res) => {
+      try {
+        const id = typeof req.params.id === 'string' ? req.params.id : '';
+        const impianto = await trovaImpiantoPerId(pool, id);
+        if (!impianto) {
+          res.status(404).json({ errore: 'impianto non trovato' });
+          return;
+        }
+        res.status(200).json(impianto);
+      } catch (err) {
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.put(
+    '/backoffice/impianti/:id',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaAggiornaImpianto.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const id = typeof req.params.id === 'string' ? req.params.id : '';
+        const impianto = await aggiornaImpianto(pool, id, parsed.data as { denominazione: string; istituzioneScolasticaId?: string; indirizzo?: string });
+        await registraOperazione(pool, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+          azione: 'aggiorna_impianto',
+          entitaTipo: 'impianti',
+          entitaId: impianto.id,
+          dettaglio: impianto as unknown as Record<string, unknown>,
+        });
+        res.status(200).json(impianto);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
           return;
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });

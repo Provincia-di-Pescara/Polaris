@@ -20,3 +20,17 @@ export type CreaIstituzioneRequest = z.infer<typeof schemaCreaIstituzione>;
 
 export const schemaAggiornaIstituzione = schemaCreaIstituzione;
 export type AggiornaIstituzioneRequest = z.infer<typeof schemaAggiornaIstituzione>;
+
+export const schemaCreaImpianto = z.object({
+  denominazione: z.string().min(1),
+  istituzioneScolasticaId: z.string().uuid().optional(),
+  indirizzo: z.string().min(1).optional(),
+});
+export type CreaImpiantoRequest = z.infer<typeof schemaCreaImpianto>;
+
+export const schemaAggiornaImpianto = schemaCreaImpianto;
+export type AggiornaImpiantoRequest = z.infer<typeof schemaAggiornaImpianto>;
+
+export const schemaQueryListaImpianti = z.object({
+  istituzioneScolasticaId: z.string().uuid().optional(),
+});

@@ -194,3 +194,55 @@ test(
     });
   },
 );
+
+test(
+  'CRUD backoffice: impianti (server vero, ruolo)',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const pool = new Pool({ connectionString: dsn });
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return pool.end();
+    });
+
+    const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+    let impiantoId = '';
+
+    await t.test('crea impianto senza istituzione: 201', async () => {
+      const r = await fetch(`${base}/backoffice/impianti`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ denominazione: 'Palestra HTTP Test' }),
+      });
+      assert.equal(r.status, 201);
+      const body = (await r.json()) as { id: string };
+      impiantoId = body.id;
+    });
+
+    await t.test('istituzioneScolasticaId non valida (non uuid): 400', async () => {
+      const r = await fetch(`${base}/backoffice/impianti`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ denominazione: 'X', istituzioneScolasticaId: 'non-un-uuid' }),
+      });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('get per id', async () => {
+      const r = await fetch(`${base}/backoffice/impianti/${impiantoId}`, {
+        headers: { Authorization: `Bearer ${operatore.token}` },
+      });
+      assert.equal(r.status, 200);
+    });
+
+    await t.test('aggiorna: 200', async () => {
+      const r = await fetch(`${base}/backoffice/impianti/${impiantoId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ denominazione: 'Palestra Rinominata' }),
+      });
+      assert.equal(r.status, 200);
+    });
+  },
+);
