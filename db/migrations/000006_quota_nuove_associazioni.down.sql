@@ -1,0 +1,1 @@
+ALTER TABLE parametrico_versioni DROP COLUMN quota_nuove_associazioni_pct;

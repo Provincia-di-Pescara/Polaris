@@ -15,11 +15,12 @@ import (
 // valida_dal, vedi CLAUDE.md) e le tabelle di scaglioni normative, pronte per
 // calc/istruttoria/roundrobin.
 type ParametricoCaricato struct {
-	VersioneID         string
-	Istruttoria        istruttoria.Parametrico
-	Limiti             roundrobin.LimitiConcentrazione
-	TolleranzaISF      decimal.Decimal
-	PesoFasciaPregiata decimal.Decimal
+	VersioneID                string
+	Istruttoria               istruttoria.Parametrico
+	Limiti                    roundrobin.LimitiConcentrazione
+	TolleranzaISF             decimal.Decimal
+	PesoFasciaPregiata        decimal.Decimal
+	QuotaNuoveAssociazioniPct decimal.Decimal
 }
 
 func decimalDaTesto(s string) (decimal.Decimal, error) {
@@ -45,9 +46,9 @@ func decimalDaTestoNullable(s *string) (decimal.Decimal, bool, error) {
 // tabelle di scaglioni collegate (versionate e normative globali).
 func CaricaParametricoAttivo(ctx context.Context, pool *pgxpool.Pool) (ParametricoCaricato, error) {
 	var (
-		versioneID                                                                  string
-		moltiplicatoreTxt, pesoFasciaTxt, caaNeutroTxt, csdNeutroTxt, tolleranzaTxt string
-		minutiSettimanaliMax, slotMax, fascePregiateMax, giornateGaraMax            int
+		versioneID                                                                                 string
+		moltiplicatoreTxt, pesoFasciaTxt, caaNeutroTxt, csdNeutroTxt, tolleranzaTxt, quotaNuoveTxt string
+		minutiSettimanaliMax, slotMax, fascePregiateMax, giornateGaraMax                           int
 	)
 	err := pool.QueryRow(ctx, `
 		SELECT id,
@@ -59,12 +60,13 @@ func CaricaParametricoAttivo(ctx context.Context, pool *pgxpool.Pool) (Parametri
 		       giornate_gara_max,
 		       caa_neutro::text,
 		       csd_neutro::text,
-		       tolleranza_isf_pct::text
+		       tolleranza_isf_pct::text,
+		       quota_nuove_associazioni_pct::text
 		FROM parametrico_versioni
 		ORDER BY valida_dal DESC
 		LIMIT 1
 	`).Scan(&versioneID, &moltiplicatoreTxt, &pesoFasciaTxt, &minutiSettimanaliMax,
-		&slotMax, &fascePregiateMax, &giornateGaraMax, &caaNeutroTxt, &csdNeutroTxt, &tolleranzaTxt)
+		&slotMax, &fascePregiateMax, &giornateGaraMax, &caaNeutroTxt, &csdNeutroTxt, &tolleranzaTxt, &quotaNuoveTxt)
 	if err != nil {
 		return ParametricoCaricato{}, fmt.Errorf("caricamento parametrico attivo: %w", err)
 	}
@@ -86,6 +88,10 @@ func CaricaParametricoAttivo(ctx context.Context, pool *pgxpool.Pool) (Parametri
 		return ParametricoCaricato{}, err
 	}
 	tolleranza, err := decimalDaTesto(tolleranzaTxt)
+	if err != nil {
+		return ParametricoCaricato{}, err
+	}
+	quotaNuove, err := decimalDaTesto(quotaNuoveTxt)
 	if err != nil {
 		return ParametricoCaricato{}, err
 	}
@@ -124,8 +130,9 @@ func CaricaParametricoAttivo(ctx context.Context, pool *pgxpool.Pool) (Parametri
 			FascePregiateMax:      fascePregiateMax,
 			GiornateGaraMax:       giornateGaraMax,
 		},
-		TolleranzaISF:      tolleranza,
-		PesoFasciaPregiata: pesoFascia,
+		TolleranzaISF:             tolleranza,
+		PesoFasciaPregiata:        pesoFascia,
+		QuotaNuoveAssociazioniPct: quotaNuove,
 	}, nil
 }
 

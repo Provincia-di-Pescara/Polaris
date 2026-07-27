@@ -62,7 +62,7 @@ func TestIntegrazione_BlocchiGaraPoiRoundRobin(t *testing.T) {
 	slotFeriale2 := must(`INSERT INTO slot_settimana_tipo (stagione_id, spazio_id, giorno_settimana, orario_inizio, orario_fine) VALUES ($1, $2, 3, '16:00', '17:30')`, stagioneID, spazioID)
 
 	personaID := must(`INSERT INTO persone_fisiche (codice_fiscale, nome, cognome, oidc_subject, oidc_provider) VALUES ($1, 'Test', 'Gara', $2, 'spid')`,
-		"TSTGRA80A01H50"+sfx[:1], "sub-gara-"+sfx)
+		"TSTGRA-"+sfx, "sub-gara-"+sfx)
 	assoc1ID := must(`INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ($1, $2)`, "ASD Gara Uno "+sfx, "91"+sfx+"001")
 	assoc2ID := must(`INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ($1, $2)`, "ASD Gara Due "+sfx, "91"+sfx+"002")
 

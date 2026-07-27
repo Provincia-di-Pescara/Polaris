@@ -32,8 +32,11 @@ type BloccoAllenamento struct {
 }
 
 // Associazione è lo stato di un'associazione candidata al round-robin.
+// PrimaStagione (art. 12 Doc Principale: tutela nuove associazioni) determina
+// l'eleggibilità alla quota di precedenza — vedi InputEsecuzione.QuotaNuoveAssociazioniPct.
 type Associazione struct {
-	ID string
-	FR decimal.Decimal
-	CP decimal.Decimal
+	ID            string
+	FR            decimal.Decimal
+	CP            decimal.Decimal
+	PrimaStagione bool
 }

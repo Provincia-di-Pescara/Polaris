@@ -168,7 +168,7 @@ Da pianificare (tracciate nelle fasi sopra):
 
 Le tre lacune a media priorità sono state decise col committente; il design è chiuso, l'implementazione è il prossimo blocco di lavoro.
 
-### 1. Quota nuove associazioni (art. 12 Doc Principale)
+### 1. Quota nuove associazioni (art. 12 Doc Principale) — ✅ implementata
 **Decisione**: si implementa subito come parametro 🔧 con **default 0 = disattivata** — l'Ente la attiva da UI cambiando il valore, senza migrazione futura.
 - Migration `000006`: colonna `quota_nuove_associazioni_pct NUMERIC(6,4) NOT NULL DEFAULT 0` in `parametrico_versioni` (stesso pattern degli altri parametri, versionata).
 - **Meccanismo (assunzione da documentare, il testo non lo specifica)**: precedenza dinamica, non riserva statica di fasce specifiche. `N = floor(pct × numero fasce disponibili)`. Durante il round-robin, finché il totale di fasce assegnate ad associazioni `prima_stagione` è `< N`, su ogni fascia contesa il pool di candidati si restringe alle sole prima-stagione **se almeno una è candidata** (altrimenti la fascia va al pool generale: la quota non spreca fasce che nessuna nuova richiede). Poi catena B.20 normale sul pool ristretto.

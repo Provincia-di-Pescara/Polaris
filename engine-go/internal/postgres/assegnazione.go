@@ -109,7 +109,7 @@ func caricaBlocchiAllenamento(ctx context.Context, pool *pgxpool.Pool, stagioneI
 
 func caricaAssociazioniConFabbisogno(ctx context.Context, pool *pgxpool.Pool, stagioneID string) ([]roundrobin.Associazione, map[string]string, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT d.id, d.associazione_id, fr.fr_finale_minuti::text, co.cp::text
+		SELECT d.id, d.associazione_id, fr.fr_finale_minuti::text, co.cp::text, co.prima_stagione
 		FROM domande d
 		JOIN fabbisogni_riconosciuti fr ON fr.domanda_id = d.id
 		JOIN coefficienti_associazione co ON co.domanda_id = d.id
@@ -124,7 +124,8 @@ func caricaAssociazioniConFabbisogno(ctx context.Context, pool *pgxpool.Pool, st
 	domandaIDPerAssociazione := make(map[string]string)
 	for rows.Next() {
 		var domandaID, associazioneID, frTxt, cpTxt string
-		if err := rows.Scan(&domandaID, &associazioneID, &frTxt, &cpTxt); err != nil {
+		var primaStagione bool
+		if err := rows.Scan(&domandaID, &associazioneID, &frTxt, &cpTxt, &primaStagione); err != nil {
 			return nil, nil, fmt.Errorf("caricamento associazioni/fabbisogno: %w", err)
 		}
 		fr, err := decimalDaTesto(frTxt)
@@ -135,7 +136,7 @@ func caricaAssociazioniConFabbisogno(ctx context.Context, pool *pgxpool.Pool, st
 		if err != nil {
 			return nil, nil, err
 		}
-		associazioni = append(associazioni, roundrobin.Associazione{ID: associazioneID, FR: fr, CP: cp})
+		associazioni = append(associazioni, roundrobin.Associazione{ID: associazioneID, FR: fr, CP: cp, PrimaStagione: primaStagione})
 		domandaIDPerAssociazione[associazioneID] = domandaID
 	}
 	return associazioni, domandaIDPerAssociazione, rows.Err()
@@ -220,15 +221,16 @@ func CaricaSnapshotRoundRobin(ctx context.Context, pool *pgxpool.Pool, stagioneI
 
 	return SnapshotRoundRobin{
 		Input: roundrobin.InputEsecuzione{
-			Fasce:              fasce,
-			Richieste:          richieste,
-			BlocchiAllenamento: blocchi,
-			Associazioni:       associazioni,
-			VAIniziale:         vaIniziale,
-			StatoIniziale:      statoIniziale,
-			Limiti:             parametrico.Limiti,
-			TolleranzaISF:      parametrico.TolleranzaISF,
-			SemeHex:            semeHex,
+			Fasce:                     fasce,
+			Richieste:                 richieste,
+			BlocchiAllenamento:        blocchi,
+			Associazioni:              associazioni,
+			VAIniziale:                vaIniziale,
+			StatoIniziale:             statoIniziale,
+			Limiti:                    parametrico.Limiti,
+			TolleranzaISF:             parametrico.TolleranzaISF,
+			QuotaNuoveAssociazioniPct: parametrico.QuotaNuoveAssociazioniPct,
+			SemeHex:                   semeHex,
 		},
 		FasceByID:                fasceByID,
 		DomandaIDPerAssociazione: domandaIDPerAssociazione,

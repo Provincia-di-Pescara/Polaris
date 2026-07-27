@@ -24,7 +24,14 @@ type InputEsecuzione struct {
 	StatoIniziale map[string]StatoConcentrazione
 	Limiti        LimitiConcentrazione
 	TolleranzaISF decimal.Decimal
-	SemeHex       string
+	// QuotaNuoveAssociazioniPct (art. 12 Doc Principale, parametro 🔧, default 0 =
+	// disattivata — vedi docs/SPEC.md §7-bis.1): finché le fasce assegnate ad
+	// associazioni PrimaStagione sono meno di floor(pct × numero fasce totali), il pool
+	// di candidati di una fascia contesa si restringe alle sole prima_stagione SE almeno
+	// una è candidata (altrimenti nessuna restrizione: la quota non spreca fasce che
+	// nessuna nuova associazione richiede).
+	QuotaNuoveAssociazioniPct decimal.Decimal
+	SemeHex                   string
 }
 
 // Assegnazione è l'esito di una singola fascia assegnata durante il round-robin.
@@ -47,6 +54,7 @@ type statoAssociazione struct {
 	fr                     decimal.Decimal
 	cp                     decimal.Decimal
 	va                     decimal.Decimal
+	primaStagione          bool
 	minutiGrezzi           int
 	slotPerImpianto        map[string]int
 	fascePregiateAssegnate int
@@ -80,6 +88,7 @@ func Esegui(in InputEsecuzione) (Esito, error) {
 			fr:              a.FR,
 			cp:              a.CP,
 			va:              va,
+			primaStagione:   a.PrimaStagione,
 			slotPerImpianto: map[string]int{},
 			impiantiUsati:   map[string]bool{},
 		}
@@ -129,6 +138,11 @@ func Esegui(in InputEsecuzione) (Esito, error) {
 		return Esito{}, nil
 	}
 
+	// art. 12 Doc Principale: N = floor(pct × numero fasce totali). Contatore aggiornato
+	// via registraFasceNuove ad ogni assegnazione vinta da una prima_stagione.
+	quotaTarget := decimal.NewFromInt(int64(len(in.Fasce))).Mul(in.QuotaNuoveAssociazioniPct).Floor().IntPart()
+	fasceAssegnateANuove := int64(0)
+
 	round := 0
 	for round < maxRound {
 		round++
@@ -155,9 +169,22 @@ func Esegui(in InputEsecuzione) (Esito, error) {
 				continue
 			}
 
+			if fasceAssegnateANuove < quotaTarget {
+				candidati = restringiPerQuotaNuove(candidati, stati)
+			}
+
 			esito, err := SceglieVincitore(candidati, in.TolleranzaISF, in.SemeHex)
 			if err != nil {
 				return Esito{}, fmt.Errorf("fascia %s: %w", fasciaID, err)
+			}
+
+			if stati[esito.AssociazioneID].primaStagione {
+				sb := bloccoPerAssoc[esito.AssociazioneID]
+				if sb != nil {
+					fasceAssegnateANuove += int64(len(sb.blocco.FasceID))
+				} else {
+					fasceAssegnateANuove++
+				}
 			}
 
 			sb := bloccoPerAssoc[esito.AssociazioneID]
@@ -247,6 +274,23 @@ func costruisciCandidati(
 	}
 
 	return candidati, bloccoPerAssoc, nil
+}
+
+// restringiPerQuotaNuove implementa il pre-filtro art. 12: se almeno un candidato è di
+// un'associazione prima_stagione, il pool si restringe a quelli (poi la catena B.20
+// normale decide tra loro); altrimenti il pool resta invariato — la quota non spreca
+// fasce che nessuna nuova associazione ha richiesto.
+func restringiPerQuotaNuove(candidati []CandidatoFascia, stati map[string]*statoAssociazione) []CandidatoFascia {
+	var nuove []CandidatoFascia
+	for _, c := range candidati {
+		if stati[c.AssociazioneID].primaStagione {
+			nuove = append(nuove, c)
+		}
+	}
+	if len(nuove) > 0 {
+		return nuove
+	}
+	return candidati
 }
 
 func primaFasciaLiberaDelBlocco(b *BloccoAllenamento, fasciaAssegnata map[string]bool, indiceEsame map[string]int) string {
