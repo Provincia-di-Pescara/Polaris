@@ -158,7 +158,7 @@ Da pianificare (tracciate nelle fasi sopra):
 | ~~Nessun modo di creare il primo admin senza SQL a mano~~ | ~~Alta~~ **Risolta**: wizard bootstrap (SMTP da `.env`, email con link di attivazione, token one-shot 24h) — endpoint `/auth/bootstrap/*`, migration 000005 | Fase 4.4 ✅ |
 | ~~Blocchi gara non orchestrati (B.12–B.14) + VA iniziale (B.15)~~ | ~~Alta~~ **Risolta**: `internal/gara` (blocco = 2 slot consecutivi, catena CRS→CP→sorteggio B.14), orchestrazione Postgres, endpoint `/stagioni/{id}/blocchi-gara`, VA e stato di concentrazione iniziali nel round-robin. Assunzione da confermare: blocco minimo di 2 slot, requisiti tecnici non modellati | Fase 3 ✅ |
 | Tutela nuove associazioni (art. 12) non modellata | Media — **decisa e pianificata**, design in §7-bis.1 | §7-bis |
-| Retention/housekeeping non implementati (GDPR art. 23) | Media — **pianificata**, design in §7-bis.2 | §7-bis |
+| ~~Retention/housekeeping non implementati (GDPR art. 23)~~ | ~~Media~~ **Risolta**: `backend-node/src/housekeeping/` (pulizia + scheduler interno giornaliero) | §7-bis ✅ |
 | Backup/restore non definiti | Media (Alta al go-live) — **decisa e pianificata**, design in §7-bis.3 | §7-bis |
 | `pnpm-workspace.yaml` assente | Bassa — serve con i frontend | Fase 5 |
 | Righe `oidc_stato_pkce` scadute mai ripulite | Bassa | Fase 4.9 |
@@ -175,7 +175,7 @@ Le tre lacune a media priorità sono state decise col committente; il design è 
 - Motore: campo `PrimaStagione bool` su `roundrobin.Associazione` (il dato c'è già: `coefficienti_associazione.prima_stagione`), parametro `QuotaNuoveAssociazioniPct` in `InputEsecuzione`, contatore fasce assegnate a nuove (un blocco allenamento conta per tutte le sue fasce). Loader in `internal/postgres/parametrico.go`.
 - Gli altri due punti dell'art. 12 sono già coperti: coefficienti neutri prima stagione (istruttoria, fatto), verifica utilizzo effettivo (Fase 15, futuro).
 
-### 2. Job housekeeping / retention GDPR (art. 23 Doc Principale)
+### 2. Job housekeeping / retention GDPR (art. 23 Doc Principale) — ✅ implementata
 Nel backend Node: funzioni di pulizia pure e testabili + scheduler interno (intervallo giornaliero, partenza al boot, skippabile via env nei test).
 - `oidc_stato_pkce`: DELETE righe scadute mai consumate (i flussi abbandonati oggi si accumulano per sempre).
 - `sessioni_backoffice` / `sessioni_persona_fisica`: DELETE righe scadute o revocate da oltre N giorni (tenerle un minimo per audit di sicurezza).

@@ -1,5 +1,6 @@
 import { creaPool } from './db.ts';
 import { creaApp } from './server.ts';
+import { avviaSchedulerHousekeeping } from './housekeeping/scheduler.ts';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -14,8 +15,14 @@ const server = app.listen(Number(porta), () => {
   console.log(`backend in ascolto su :${porta}`);
 });
 
+const housekeeping = avviaSchedulerHousekeeping(
+  pool,
+  process.env.HOUSEKEEPING_INTERVAL_MS ? Number(process.env.HOUSEKEEPING_INTERVAL_MS) : undefined,
+);
+
 async function arresto(): Promise<void> {
   console.log('arresto in corso...');
+  housekeeping.ferma();
   server.close();
   await pool.end();
 }
