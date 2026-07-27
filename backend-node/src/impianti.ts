@@ -26,8 +26,10 @@ function daRiga(r: RigaImpianto): Impianto {
 
 export interface DatiImpianto {
   denominazione: string;
-  istituzioneScolasticaId?: string;
-  indirizzo?: string;
+  // `| undefined` esplicito: vedi commento analogo in istituzioni.ts (stesso motivo,
+  // exactOptionalPropertyTypes vs output opzionale di zod).
+  istituzioneScolasticaId?: string | undefined;
+  indirizzo?: string | undefined;
 }
 
 export async function creaImpianto(db: Db, dati: DatiImpianto): Promise<Impianto> {

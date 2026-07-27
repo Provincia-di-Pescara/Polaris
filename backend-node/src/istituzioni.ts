@@ -27,8 +27,11 @@ function daRiga(r: RigaIstituzione): Istituzione {
 
 export interface DatiIstituzione {
   denominazione: string;
-  codiceMeccanografico?: string;
-  indirizzo?: string;
+  // `| undefined` esplicito (non solo `?:`): con exactOptionalPropertyTypes, l'output di
+  // zod per un campo `.optional()` è `T | undefined`, non compatibile con `campo?: T` in
+  // fase di assegnazione — evita il cast `as {...}` lato server.ts.
+  codiceMeccanografico?: string | undefined;
+  indirizzo?: string | undefined;
 }
 
 export async function creaIstituzione(db: Db, dati: DatiIstituzione): Promise<Istituzione> {

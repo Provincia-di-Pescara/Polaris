@@ -2,7 +2,7 @@ import express, { type Express, type Request } from 'express';
 import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
 import { timingSafeEqual } from 'node:crypto';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { listaStagioni, creaStagione } from './stagioni.ts';
 import { eseguiLogin, eseguiLogout, eseguiRefresh } from './auth/login.ts';
 import { eseguiCallbackOidc, eseguiLogoutPubblico, eseguiRefreshPubblico } from './auth/loginPubblico.ts';
@@ -31,7 +31,7 @@ import {
 import { costruisciUrlAutorizzazione, ErroreOidcNonConfigurato, ErroreScambioCode, ErroreStatoNonValido } from './oidc/flow.ts';
 import { richiedeRuolo } from './auth/middleware.ts';
 import { registraOperazione } from './repository/logOperazioni.ts';
-import { ErroreValoreDuplicato, ErroreNonTrovato } from './erroriDominio.ts';
+import { ErroreValoreDuplicato, ErroreNonTrovato, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
 import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './discipline.ts';
 import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstituzione } from './istituzioni.ts';
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
@@ -63,6 +63,32 @@ function confrontoSicuro(a: string, b: string): boolean {
     return false;
   }
   return timingSafeEqual(bufA, bufB);
+}
+
+// Entità+audit-log atomici (art. B.39): senza questo, un INSERT in log_operazioni fallito
+// DOPO che la scrittura dell'entità è già committata lascerebbe l'entità creata/aggiornata
+// ma senza traccia in audit — il client vedrebbe un 500 nonostante l'operazione sia
+// effettivamente avvenuta. `azione` gira interamente su un client dedicato dentro
+// BEGIN/COMMIT; qualunque eccezione (repository o registraOperazione) fa ROLLBACK di
+// entrambe le scritture. Non usata dalle route /backoffice/spazi/*: creaSpazio/
+// aggiornaSpazio (spazi.ts) aprono già una PROPRIA transazione interna per l'atomicità
+// entità+join-table discipline compatibili (vedi commento lì) — annidare un'altra
+// transazione attorno a quella richiederebbe di scomporle per condividere il client, non
+// fatto in questo giro per limitare il rischio; l'audit log di quelle due route resta
+// quindi scritto come query separata dopo il commit dell'entità (gap noto, vedi report).
+async function eseguiInTransazione<T>(pool: Pool, azione: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const risultato = await azione(client);
+    await client.query('COMMIT');
+    return risultato;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 const limitatoreLogin = rateLimit({
@@ -337,17 +363,25 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         return;
       }
       try {
-        const disciplina = await creaDisciplina(pool, parsed.data);
-        await registraOperazione(pool, {
-          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
-          azione: 'crea_disciplina_sportiva',
-          entitaTipo: 'discipline_sportive',
-          dettaglio: disciplina as unknown as Record<string, unknown>,
+        const disciplina = await eseguiInTransazione(pool, async (client) => {
+          const d = await creaDisciplina(client, parsed.data);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'crea_disciplina_sportiva',
+            entitaTipo: 'discipline_sportive',
+            dettaglio: d as unknown as Record<string, unknown>,
+          });
+          return d;
         });
         res.status(201).json(disciplina);
       } catch (err) {
         if (err instanceof ErroreValoreDuplicato) {
           res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
           return;
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
@@ -375,12 +409,15 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       }
       try {
         const codice = typeof req.params.codice === 'string' ? req.params.codice : '';
-        const disciplina = await aggiornaDisciplina(pool, codice, parsed.data.denominazione);
-        await registraOperazione(pool, {
-          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
-          azione: 'aggiorna_disciplina_sportiva',
-          entitaTipo: 'discipline_sportive',
-          dettaglio: disciplina as unknown as Record<string, unknown>,
+        const disciplina = await eseguiInTransazione(pool, async (client) => {
+          const d = await aggiornaDisciplina(client, codice, parsed.data.denominazione);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'aggiorna_disciplina_sportiva',
+            entitaTipo: 'discipline_sportive',
+            dettaglio: d as unknown as Record<string, unknown>,
+          });
+          return d;
         });
         res.status(200).json(disciplina);
       } catch (err) {
@@ -390,6 +427,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         }
         if (err instanceof ErroreValoreDuplicato) {
           res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
           return;
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
@@ -408,18 +450,26 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         return;
       }
       try {
-        const istituzione = await creaIstituzione(pool, parsed.data as { denominazione: string; codiceMeccanografico?: string; indirizzo?: string });
-        await registraOperazione(pool, {
-          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
-          azione: 'crea_istituzione_scolastica',
-          entitaTipo: 'istituzioni_scolastiche',
-          entitaId: istituzione.id,
-          dettaglio: istituzione as unknown as Record<string, unknown>,
+        const istituzione = await eseguiInTransazione(pool, async (client) => {
+          const i = await creaIstituzione(client, parsed.data);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'crea_istituzione_scolastica',
+            entitaTipo: 'istituzioni_scolastiche',
+            entitaId: i.id,
+            dettaglio: i as unknown as Record<string, unknown>,
+          });
+          return i;
         });
         res.status(201).json(istituzione);
       } catch (err) {
         if (err instanceof ErroreValoreDuplicato) {
           res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
           return;
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
@@ -449,6 +499,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         }
         res.status(200).json(istituzione);
       } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },
@@ -466,13 +521,16 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       }
       try {
         const id = typeof req.params.id === 'string' ? req.params.id : '';
-        const istituzione = await aggiornaIstituzione(pool, id, parsed.data as { denominazione: string; codiceMeccanografico?: string; indirizzo?: string });
-        await registraOperazione(pool, {
-          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
-          azione: 'aggiorna_istituzione_scolastica',
-          entitaTipo: 'istituzioni_scolastiche',
-          entitaId: istituzione.id,
-          dettaglio: istituzione as unknown as Record<string, unknown>,
+        const istituzione = await eseguiInTransazione(pool, async (client) => {
+          const i = await aggiornaIstituzione(client, id, parsed.data);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'aggiorna_istituzione_scolastica',
+            entitaTipo: 'istituzioni_scolastiche',
+            entitaId: i.id,
+            dettaglio: i as unknown as Record<string, unknown>,
+          });
+          return i;
         });
         res.status(200).json(istituzione);
       } catch (err) {
@@ -482,6 +540,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         }
         if (err instanceof ErroreValoreDuplicato) {
           res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
           return;
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
@@ -500,16 +563,24 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         return;
       }
       try {
-        const impianto = await creaImpianto(pool, parsed.data as { denominazione: string; istituzioneScolasticaId?: string; indirizzo?: string });
-        await registraOperazione(pool, {
-          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
-          azione: 'crea_impianto',
-          entitaTipo: 'impianti',
-          entitaId: impianto.id,
-          dettaglio: impianto as unknown as Record<string, unknown>,
+        const impianto = await eseguiInTransazione(pool, async (client) => {
+          const i = await creaImpianto(client, parsed.data);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'crea_impianto',
+            entitaTipo: 'impianti',
+            entitaId: i.id,
+            dettaglio: i as unknown as Record<string, unknown>,
+          });
+          return i;
         });
         res.status(201).json(impianto);
       } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },
@@ -542,6 +613,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         }
         res.status(200).json(impianto);
       } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },
@@ -559,18 +635,26 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       }
       try {
         const id = typeof req.params.id === 'string' ? req.params.id : '';
-        const impianto = await aggiornaImpianto(pool, id, parsed.data as { denominazione: string; istituzioneScolasticaId?: string; indirizzo?: string });
-        await registraOperazione(pool, {
-          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
-          azione: 'aggiorna_impianto',
-          entitaTipo: 'impianti',
-          entitaId: impianto.id,
-          dettaglio: impianto as unknown as Record<string, unknown>,
+        const impianto = await eseguiInTransazione(pool, async (client) => {
+          const i = await aggiornaImpianto(client, id, parsed.data);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'aggiorna_impianto',
+            entitaTipo: 'impianti',
+            entitaId: i.id,
+            dettaglio: i as unknown as Record<string, unknown>,
+          });
+          return i;
         });
         res.status(200).json(impianto);
       } catch (err) {
         if (err instanceof ErroreNonTrovato) {
           res.status(404).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
           return;
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
@@ -590,7 +674,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       }
       try {
         const impiantoId = typeof req.params.impiantoId === 'string' ? req.params.impiantoId : '';
-        const spazio = await creaSpazio(pool, { ...parsed.data, impiantoId } as { denominazione: string; omologazioni?: string[]; note?: string; disciplineCompatibili?: string[]; impiantoId: string });
+        // Non avvolta in eseguiInTransazione: creaSpazio (spazi.ts) apre già una propria
+        // transazione Pool-based per l'atomicità entità+discipline compatibili (vedi
+        // commento lì) — l'INSERT in log_operazioni sotto resta quindi una query separata,
+        // dopo il commit dell'entità (gap noto, non atomico con l'audit log; vedi report).
+        const spazio = await creaSpazio(pool, { ...parsed.data, impiantoId });
         await registraOperazione(pool, {
           attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
           azione: 'crea_spazio_sportivo',
@@ -600,6 +688,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         });
         res.status(201).json(spazio);
       } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },
@@ -629,6 +722,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       }
       res.status(200).json(spazio);
     } catch (err) {
+      const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+      if (erroreRiferimento) {
+        res.status(400).json({ errore: erroreRiferimento.message });
+        return;
+      }
       res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
     }
   });
@@ -645,7 +743,8 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       }
       try {
         const id = typeof req.params.id === 'string' ? req.params.id : '';
-        const spazio = await aggiornaSpazio(pool, id, parsed.data as { denominazione: string; omologazioni?: string[]; note?: string; disciplineCompatibili?: string[] });
+        // Vedi commento nella POST sopra: non avvolta in eseguiInTransazione, stesso motivo.
+        const spazio = await aggiornaSpazio(pool, id, parsed.data);
         await registraOperazione(pool, {
           attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
           azione: 'aggiorna_spazio_sportivo',
@@ -657,6 +756,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       } catch (err) {
         if (err instanceof ErroreNonTrovato) {
           res.status(404).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
           return;
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
@@ -676,18 +780,26 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       }
       try {
         const stagioneId = typeof req.params.stagioneId === 'string' ? req.params.stagioneId : '';
-        const slot = await creaSlot(pool, { ...parsed.data as { spazioId: string; giornoSettimana: number; orarioInizio: string; orarioFine: string; pregiata?: boolean; indisponibilePermanente?: boolean; note?: string }, stagioneId });
-        await registraOperazione(pool, {
-          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
-          azione: 'crea_slot_settimana_tipo',
-          entitaTipo: 'slot_settimana_tipo',
-          entitaId: slot.id,
-          dettaglio: slot as unknown as Record<string, unknown>,
+        const slot = await eseguiInTransazione(pool, async (client) => {
+          const s = await creaSlot(client, { ...parsed.data, stagioneId });
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'crea_slot_settimana_tipo',
+            entitaTipo: 'slot_settimana_tipo',
+            entitaId: s.id,
+            dettaglio: s as unknown as Record<string, unknown>,
+          });
+          return s;
         });
         res.status(201).json(slot);
       } catch (err) {
         if (err instanceof ErroreSovrapposizioneSlot) {
           res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
           return;
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
@@ -724,6 +836,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       }
       res.status(200).json(slot);
     } catch (err) {
+      const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+      if (erroreRiferimento) {
+        res.status(400).json({ errore: erroreRiferimento.message });
+        return;
+      }
       res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
     }
   });
@@ -740,13 +857,16 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       }
       try {
         const id = typeof req.params.id === 'string' ? req.params.id : '';
-        const slot = await aggiornaSlot(pool, id, parsed.data as { giornoSettimana: number; orarioInizio: string; orarioFine: string; pregiata: boolean; indisponibilePermanente: boolean; note?: string });
-        await registraOperazione(pool, {
-          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
-          azione: 'aggiorna_slot_settimana_tipo',
-          entitaTipo: 'slot_settimana_tipo',
-          entitaId: slot.id,
-          dettaglio: slot as unknown as Record<string, unknown>,
+        const slot = await eseguiInTransazione(pool, async (client) => {
+          const s = await aggiornaSlot(client, id, parsed.data);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'aggiorna_slot_settimana_tipo',
+            entitaTipo: 'slot_settimana_tipo',
+            entitaId: s.id,
+            dettaglio: s as unknown as Record<string, unknown>,
+          });
+          return s;
         });
         res.status(200).json(slot);
       } catch (err) {
@@ -756,6 +876,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         }
         if (err instanceof ErroreSovrapposizioneSlot) {
           res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
           return;
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
@@ -774,16 +899,28 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         return;
       }
       try {
-        const stagione = await creaStagione(pool, parsed.data);
-        await registraOperazione(pool, {
-          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
-          azione: 'crea_stagione',
-          entitaTipo: 'stagioni_sportive',
-          entitaId: stagione.id,
-          dettaglio: stagione as unknown as Record<string, unknown>,
+        const stagione = await eseguiInTransazione(pool, async (client) => {
+          const s = await creaStagione(client, parsed.data);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'crea_stagione',
+            entitaTipo: 'stagioni_sportive',
+            entitaId: s.id,
+            dettaglio: s as unknown as Record<string, unknown>,
+          });
+          return s;
         });
         res.status(201).json(stagione);
       } catch (err) {
+        if (err instanceof ErroreValoreDuplicato) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },

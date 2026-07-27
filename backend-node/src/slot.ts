@@ -59,9 +59,11 @@ export interface DatiCreaSlot {
   giornoSettimana: number;
   orarioInizio: string;
   orarioFine: string;
-  pregiata?: boolean;
-  indisponibilePermanente?: boolean;
-  note?: string;
+  // `| undefined` esplicito: vedi commento analogo in istituzioni.ts (stesso motivo,
+  // exactOptionalPropertyTypes vs output opzionale di zod).
+  pregiata?: boolean | undefined;
+  indisponibilePermanente?: boolean | undefined;
+  note?: string | undefined;
 }
 
 export async function creaSlot(db: Db, dati: DatiCreaSlot): Promise<SlotSettimanaTipo> {
@@ -119,7 +121,7 @@ export interface DatiAggiornaSlot {
   orarioFine: string;
   pregiata: boolean;
   indisponibilePermanente: boolean;
-  note?: string;
+  note?: string | undefined;
 }
 
 export async function aggiornaSlot(db: Db, id: string, dati: DatiAggiornaSlot): Promise<SlotSettimanaTipo> {
