@@ -63,5 +63,21 @@ test(
         ErroreNonTrovato,
       );
     });
+
+    await t.test('aggiorna omettendo disciplineCompatibili lascia la join table invariata', async () => {
+      const spazioConDiscipline = await creaSpazio(pool, {
+        impiantoId: impianto.id,
+        denominazione: 'Campo Test Omit',
+        disciplineCompatibili: [d1.codice, d2.codice],
+      });
+      const spazioIdOmit = spazioConDiscipline.id;
+      assert.deepEqual([...spazioConDiscipline.disciplineCompatibili].sort(), [d1.codice, d2.codice].sort());
+
+      const aggiornato = await aggiornaSpazio(pool, spazioIdOmit, {
+        denominazione: 'Campo Test Omit Rinominato',
+      });
+      assert.equal(aggiornato.denominazione, 'Campo Test Omit Rinominato');
+      assert.deepEqual([...aggiornato.disciplineCompatibili].sort(), [d1.codice, d2.codice].sort());
+    });
   },
 );

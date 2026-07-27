@@ -298,5 +298,35 @@ test(
       });
       assert.equal(r.status, 200);
     });
+
+    await t.test('aggiorna omettendo disciplineCompatibili preserva le discipline esistenti', async () => {
+      const discipline = await pool.query<{ codice: string }>(
+        `INSERT INTO discipline_sportive (codice, denominazione) VALUES
+         ('HTTPD1-${randomUUID().slice(0, 6)}', 'HTTP Disciplina 1'),
+         ('HTTPD2-${randomUUID().slice(0, 6)}', 'HTTP Disciplina 2')
+         RETURNING codice`,
+      );
+      const d1 = discipline.rows[0]!.codice;
+      const d2 = discipline.rows[1]!.codice;
+
+      const r = await fetch(`${base}/backoffice/impianti/${impiantoId}/spazi`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ denominazione: 'Campo Con Discipline', disciplineCompatibili: [d1, d2] }),
+      });
+      assert.equal(r.status, 201);
+      const spazio = (await r.json()) as { id: string; disciplineCompatibili: string[] };
+      const spazioIdOmit = spazio.id;
+      assert.deepEqual([...spazio.disciplineCompatibili].sort(), [d1, d2].sort());
+
+      const rUpdate = await fetch(`${base}/backoffice/spazi/${spazioIdOmit}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ denominazione: 'Campo Rinominato Omit' }),
+      });
+      assert.equal(rUpdate.status, 200);
+      const aggiornato = (await rUpdate.json()) as { disciplineCompatibili: string[] };
+      assert.deepEqual([...aggiornato.disciplineCompatibili].sort(), [d1, d2].sort());
+    });
   },
 );
