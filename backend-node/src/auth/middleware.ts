@@ -45,3 +45,17 @@ export function richiedeAutenticazionePubblico(req: RequestAutenticataPubblico, 
     res.status(401).json({ errore: 'token non valido o scaduto' });
   }
 }
+
+export function richiedeRuolo(...ruoliConsentiti: Array<PayloadAccessToken['ruolo']>) {
+  return (req: RequestAutenticata, res: Response, next: NextFunction): void => {
+    if (!req.utente) {
+      res.status(401).json({ errore: 'token mancante' });
+      return;
+    }
+    if (!ruoliConsentiti.includes(req.utente.ruolo)) {
+      res.status(403).json({ errore: 'ruolo non autorizzato' });
+      return;
+    }
+    next();
+  };
+}
