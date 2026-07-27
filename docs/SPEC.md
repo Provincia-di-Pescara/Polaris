@@ -46,7 +46,7 @@ Confini architetturali fissi:
 
 | Fase normativa | Articoli | Componente responsabile | Stato |
 |---|---|---|---|
-| 1. Quadro delle disponibilità (censimento impianti, settimana tipo, fasce pregiate) | B.2–B.4 | Schema ✅ · CRUD backoffice ❌ · UI ❌ | Solo schema |
+| 1. Quadro delle disponibilità (censimento impianti, settimana tipo, fasce pregiate) | B.2–B.4 | Schema ✅ · CRUD backoffice ✅ (`/backoffice/{istituzioni,impianti,spazi,discipline,slot,stagioni}`) · UI ❌ | **Fatto (backend)** |
 | 2. Presentazione delle domande | B.5–B.6 | Schema ✅ · API pubblica ❌ · UI ❌ | Solo schema |
 | 3. Istruttoria — verifica di ammissibilità | B.7 | API backoffice ❌ · UI ❌ | Solo schema |
 | 4. Calcolo dei parametri (FR, CRS, CAA, CSD, CP) | B.8–B.9 | Motore Go ✅ (`internal/istruttoria`, `POST /stagioni/{id}/istruttoria`) | **Fatto** |
@@ -93,9 +93,9 @@ Residui:
 Fatto: scaffold, `GET /healthz`, `GET /stagioni`, autenticazione locale backoffice completa (scrypt, JWT HS256 pinnato con audience, refresh rotation, rate limit, no user enumeration), OIDC SPID/CIE completa (PKCE, state one-shot in Postgres, verifica JWKS, JWT propri, protezione login-CSRF con cookie firmato). Tutto verificato con Postgres reale e IdP mock realistico.
 
 Da fare (ordine consigliato):
-1. **Middleware autorizzazione per ruolo** (`richiedeRuolo('admin')`) — il ruolo è già nel JWT, manca solo il middleware. Prerequisito di ogni endpoint impostazioni.
+1. ~~**Middleware autorizzazione per ruolo** (`richiedeRuolo('admin')`) — il ruolo è già nel JWT, manca solo il middleware. Prerequisito di ogni endpoint impostazioni.~~ ✅ **Fatto**: middleware in `src/auth/middleware.ts`, usato in tutti gli endpoint CRUD.
 2. **Audit log** (art. B.39): helper + integrazione su ogni scrittura (solo scritture, non letture). Oggi `log_operazioni` non è scritta da nessuno — lacuna normativa, non tecnica.
-3. **CRUD backoffice**: stagioni, istituzioni scolastiche, impianti/spazi/slot settimana tipo (incl. fasce pregiate — Fase normativa 1), discipline, utenti backoffice, parametrico versionato (nuova versione, mai update in place), impostazioni (SMTP, OIDC).
+3. ~~**CRUD backoffice**: stagioni, istituzioni scolastiche, impianti/spazi/slot settimana tipo (incl. fasce pregiate — Fase normativa 1), discipline, utenti backoffice, parametrico versionato (nuova versione, mai update in place), impostazioni (SMTP, OIDC).~~ ✅ **Fatto**: CRUD completo per discipline, istituzioni, impianti, spazi, slot, e creazione stagioni. Role-based via `richiedeRuolo('admin', 'operatore')` (admin solo per stagioni). Ogni operazione scrive `log_operazioni` (art. B.39). Gestione errori: `ErroreValoreDuplicato`/`ErroreNonTrovato` (23505/25P02) e `ErroreSovrapposizioneSlot` (23P01 EXCLUDE constraint) — quest'ultima mappa a HTTP 409.
 4. ~~Wizard primo avvio~~ ✅ **Fatto** (lato backend): endpoint `/auth/bootstrap/{stato,primo-admin,verifica}`, account attivato via link email, SMTP di bootstrap da `.env` (decisione committente — al primo avvio non c'è un admin che possa configurare SMTP da UI). Resta la UI del wizard (Fase 5).
 5. **Flusso pubblico**: accreditamento associazione + richiesta delega (art. 3–4), approvazione deleghe lato operatore, domanda con fabbisogni/preferenze/blocchi/giornate gara (B.5–B.6), osservazioni (B.11).
 6. **Orchestrazione procedimento**: macchina a stati della procedura per stagione (le 16 fasi normative come stati espliciti con transizioni registrate), chiamate al motore Go (istruttoria, blocchi gara, prima assegnazione), pubblicazioni (B.10, B.23, B.30).
@@ -133,10 +133,10 @@ Runbook operativo (deploy, rollback, restore), formazione operatori, migrazione/
 
 Convenzioni: JSON, `camelCase` in uscita, zod su ogni input, errori `{errore, dettagli?}`, Bearer JWT (audience `backoffice` o `pubblico`), 401 generici (no enumeration).
 
-Esistenti: `GET /healthz`, `GET /stagioni`, `GET /auth/bootstrap/stato`, `POST /auth/bootstrap/primo-admin|verifica`, `POST /auth/login|refresh|logout`, `GET /auth/me`, `GET /auth/oidc/start`, `POST /auth/oidc/callback`, `POST /auth/pubblico/refresh|logout`, `GET /auth/pubblico/me`. Motore (interno): `GET /healthz`, `POST /stagioni/{id}/istruttoria`, `POST /stagioni/{id}/blocchi-gara`, `POST /stagioni/{id}/prima-assegnazione`.
+Esistenti: `GET /healthz`, `GET /stagioni`, `GET /auth/bootstrap/stato`, `POST /auth/bootstrap/primo-admin|verifica`, `POST /auth/login|refresh|logout`, `GET /auth/me`, `GET /auth/oidc/start`, `POST /auth/oidc/callback`, `POST /auth/pubblico/refresh|logout`, `GET /auth/pubblico/me`, `POST /backoffice/stagioni`, `POST /backoffice/discipline`, `GET /backoffice/discipline`, `PUT /backoffice/discipline/:codice`, `POST /backoffice/istituzioni`, `GET /backoffice/istituzioni`, `GET /backoffice/istituzioni/:id`, `PUT /backoffice/istituzioni/:id`, `POST /backoffice/impianti`, `GET /backoffice/impianti`, `GET /backoffice/impianti/:id`, `PUT /backoffice/impianti/:id`, `POST /backoffice/impianti/:impiantoId/spazi`, `GET /backoffice/impianti/:impiantoId/spazi`, `GET /backoffice/spazi/:id`, `PUT /backoffice/spazi/:id`, `POST /backoffice/stagioni/:stagioneId/slot`, `GET /backoffice/stagioni/:stagioneId/slot`, `GET /backoffice/slot/:id`, `PUT /backoffice/slot/:id`. Motore (interno): `GET /healthz`, `POST /stagioni/{id}/istruttoria`, `POST /stagioni/{id}/blocchi-gara`, `POST /stagioni/{id}/prima-assegnazione`.
 
 Previste (nomi indicativi, da consolidare in fase di implementazione):
-- Backoffice: `/backoffice/stagioni`, `/backoffice/istituzioni`, `/backoffice/impianti`, `/backoffice/impianti/{id}/spazi`, `/backoffice/spazi/{id}/slot`, `/backoffice/discipline`, `/backoffice/utenti`, `/backoffice/parametrico` (POST = nuova versione), `/backoffice/impostazioni/{smtp|oidc}`, `/backoffice/deleghe/{id}/approva|respingi`, `/backoffice/domande/{id}/ammetti|escludi`, `/backoffice/stagioni/{id}/procedura/*` (transizioni di fase, avvio elaborazioni, pubblicazioni), `/backoffice/monitoraggio/*`.
+- Backoffice: `/backoffice/utenti`, `/backoffice/parametrico` (POST = nuova versione), `/backoffice/impostazioni/{smtp|oidc}`, `/backoffice/deleghe/{id}/approva|respingi`, `/backoffice/domande/{id}/ammetti|escludi`, `/backoffice/stagioni/{id}/procedura/*` (transizioni di fase, avvio elaborazioni, pubblicazioni), `/backoffice/monitoraggio/*`.
 - Pubblico: `/pubblico/associazioni` (accreditamento), `/pubblico/deleghe`, `/pubblico/domande` (+fabbisogni, preferenze, blocchi, giornate gara), `/pubblico/osservazioni`, `/pubblico/esiti`, `/pubblico/concertazione/*`, `/pubblico/calendario`.
 - Motore (da aggiungere): `POST /stagioni/{id}/riassegnazione-finale`.
 
