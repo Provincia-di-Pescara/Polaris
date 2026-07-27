@@ -29,6 +29,11 @@ import {
   type RequestAutenticataPubblico,
 } from './auth/middleware.ts';
 import { costruisciUrlAutorizzazione, ErroreOidcNonConfigurato, ErroreScambioCode, ErroreStatoNonValido } from './oidc/flow.ts';
+import { richiedeRuolo } from './auth/middleware.ts';
+import { registraOperazione } from './repository/logOperazioni.ts';
+import { ErroreValoreDuplicato, ErroreNonTrovato } from './erroriDominio.ts';
+import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './discipline.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina } from './backofficeSchema.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
 const COOKIE_PATH_OIDC = '/auth/oidc';
@@ -313,6 +318,80 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
   app.get('/auth/pubblico/me', richiedeAutenticazionePubblico, (req: RequestAutenticataPubblico, res) => {
     res.status(200).json(req.persona);
   });
+
+  // --- Backoffice: quadro delle disponibilità (Allegato B, Fase 1, art. B.2-B.4) ---
+  // Aperto sia ad admin che operatore (SPEC: "operatore: CRUD palestre/slot").
+
+  app.post(
+    '/backoffice/discipline',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaCreaDisciplina.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const disciplina = await creaDisciplina(pool, parsed.data);
+        await registraOperazione(pool, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+          azione: 'crea_disciplina_sportiva',
+          entitaTipo: 'discipline_sportive',
+          dettaglio: disciplina as unknown as Record<string, unknown>,
+        });
+        res.status(201).json(disciplina);
+      } catch (err) {
+        if (err instanceof ErroreValoreDuplicato) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get('/backoffice/discipline', richiedeAutenticazione, richiedeRuolo('admin', 'operatore'), async (_req, res) => {
+    try {
+      res.status(200).json(await listaDiscipline(pool));
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.put(
+    '/backoffice/discipline/:codice',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaAggiornaDisciplina.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const codice = typeof req.params.codice === 'string' ? req.params.codice : '';
+        const disciplina = await aggiornaDisciplina(pool, codice, parsed.data.denominazione);
+        await registraOperazione(pool, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+          azione: 'aggiorna_disciplina_sportiva',
+          entitaTipo: 'discipline_sportive',
+          dettaglio: disciplina as unknown as Record<string, unknown>,
+        });
+        res.status(200).json(disciplina);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreValoreDuplicato) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
 
   return app;
 }
