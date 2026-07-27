@@ -229,6 +229,19 @@ test(
       assert.equal(r.status, 400);
     });
 
+    // Finding 3 (review whole-branch): un UUID sintatticamente valido ma che non esiste in
+    // istituzioni_scolastiche violava la FK a runtime (23503) e faceva trapelare un 500 con
+    // l'errore Postgres grezzo, invece di un 400 leggibile — id ben formato ma dominio
+    // sbagliato, zod da solo non può accorgersene senza un round-trip sul DB.
+    await t.test('istituzioneScolasticaId valida ma inesistente (FK violation): 400, non 500', async () => {
+      const r = await fetch(`${base}/backoffice/impianti`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ denominazione: 'Palestra FK Inesistente', istituzioneScolasticaId: randomUUID() }),
+      });
+      assert.equal(r.status, 400);
+    });
+
     await t.test('get per id', async () => {
       const r = await fetch(`${base}/backoffice/impianti/${impiantoId}`, {
         headers: { Authorization: `Bearer ${operatore.token}` },
@@ -288,6 +301,16 @@ test(
     await t.test('get per id', async () => {
       const r = await fetch(`${base}/backoffice/spazi/${spazioId}`, { headers: { Authorization: `Bearer ${operatore.token}` } });
       assert.equal(r.status, 200);
+    });
+
+    // Finding 3 (review whole-branch): un path param non-UUID (es. digitato a mano, o un
+    // link rotto) fa fallire il cast implicito $1::uuid lato Postgres (22P02) — senza
+    // gestione, era un 500 con l'errore Postgres grezzo esposto al client.
+    await t.test('get con id malformato (non uuid): 400, non 500', async () => {
+      const r = await fetch(`${base}/backoffice/spazi/not-a-uuid`, {
+        headers: { Authorization: `Bearer ${operatore.token}` },
+      });
+      assert.equal(r.status, 400);
     });
 
     await t.test('aggiorna: 200', async () => {
@@ -386,6 +409,18 @@ test(
       assert.equal(r.status, 400);
     });
 
+    // Finding 3 (review whole-branch): orarioInizio >= orarioFine violava il CHECK
+    // slot_orario_valido a livello DB (23514) — catturato ora da zod .refine() prima di
+    // arrivare a Postgres, quindi 400 invece di un 500 con l'errore Postgres grezzo.
+    await t.test('orarioInizio dopo orarioFine: 400 (refine zod, non 23514/500 da Postgres)', async () => {
+      const r = await fetch(`${base}/backoffice/stagioni/${stagioneId}/slot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ spazioId, giornoSettimana: 2, orarioInizio: '18:00', orarioFine: '16:30' }),
+      });
+      assert.equal(r.status, 400);
+    });
+
     await t.test('lista slot della stagione', async () => {
       const r = await fetch(`${base}/backoffice/stagioni/${stagioneId}/slot`, {
         headers: { Authorization: `Bearer ${operatore.token}` },
@@ -457,6 +492,39 @@ test(
         body: JSON.stringify({ nome: `stagione-vietata-${randomUUID()}`, dataInizio: '2040-09-01', dataFine: '2041-06-30' }),
       });
       assert.equal(r.status, 403);
+    });
+
+    // Finding 3 (review whole-branch): dataInizio >= dataFine violava il CHECK
+    // stagioni_date_valide a livello DB (23514) — catturato ora da zod .refine(), 400
+    // invece di un 500 con l'errore Postgres grezzo.
+    await t.test('dataInizio dopo dataFine: 400 (refine zod, non 23514/500 da Postgres)', async () => {
+      const r = await fetch(`${base}/backoffice/stagioni`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ nome: `stagione-date-invertite-${randomUUID()}`, dataInizio: '2042-06-30', dataFine: '2042-01-01' }),
+      });
+      assert.equal(r.status, 400);
+    });
+
+    // Finding 4 (review whole-branch): stagioni_sportive_nome_uq (UNIQUE su nome) non era
+    // mappato su ErroreValoreDuplicato/409 come le altre entità con vincolo UNIQUE
+    // (istituzioni.codice_meccanografico, discipline.codice) — creaStagione lasciava
+    // trapelare un 23505 come 500 grezzo.
+    await t.test('nome stagione duplicato: 409, non 500', async () => {
+      const nome = `stagione-duplicata-${randomUUID()}`;
+      const primaRisposta = await fetch(`${base}/backoffice/stagioni`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ nome, dataInizio: '2043-09-01', dataFine: '2044-06-30' }),
+      });
+      assert.equal(primaRisposta.status, 201);
+
+      const secondaRisposta = await fetch(`${base}/backoffice/stagioni`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ nome, dataInizio: '2044-09-01', dataFine: '2045-06-30' }),
+      });
+      assert.equal(secondaRisposta.status, 409);
     });
   },
 );
