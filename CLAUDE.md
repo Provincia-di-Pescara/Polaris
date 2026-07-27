@@ -165,7 +165,7 @@ Smoke test del binario reale (`cmd/service`) contro Postgres vero: stessa rete D
 
 `backend-node/`, Node.js 24 (disponibile **in locale** su questa macchina, a differenza di Go/Postgres — niente Docker necessario per lo sviluppo Node, solo per Postgres di test). TypeScript 7.0.2 esatto (`--save-exact`, coerente con la ricerca versioni fatta a inizio progetto).
 
-**Package manager: pnpm** (direttiva esplicita) — non npm. Repo avrà 3 pacchetti Node/TS nel tempo (backend + 2 frontend), pnpm workspaces è pensato per questo (link tra pacchetti, store condiviso, niente dipendenze fantasma). Installato via `npm install -g pnpm` (non `corepack enable`: su questa macchina Windows fallisce con EPERM scrivendo in `Program Files`, servono permessi admin che non ci sono). Comandi: `pnpm install`, `pnpm add <pkg>`, `pnpm add -D <pkg>`, `pnpm exec tsc`.
+**Package manager: pnpm** (direttiva esplicita) — non npm. Repo avrà 3 pacchetti Node/TS nel tempo (backend + 2 frontend), pnpm workspaces è pensato per questo (link tra pacchetti, store condiviso, niente dipendenze fantasma). Installato via `npm install -g pnpm` (non `corepack enable`: su questa macchina Windows fallisce con EPERM scrivendo in `Program Files`, servono permessi admin che non ci sono). Comandi: `pnpm install`, `pnpm add <pkg>`, `pnpm add -D <pkg>`, `pnpm exec tsc`. Se `pnpm exec tsc` fallisce per un problema del workspace pnpm non legato al codice (es. gate `approve-builds`), fallback diretto `./node_modules/.bin/tsc` dentro `backend-node/`, bypassa il workspace.
 
 Scelte tecniche:
 - **Niente ORM**: `pg` diretto con query parametrizzate, stessa disciplina SQL puro di `db/migrations` e `internal/postgres`.
@@ -210,6 +210,15 @@ Fatto — **CRUD quadro delle disponibilità** (Allegato B, Fase normativa 1, ar
 **Residui noti da questo blocco** (non bloccanti, nessun task successivo ne dipende):
 - `GET /backoffice/impianti/:impiantoId/spazi` e `GET /backoffice/stagioni/:stagioneId/slot` non hanno ancora il mapping 22P02→400 sul parametro path (applicato altrove 15 volte, qui mancante) — un UUID malformato in questi due ritorna 500 grezzo invece di 400.
 - Le 2 route spazi (POST/PUT) scrivono l'audit log FUORI dalla propria transazione (a differenza delle altre 9): se l'insert di `log_operazioni` fallisce dopo che l'entità è già stata scritta, resta una scrittura non tracciata. Richiede far accettare a `creaSpazio`/`aggiornaSpazio` un client esterno invece di aprire la propria transazione internamente.
+
+**Pattern da riusare per le prossime ~15 entità CRUD** (emersi dalla review finale whole-branch, non dai singoli task review — vale la pena applicarli fin dal primo task della prossima entità, non solo scoprirli in retrospettiva):
+- Route che scrive più tabelle nella stessa operazione (entità+join-table, entità+audit-log) va avvolta in una transazione esplicita (`pool.connect()` + `BEGIN`/`COMMIT`/`ROLLBACK` nel `finally`) — mai `await` sequenziali su `Pool` diretto.
+- Mappare anche `22P02` (UUID malformato) e `23503` (FK inesistente) a HTTP 400, non solo `23505`/`23P01` — su OGNI route di scrittura E sulle GET-by-id/list-by-parent (un UUID malformato in un path param è un caso di lettura, non solo di scrittura).
+- CHECK constraint su coppie di campi (es. `X > Y`) vanno replicati come `.refine()` zod cross-campo, non lasciati al DB — altrimenti tornano 500 invece di 400.
+- PUT che aggiorna più campi array/join-table sullo stesso endpoint: scegliere UNA regola per "campo omesso dal body" (preserva o svuota) e applicarla a TUTTI i campi array di quell'endpoint — un mix tra campi gemelli è un bug di consistenza reale, non uno stilistico.
+- `tsconfig.json` ha `exactOptionalPropertyTypes: true`: le interfacce `Dati*` con campi opzionali vanno dichiarate `campo?: T | undefined` esplicito (non solo `campo?: T`), altrimenti passare l'output di `zod.optional()` a un repository richiede un cast `as {...}` a ogni route.
+
+Blocco eseguito con lo skill `superpowers:subagent-driven-development` (piano in `docs/superpowers/plans/2026-07-27-ruolo-crud-quadro-disponibilita.md`): il file del piano NON viene committato automaticamente dallo script dello skill — solo i commit dei singoli task lo sono. Controllare `git status` prima del "finish" e committarlo a parte se manca.
 
 Da fare: CORS + security headers (`helmet`) — rimandato, da decidere insieme al design della rete tra container, lockout per-account sui tentativi falliti (richiede migration), parametrico versionato (lettura/nuova versione), impostazioni (SMTP, OIDC, branding), gestione utenti backoffice, orchestrazione delle 16 fasi procedurali (Allegato B), coda verso l'HTTP del motore Go (`internal/httpapi`) per istruttoria/prima-assegnazione.
 
