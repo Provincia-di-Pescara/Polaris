@@ -330,3 +330,90 @@ test(
     });
   },
 );
+
+test(
+  'CRUD backoffice: slot settimana tipo (server vero, ruolo, conflitto EXCLUDE)',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const pool = new Pool({ connectionString: dsn });
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return pool.end();
+    });
+
+    const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+    const stagione = await pool.query<{ id: string }>(
+      `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2036-09-01', '2037-06-30') RETURNING id`,
+      [`slot-http-${randomUUID()}`],
+    );
+    const stagioneId = stagione.rows[0]!.id;
+    const impianto = await pool.query<{ id: string }>(`INSERT INTO impianti (denominazione) VALUES ('Impianto Slot HTTP') RETURNING id`);
+    const spazio = await pool.query<{ id: string }>(
+      `INSERT INTO spazi_sportivi (impianto_id, denominazione) VALUES ($1, 'Campo Slot HTTP') RETURNING id`,
+      [impianto.rows[0]!.id],
+    );
+    const spazioId = spazio.rows[0]!.id;
+    let slotId = '';
+
+    await t.test('crea slot dentro la stagione: 201', async () => {
+      const r = await fetch(`${base}/backoffice/stagioni/${stagioneId}/slot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ spazioId, giornoSettimana: 1, orarioInizio: '16:30', orarioFine: '18:00' }),
+      });
+      assert.equal(r.status, 201);
+      const body = (await r.json()) as { id: string; durataMinuti: number };
+      slotId = body.id;
+      assert.equal(body.durataMinuti, 90);
+    });
+
+    await t.test('crea slot sovrapposto: 409', async () => {
+      const r = await fetch(`${base}/backoffice/stagioni/${stagioneId}/slot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ spazioId, giornoSettimana: 1, orarioInizio: '17:00', orarioFine: '19:00' }),
+      });
+      assert.equal(r.status, 409);
+    });
+
+    await t.test('orario malformato: 400', async () => {
+      const r = await fetch(`${base}/backoffice/stagioni/${stagioneId}/slot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ spazioId, giornoSettimana: 1, orarioInizio: '25:99', orarioFine: '18:00' }),
+      });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('lista slot della stagione', async () => {
+      const r = await fetch(`${base}/backoffice/stagioni/${stagioneId}/slot`, {
+        headers: { Authorization: `Bearer ${operatore.token}` },
+      });
+      const lista = (await r.json()) as { id: string }[];
+      assert.ok(lista.some((s) => s.id === slotId));
+    });
+
+    await t.test('get per id', async () => {
+      const r = await fetch(`${base}/backoffice/slot/${slotId}`, { headers: { Authorization: `Bearer ${operatore.token}` } });
+      assert.equal(r.status, 200);
+    });
+
+    await t.test('aggiorna marcando indisponibile_permanente: 200', async () => {
+      const r = await fetch(`${base}/backoffice/slot/${slotId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({
+          giornoSettimana: 1,
+          orarioInizio: '16:30',
+          orarioFine: '18:00',
+          pregiata: false,
+          indisponibilePermanente: true,
+        }),
+      });
+      assert.equal(r.status, 200);
+      const body = (await r.json()) as { indisponibilePermanente: boolean };
+      assert.equal(body.indisponibilePermanente, true);
+    });
+  },
+);

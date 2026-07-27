@@ -36,7 +36,8 @@ import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './disciplin
 import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstituzione } from './istituzioni.ts';
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio } from './backofficeSchema.ts';
+import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot } from './backofficeSchema.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
 const COOKIE_PATH_OIDC = '/auth/oidc';
@@ -656,6 +657,105 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       } catch (err) {
         if (err instanceof ErroreNonTrovato) {
           res.status(404).json({ errore: err.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.post(
+    '/backoffice/stagioni/:stagioneId/slot',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaCreaSlot.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const stagioneId = typeof req.params.stagioneId === 'string' ? req.params.stagioneId : '';
+        const slot = await creaSlot(pool, { ...parsed.data as { spazioId: string; giornoSettimana: number; orarioInizio: string; orarioFine: string; pregiata?: boolean; indisponibilePermanente?: boolean; note?: string }, stagioneId });
+        await registraOperazione(pool, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+          azione: 'crea_slot_settimana_tipo',
+          entitaTipo: 'slot_settimana_tipo',
+          entitaId: slot.id,
+          dettaglio: slot as unknown as Record<string, unknown>,
+        });
+        res.status(201).json(slot);
+      } catch (err) {
+        if (err instanceof ErroreSovrapposizioneSlot) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/backoffice/stagioni/:stagioneId/slot',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req, res) => {
+      const parsed = schemaQueryListaSlot.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const stagioneId = typeof req.params.stagioneId === 'string' ? req.params.stagioneId : '';
+        res.status(200).json(await listaSlotPerStagione(pool, stagioneId, parsed.data.spazioId));
+      } catch (err) {
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get('/backoffice/slot/:id', richiedeAutenticazione, richiedeRuolo('admin', 'operatore'), async (req, res) => {
+    try {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      const slot = await trovaSlotPerId(pool, id);
+      if (!slot) {
+        res.status(404).json({ errore: 'slot non trovato' });
+        return;
+      }
+      res.status(200).json(slot);
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.put(
+    '/backoffice/slot/:id',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaAggiornaSlot.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const id = typeof req.params.id === 'string' ? req.params.id : '';
+        const slot = await aggiornaSlot(pool, id, parsed.data as { giornoSettimana: number; orarioInizio: string; orarioFine: string; pregiata: boolean; indisponibilePermanente: boolean; note?: string });
+        await registraOperazione(pool, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+          azione: 'aggiorna_slot_settimana_tipo',
+          entitaTipo: 'slot_settimana_tipo',
+          entitaId: slot.id,
+          dettaglio: slot as unknown as Record<string, unknown>,
+        });
+        res.status(200).json(slot);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreSovrapposizioneSlot) {
+          res.status(409).json({ errore: err.message });
           return;
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });

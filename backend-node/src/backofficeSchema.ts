@@ -51,3 +51,30 @@ export const schemaAggiornaSpazio = z.object({
   disciplineCompatibili: z.array(z.string().min(1)).optional(),
 });
 export type AggiornaSpazioRequest = z.infer<typeof schemaAggiornaSpazio>;
+
+const REGEX_ORARIO = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export const schemaCreaSlot = z.object({
+  spazioId: z.string().uuid(),
+  giornoSettimana: z.number().int().min(1).max(7),
+  orarioInizio: z.string().regex(REGEX_ORARIO),
+  orarioFine: z.string().regex(REGEX_ORARIO),
+  pregiata: z.boolean().optional(),
+  indisponibilePermanente: z.boolean().optional(),
+  note: z.string().min(1).optional(),
+});
+export type CreaSlotRequest = z.infer<typeof schemaCreaSlot>;
+
+export const schemaAggiornaSlot = z.object({
+  giornoSettimana: z.number().int().min(1).max(7),
+  orarioInizio: z.string().regex(REGEX_ORARIO),
+  orarioFine: z.string().regex(REGEX_ORARIO),
+  pregiata: z.boolean(),
+  indisponibilePermanente: z.boolean(),
+  note: z.string().min(1).optional(),
+});
+export type AggiornaSlotRequest = z.infer<typeof schemaAggiornaSlot>;
+
+export const schemaQueryListaSlot = z.object({
+  spazioId: z.string().uuid().optional(),
+});
