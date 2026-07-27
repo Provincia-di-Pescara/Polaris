@@ -1,4 +1,6 @@
-import type { Pool } from 'pg';
+import { DatabaseError, type Pool } from 'pg';
+import type { Db } from './db.ts';
+import { ErroreValoreDuplicato } from './erroriDominio.ts';
 
 export interface Stagione {
   id: string;
@@ -38,18 +40,27 @@ export interface DatiCreaStagione {
   dataFine: string;
 }
 
-export async function creaStagione(pool: Pool, dati: DatiCreaStagione): Promise<Stagione> {
-  const r = await pool.query<RigaStagione>(
-    `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, $2, $3)
-     RETURNING id, nome, data_inizio::text, data_fine::text, stato`,
-    [dati.nome, dati.dataInizio, dati.dataFine],
-  );
-  const riga = r.rows[0]!;
-  return {
-    id: riga.id,
-    nome: riga.nome,
-    dataInizio: riga.data_inizio,
-    dataFine: riga.data_fine,
-    stato: riga.stato,
-  };
+// db: Db (non Pool) — deve poter girare dentro la transazione entità+audit-log aperta dal
+// chiamante in server.ts (stesso pattern di discipline.ts/istituzioni.ts/impianti.ts/slot.ts).
+export async function creaStagione(db: Db, dati: DatiCreaStagione): Promise<Stagione> {
+  try {
+    const r = await db.query<RigaStagione>(
+      `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, $2, $3)
+       RETURNING id, nome, data_inizio::text, data_fine::text, stato`,
+      [dati.nome, dati.dataInizio, dati.dataFine],
+    );
+    const riga = r.rows[0]!;
+    return {
+      id: riga.id,
+      nome: riga.nome,
+      dataInizio: riga.data_inizio,
+      dataFine: riga.data_fine,
+      stato: riga.stato,
+    };
+  } catch (err) {
+    if (err instanceof DatabaseError && err.code === '23505') {
+      throw new ErroreValoreDuplicato('nome stagione già utilizzato');
+    }
+    throw err;
+  }
 }

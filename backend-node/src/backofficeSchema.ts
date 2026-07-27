@@ -54,34 +54,56 @@ export type AggiornaSpazioRequest = z.infer<typeof schemaAggiornaSpazio>;
 
 const REGEX_ORARIO = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-export const schemaCreaSlot = z.object({
-  spazioId: z.string().uuid(),
-  giornoSettimana: z.number().int().min(1).max(7),
-  orarioInizio: z.string().regex(REGEX_ORARIO),
-  orarioFine: z.string().regex(REGEX_ORARIO),
-  pregiata: z.boolean().optional(),
-  indisponibilePermanente: z.boolean().optional(),
-  note: z.string().min(1).optional(),
-});
+// Rispecchia il CHECK slot_orario_valido (orario_fine > orario_inizio) del DB: catturato
+// qui con zod (400) invece di farlo emergere come 23514/500 dal driver Postgres. Il
+// confronto stringa funziona perché il formato è HH:MM validato dal regex sopra, che
+// ordina lessicograficamente come l'orario.
+export const schemaCreaSlot = z
+  .object({
+    spazioId: z.string().uuid(),
+    giornoSettimana: z.number().int().min(1).max(7),
+    orarioInizio: z.string().regex(REGEX_ORARIO),
+    orarioFine: z.string().regex(REGEX_ORARIO),
+    pregiata: z.boolean().optional(),
+    indisponibilePermanente: z.boolean().optional(),
+    note: z.string().min(1).optional(),
+  })
+  .refine((d) => d.orarioInizio < d.orarioFine, {
+    message: 'orarioInizio deve precedere orarioFine',
+    path: ['orarioFine'],
+  });
 export type CreaSlotRequest = z.infer<typeof schemaCreaSlot>;
 
-export const schemaAggiornaSlot = z.object({
-  giornoSettimana: z.number().int().min(1).max(7),
-  orarioInizio: z.string().regex(REGEX_ORARIO),
-  orarioFine: z.string().regex(REGEX_ORARIO),
-  pregiata: z.boolean(),
-  indisponibilePermanente: z.boolean(),
-  note: z.string().min(1).optional(),
-});
+export const schemaAggiornaSlot = z
+  .object({
+    giornoSettimana: z.number().int().min(1).max(7),
+    orarioInizio: z.string().regex(REGEX_ORARIO),
+    orarioFine: z.string().regex(REGEX_ORARIO),
+    pregiata: z.boolean(),
+    indisponibilePermanente: z.boolean(),
+    note: z.string().min(1).optional(),
+  })
+  .refine((d) => d.orarioInizio < d.orarioFine, {
+    message: 'orarioInizio deve precedere orarioFine',
+    path: ['orarioFine'],
+  });
 export type AggiornaSlotRequest = z.infer<typeof schemaAggiornaSlot>;
 
 export const schemaQueryListaSlot = z.object({
   spazioId: z.string().uuid().optional(),
 });
 
-export const schemaCreaStagione = z.object({
-  nome: z.string().min(1),
-  dataInizio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  dataFine: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-});
+// Rispecchia il CHECK stagioni_date_valide (data_fine > data_inizio) del DB — stesso
+// motivo del refine sugli slot sopra: 400 da zod invece di 23514/500 da Postgres. Le
+// stringhe ISO YYYY-MM-DD ordinano correttamente come le date che rappresentano.
+export const schemaCreaStagione = z
+  .object({
+    nome: z.string().min(1),
+    dataInizio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    dataFine: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  })
+  .refine((d) => d.dataInizio < d.dataFine, {
+    message: 'dataInizio deve precedere dataFine',
+    path: ['dataFine'],
+  });
 export type CreaStagioneRequest = z.infer<typeof schemaCreaStagione>;
