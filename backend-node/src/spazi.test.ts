@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
+import { DatabaseError } from 'pg';
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaImpianto } from './impianti.ts';
 import { creaDisciplina } from './discipline.ts';
@@ -78,6 +79,47 @@ test(
       });
       assert.equal(aggiornato.denominazione, 'Campo Test Omit Rinominato');
       assert.deepEqual([...aggiornato.disciplineCompatibili].sort(), [d1.codice, d2.codice].sort());
+    });
+
+    // Finding 1 (review whole-branch): omologazioni doveva seguire lo STESSO principio
+    // "ometti per preservare" di disciplineCompatibili sopra, non svuotarsi a []. Stesso
+    // scenario del test sopra ma sul campo omologazioni.
+    await t.test('aggiorna omettendo omologazioni lascia il valore precedente invariato', async () => {
+      const spazioConOmologazioni = await creaSpazio(pool, {
+        impiantoId: impianto.id,
+        denominazione: 'Campo Test Omit Omologazioni',
+        omologazioni: ['X'],
+      });
+      assert.deepEqual(spazioConOmologazioni.omologazioni, ['X']);
+
+      const aggiornato = await aggiornaSpazio(pool, spazioConOmologazioni.id, {
+        denominazione: 'Campo Test Omit Omologazioni Rinominato',
+      });
+      assert.equal(aggiornato.denominazione, 'Campo Test Omit Omologazioni Rinominato');
+      assert.deepEqual(aggiornato.omologazioni, ['X']);
+    });
+
+    // Finding 2 (review whole-branch): sostituisciDisciplineCompatibili faceva DELETE+N
+    // INSERT senza transazione — un INSERT fallito a metà (FK verso discipline_sportice
+    // inesistente) lasciava la join table svuotata permanentemente. Verifica sia il rifiuto
+    // sia che lo stato precedente sopravviva intatto (atomicità, non solo l'errore).
+    await t.test('aggiorna con un codice disciplina inesistente non perde le discipline precedenti', async () => {
+      const spazioProtetto = await creaSpazio(pool, {
+        impiantoId: impianto.id,
+        denominazione: 'Campo Test Atomicita',
+        disciplineCompatibili: [d1.codice, d2.codice],
+      });
+
+      await assert.rejects(
+        aggiornaSpazio(pool, spazioProtetto.id, {
+          denominazione: 'Campo Test Atomicita',
+          disciplineCompatibili: [d1.codice, `NON-ESISTE-${randomUUID()}`],
+        }),
+        (err: unknown) => err instanceof DatabaseError && err.code === '23503',
+      );
+
+      const dopo = await trovaSpazioPerId(pool, spazioProtetto.id);
+      assert.deepEqual([...dopo!.disciplineCompatibili].sort(), [d1.codice, d2.codice].sort());
     });
   },
 );
