@@ -33,7 +33,8 @@ import { richiedeRuolo } from './auth/middleware.ts';
 import { registraOperazione } from './repository/logOperazioni.ts';
 import { ErroreValoreDuplicato, ErroreNonTrovato } from './erroriDominio.ts';
 import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './discipline.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina } from './backofficeSchema.ts';
+import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstituzione } from './istituzioni.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione } from './backofficeSchema.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
 const COOKIE_PATH_OIDC = '/auth/oidc';
@@ -379,6 +380,98 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           dettaglio: disciplina as unknown as Record<string, unknown>,
         });
         res.status(200).json(disciplina);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreValoreDuplicato) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.post(
+    '/backoffice/istituzioni',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaCreaIstituzione.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const istituzione = await creaIstituzione(pool, parsed.data as { denominazione: string; codiceMeccanografico?: string; indirizzo?: string });
+        await registraOperazione(pool, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+          azione: 'crea_istituzione_scolastica',
+          entitaTipo: 'istituzioni_scolastiche',
+          entitaId: istituzione.id,
+          dettaglio: istituzione as unknown as Record<string, unknown>,
+        });
+        res.status(201).json(istituzione);
+      } catch (err) {
+        if (err instanceof ErroreValoreDuplicato) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get('/backoffice/istituzioni', richiedeAutenticazione, richiedeRuolo('admin', 'operatore'), async (_req, res) => {
+    try {
+      res.status(200).json(await listaIstituzioni(pool));
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get(
+    '/backoffice/istituzioni/:id',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req, res) => {
+      try {
+        const id = typeof req.params.id === 'string' ? req.params.id : '';
+        const istituzione = await trovaIstituzionePerId(pool, id);
+        if (!istituzione) {
+          res.status(404).json({ errore: 'istituzione non trovata' });
+          return;
+        }
+        res.status(200).json(istituzione);
+      } catch (err) {
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.put(
+    '/backoffice/istituzioni/:id',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaAggiornaIstituzione.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const id = typeof req.params.id === 'string' ? req.params.id : '';
+        const istituzione = await aggiornaIstituzione(pool, id, parsed.data as { denominazione: string; codiceMeccanografico?: string; indirizzo?: string });
+        await registraOperazione(pool, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+          azione: 'aggiorna_istituzione_scolastica',
+          entitaTipo: 'istituzioni_scolastiche',
+          entitaId: istituzione.id,
+          dettaglio: istituzione as unknown as Record<string, unknown>,
+        });
+        res.status(200).json(istituzione);
       } catch (err) {
         if (err instanceof ErroreNonTrovato) {
           res.status(404).json({ errore: err.message });

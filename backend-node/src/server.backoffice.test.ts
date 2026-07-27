@@ -127,3 +127,70 @@ test(
     });
   },
 );
+
+test(
+  'CRUD backoffice: istituzioni scolastiche (server vero, ruolo)',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const pool = new Pool({ connectionString: dsn });
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return pool.end();
+    });
+
+    const admin = await creaUtenteBackofficeTest(pool, 'admin');
+    let istituzioneId = '';
+
+    await t.test('admin crea un\'istituzione: 201, log_operazioni scritto', async () => {
+      const r = await fetch(`${base}/backoffice/istituzioni`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ denominazione: 'IIS Backoffice Test' }),
+      });
+      assert.equal(r.status, 201);
+      const body = (await r.json()) as { id: string; denominazione: string };
+      istituzioneId = body.id;
+      assert.ok(istituzioneId);
+
+      const log = await pool.query(
+        `SELECT entita_id FROM log_operazioni WHERE utente_backoffice_id = $1 AND azione = 'crea_istituzione_scolastica'`,
+        [admin.id],
+      );
+      assert.equal(log.rows[0]!.entita_id, istituzioneId);
+    });
+
+    await t.test('lista include l\'istituzione creata', async () => {
+      const r = await fetch(`${base}/backoffice/istituzioni`, { headers: { Authorization: `Bearer ${admin.token}` } });
+      const lista = (await r.json()) as { id: string }[];
+      assert.ok(lista.some((i) => i.id === istituzioneId));
+    });
+
+    await t.test('get per id', async () => {
+      const r = await fetch(`${base}/backoffice/istituzioni/${istituzioneId}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      assert.equal(r.status, 200);
+      const body = (await r.json()) as { denominazione: string };
+      assert.equal(body.denominazione, 'IIS Backoffice Test');
+    });
+
+    await t.test('get per id inesistente: 404', async () => {
+      const r = await fetch(`${base}/backoffice/istituzioni/${randomUUID()}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      assert.equal(r.status, 404);
+    });
+
+    await t.test('aggiorna: 200', async () => {
+      const r = await fetch(`${base}/backoffice/istituzioni/${istituzioneId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ denominazione: 'IIS Rinominato' }),
+      });
+      assert.equal(r.status, 200);
+      const body = (await r.json()) as { denominazione: string };
+      assert.equal(body.denominazione, 'IIS Rinominato');
+    });
+  },
+);
