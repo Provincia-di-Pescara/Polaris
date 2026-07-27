@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { listaStagioni } from './stagioni.ts';
+import { listaStagioni, creaStagione } from './stagioni.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 // nome univoco per-esecuzione: i test devono restare rieseguibili su un DB locale persistente
@@ -28,6 +28,23 @@ test(
       assert.equal(trovata?.nome, nomeStagione);
       assert.equal(trovata?.stato, 'censimento');
       assert.equal(trovata?.dataInizio, '2029-09-01');
+    } finally {
+      await pool.end();
+    }
+  },
+);
+
+test(
+  'creaStagione contro Postgres reale',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async () => {
+    const pool = new Pool({ connectionString: dsn });
+    try {
+      const nome = `stagione-creata-${randomUUID()}`;
+      const stagione = await creaStagione(pool, { nome, dataInizio: '2038-09-01', dataFine: '2039-06-30' });
+      assert.equal(stagione.nome, nome);
+      assert.equal(stagione.stato, 'censimento');
+      assert.equal(stagione.dataInizio, '2038-09-01');
     } finally {
       await pool.end();
     }

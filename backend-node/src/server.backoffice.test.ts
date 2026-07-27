@@ -417,3 +417,46 @@ test(
     });
   },
 );
+
+test(
+  'creazione stagioni: solo admin (server vero)',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const pool = new Pool({ connectionString: dsn });
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return pool.end();
+    });
+
+    const admin = await creaUtenteBackofficeTest(pool, 'admin');
+    const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+
+    await t.test('admin crea una stagione: 201, log_operazioni scritto', async () => {
+      const nome = `stagione-http-${randomUUID()}`;
+      const r = await fetch(`${base}/backoffice/stagioni`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ nome, dataInizio: '2039-09-01', dataFine: '2040-06-30' }),
+      });
+      assert.equal(r.status, 201);
+      const body = (await r.json()) as { id: string; nome: string };
+      assert.equal(body.nome, nome);
+
+      const log = await pool.query(
+        `SELECT entita_id FROM log_operazioni WHERE utente_backoffice_id = $1 AND azione = 'crea_stagione'`,
+        [admin.id],
+      );
+      assert.equal(log.rows[0]!.entita_id, body.id);
+    });
+
+    await t.test('operatore NON può creare una stagione: 403', async () => {
+      const r = await fetch(`${base}/backoffice/stagioni`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ nome: `stagione-vietata-${randomUUID()}`, dataInizio: '2040-09-01', dataFine: '2041-06-30' }),
+      });
+      assert.equal(r.status, 403);
+    });
+  },
+);

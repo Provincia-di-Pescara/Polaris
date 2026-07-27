@@ -31,3 +31,25 @@ export async function listaStagioni(pool: Pool): Promise<Stagione[]> {
     stato: riga.stato,
   }));
 }
+
+export interface DatiCreaStagione {
+  nome: string;
+  dataInizio: string;
+  dataFine: string;
+}
+
+export async function creaStagione(pool: Pool, dati: DatiCreaStagione): Promise<Stagione> {
+  const r = await pool.query<RigaStagione>(
+    `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, $2, $3)
+     RETURNING id, nome, data_inizio::text, data_fine::text, stato`,
+    [dati.nome, dati.dataInizio, dati.dataFine],
+  );
+  const riga = r.rows[0]!;
+  return {
+    id: riga.id,
+    nome: riga.nome,
+    dataInizio: riga.data_inizio,
+    dataFine: riga.data_fine,
+    stato: riga.stato,
+  };
+}

@@ -3,7 +3,7 @@ import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
 import { timingSafeEqual } from 'node:crypto';
 import type { Pool } from 'pg';
-import { listaStagioni } from './stagioni.ts';
+import { listaStagioni, creaStagione } from './stagioni.ts';
 import { eseguiLogin, eseguiLogout, eseguiRefresh } from './auth/login.ts';
 import { eseguiCallbackOidc, eseguiLogoutPubblico, eseguiRefreshPubblico } from './auth/loginPubblico.ts';
 import { ErroreCredenzialiNonValide, ErroreRefreshTokenNonValido, ErroreUtenteDisattivato } from './auth/errori.ts';
@@ -37,7 +37,7 @@ import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstit
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot } from './backofficeSchema.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione } from './backofficeSchema.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
 const COOKIE_PATH_OIDC = '/auth/oidc';
@@ -758,6 +758,32 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(409).json({ errore: err.message });
           return;
         }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.post(
+    '/backoffice/stagioni',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaCreaStagione.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const stagione = await creaStagione(pool, parsed.data);
+        await registraOperazione(pool, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+          azione: 'crea_stagione',
+          entitaTipo: 'stagioni_sportive',
+          entitaId: stagione.id,
+          dettaglio: stagione as unknown as Record<string, unknown>,
+        });
+        res.status(201).json(stagione);
+      } catch (err) {
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },
