@@ -64,6 +64,9 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-}
       BACKOFFICE_BASE_URL: ${BACKOFFICE_BASE_URL:-}
+      DOCUMENTI_STORAGE_PATH: /data/documenti
+    volumes:
+      - documenti_associazioni:/data/documenti
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,6 +109,7 @@ services:
 volumes:
   postgres_data:
   postgres_backups:
+  documenti_associazioni:
 
 networks:
   polaris-net:

@@ -33,7 +33,9 @@ services:
       - ./backend-node/package.json:/app/package.json:ro
       - ./backend-node/tsconfig.json:/app/tsconfig.json:ro
       - backend_node_modules:/app/node_modules
+      - documenti_associazioni_dev:/data/documenti
 
 volumes:
   go_mod_cache:
   backend_node_modules:
+  documenti_associazioni_dev:
