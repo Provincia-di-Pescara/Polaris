@@ -112,3 +112,14 @@ export const schemaRespingiDelega = z.object({
   motivazione: z.string().min(1),
 });
 export type RespingiDelegaRequest = z.infer<typeof schemaRespingiDelega>;
+
+// clientSecret opzionale: merge-on-omit gestito da scriviConfigOidc (Task 1) — un PUT
+// senza clientSecret preserva quello già salvato, tranne al primo salvataggio in assoluto
+// (ErroreClientSecretMancante, mappato a 400 dalla route).
+export const schemaImpostazioniOidc = z.object({
+  issuer: z.string().url(),
+  clientId: z.string().min(1),
+  redirectUri: z.string().url(),
+  clientSecret: z.string().min(1).optional(),
+});
+export type ImpostazioniOidcRequest = z.infer<typeof schemaImpostazioniOidc>;

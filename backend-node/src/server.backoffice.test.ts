@@ -7,6 +7,7 @@ import { hashPassword } from './auth/password.ts';
 import { generaAccessToken } from './auth/jwt.ts';
 import { creaAssociazione } from './associazioni.ts';
 import { creaAbilitazionePrincipale } from './abilitazioni.ts';
+import { creaDatabaseDedicato } from './testutil/dbDedicato.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 process.env.JWT_SECRET ??= 'segreto-di-test-non-usare-in-produzione';
@@ -671,6 +672,109 @@ test(
         headers: { Authorization: `Bearer ${operatore.token}` },
       });
       assert.equal(r.status, 404);
+    });
+  },
+);
+
+test(
+  'GET/PUT /backoffice/impostazioni/oidc: solo admin, secret mai in chiaro, merge-on-omit',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    // Chiave singleton 'oidc' in impostazioni_sistema: gli scenari sotto dipendono dallo
+    // stato esatto della configurazione (incluso "nessuna config esiste ancora" per il
+    // primo GET/PUT), e server.test.ts/loginPubblico.test.ts scrivono la stessa chiave in
+    // parallelo sul DB condiviso — stesso gotcha già risolto nel Task 1
+    // (oidc/config.test.ts), stesso rimedio: database dedicato usa-e-getta.
+    const { pool, distruggi } = await creaDatabaseDedicato(dsn!);
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return distruggi();
+    });
+
+    const admin = await creaUtenteBackofficeTest(pool, 'admin');
+    const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+
+    await t.test('operatore: 403 su GET e PUT', async () => {
+      const rGet = await fetch(`${base}/backoffice/impostazioni/oidc`, {
+        headers: { Authorization: `Bearer ${operatore.token}` },
+      });
+      assert.equal(rGet.status, 403);
+      const rPut = await fetch(`${base}/backoffice/impostazioni/oidc`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({}),
+      });
+      assert.equal(rPut.status, 403);
+    });
+
+    await t.test('admin, GET senza config: 404', async () => {
+      const r = await fetch(`${base}/backoffice/impostazioni/oidc`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      assert.equal(r.status, 404);
+    });
+
+    await t.test('admin, primo PUT senza clientSecret: 400', async () => {
+      const r = await fetch(`${base}/backoffice/impostazioni/oidc`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({
+          issuer: 'https://idp-http-test.invalid',
+          clientId: 'client-http-test',
+          redirectUri: 'https://app-http-test.invalid/cb',
+        }),
+      });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('admin, primo PUT con clientSecret: 200, GET non espone il secret', async () => {
+      const rPut = await fetch(`${base}/backoffice/impostazioni/oidc`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({
+          issuer: 'https://idp-http-test.invalid',
+          clientId: 'client-http-test',
+          clientSecret: 'segreto-http-test',
+          redirectUri: 'https://app-http-test.invalid/cb',
+        }),
+      });
+      assert.equal(rPut.status, 200);
+      const bodyPut = (await rPut.json()) as Record<string, unknown>;
+      assert.equal('clientSecret' in bodyPut, false, 'PUT non deve mai riflettere il secret nella risposta');
+      assert.equal(bodyPut.clientSecretConfigurato, true);
+
+      const rGet = await fetch(`${base}/backoffice/impostazioni/oidc`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      assert.equal(rGet.status, 200);
+      const bodyGet = (await rGet.json()) as Record<string, unknown>;
+      assert.equal('clientSecret' in bodyGet, false);
+      assert.equal(bodyGet.issuer, 'https://idp-http-test.invalid');
+
+      const log = await pool.query(
+        `SELECT dettaglio FROM log_operazioni WHERE utente_backoffice_id = $1 AND azione = 'aggiorna_impostazioni_oidc' ORDER BY avvenuta_il DESC LIMIT 1`,
+        [admin.id],
+      );
+      const dettaglio = log.rows[0]?.dettaglio as Record<string, unknown> | undefined;
+      assert.ok(dettaglio);
+      assert.equal('clientSecret' in dettaglio!, false, 'il secret non deve mai finire nel dettaglio dell\'audit log');
+    });
+
+    await t.test('admin, PUT successivo senza clientSecret: 200, secret precedente preservato', async () => {
+      const rPut = await fetch(`${base}/backoffice/impostazioni/oidc`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({
+          issuer: 'https://idp-http-test-2.invalid',
+          clientId: 'client-http-test',
+          redirectUri: 'https://app-http-test.invalid/cb',
+        }),
+      });
+      assert.equal(rPut.status, 200);
+      const bodyPut = (await rPut.json()) as { issuer: string; clientSecretConfigurato: boolean };
+      assert.equal(bodyPut.issuer, 'https://idp-http-test-2.invalid');
+      assert.equal(bodyPut.clientSecretConfigurato, true, 'il flag resta true anche se il secret non è stato reinviato');
     });
   },
 );

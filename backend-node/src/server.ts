@@ -29,6 +29,7 @@ import {
   type RequestAutenticataPubblico,
 } from './auth/middleware.ts';
 import { costruisciUrlAutorizzazione, ErroreOidcNonConfigurato, ErroreScambioCode, ErroreStatoNonValido } from './oidc/flow.ts';
+import { leggiConfigOidcPubblica, scriviConfigOidc, ErroreClientSecretMancante } from './oidc/config.ts';
 import { richiedeRuolo } from './auth/middleware.ts';
 import { registraOperazione } from './repository/logOperazioni.ts';
 import { ErroreValoreDuplicato, ErroreNonTrovato, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
@@ -37,7 +38,7 @@ import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstit
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega } from './backofficeSchema.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc } from './backofficeSchema.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
 import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
@@ -1246,6 +1247,59 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
         if (erroreRiferimento) {
           res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/backoffice/impostazioni/oidc',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (_req, res) => {
+      try {
+        const config = await leggiConfigOidcPubblica(pool);
+        if (!config) {
+          res.status(404).json({ errore: 'configurazione OIDC non ancora impostata' });
+          return;
+        }
+        res.status(200).json(config);
+      } catch (err) {
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.put(
+    '/backoffice/impostazioni/oidc',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaImpostazioniOidc.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const config = await eseguiInTransazione(pool, async (client) => {
+          await scriviConfigOidc(client, parsed.data, req.utente!.sub);
+          // entitaId omesso: impostazioni_sistema ha PK testuale (chiave), non UUID —
+          // stesso caso già gestito per discipline_sportive (vedi CLAUDE.md). Il
+          // dettaglio NON include mai clientSecret, nemmeno cifrato.
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'aggiorna_impostazioni_oidc',
+            entitaTipo: 'impostazioni_sistema',
+            dettaglio: { issuer: parsed.data.issuer, clientId: parsed.data.clientId, redirectUri: parsed.data.redirectUri },
+          });
+          return leggiConfigOidcPubblica(client);
+        });
+        res.status(200).json(config);
+      } catch (err) {
+        if (err instanceof ErroreClientSecretMancante) {
+          res.status(400).json({ errore: err.message });
           return;
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
