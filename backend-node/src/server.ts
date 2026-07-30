@@ -38,6 +38,8 @@ import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } fro
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
 import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione } from './backofficeSchema.ts';
+import { creaAssociazione } from './associazioni.ts';
+import { schemaCreaAssociazione } from './pubblicoSchema.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
 const COOKIE_PATH_OIDC = '/auth/oidc';
@@ -911,6 +913,53 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           return s;
         });
         res.status(201).json(stagione);
+      } catch (err) {
+        if (err instanceof ErroreValoreDuplicato) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Pubblico: accreditamento associazione (Doc Principale art. 3-4, art. B.2) ---
+  // Chi accredita diventa legale rappresentante (prima abilitazione, non delegata da
+  // nessun'altra: creata_da_abilitazione_id resta NULL), passa comunque da approvazione
+  // operatore (stato 'in_attesa', come ogni prima abilitazione — vedi migration 000007).
+
+  app.post(
+    '/pubblico/associazioni',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const parsed = schemaCreaAssociazione.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const associazione = await eseguiInTransazione(pool, async (client) => {
+          const a = await creaAssociazione(client, parsed.data);
+          await client.query(
+            `INSERT INTO abilitazioni (persona_fisica_id, associazione_id, stagione_id, titolo, ruolo, stato)
+             VALUES ($1, $2, $3, 'legale_rappresentante', 'rappresentante', 'in_attesa')`,
+            [req.persona!.sub, a.id, parsed.data.stagioneId],
+          );
+          await registraOperazione(client, {
+            attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: a.id, ruolo: 'rappresentante' },
+            azione: 'accreditamento_associazione',
+            entitaTipo: 'associazioni',
+            entitaId: a.id,
+            dettaglio: a as unknown as Record<string, unknown>,
+          });
+          return a;
+        });
+        res.status(201).json(associazione);
       } catch (err) {
         if (err instanceof ErroreValoreDuplicato) {
           res.status(409).json({ errore: err.message });
