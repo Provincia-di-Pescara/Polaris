@@ -37,12 +37,12 @@ import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstit
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione } from './backofficeSchema.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega } from './backofficeSchema.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
 import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
 import { readFile, unlink } from 'node:fs/promises';
-import { creaAbilitazionePrincipale, trovaAbilitazioneAttiva, creaSubDelega } from './abilitazioni.ts';
+import { creaAbilitazionePrincipale, trovaAbilitazioneAttiva, creaSubDelega, approvaAbilitazione, respingiAbilitazione } from './abilitazioni.ts';
 import { trovaPersonaFisicaPerCf, creaPersonaFisicaShell } from './repository/personeFisiche.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
@@ -1113,6 +1113,79 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       } catch (err) {
         if (err instanceof ErroreValoreDuplicato) {
           res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.put(
+    '/backoffice/deleghe/:id/approva',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      try {
+        const id = typeof req.params.id === 'string' ? req.params.id : '';
+        const abilitazione = await eseguiInTransazione(pool, async (client) => {
+          const a = await approvaAbilitazione(client, id, req.utente!.sub);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'approva_delega',
+            entitaTipo: 'abilitazioni',
+            entitaId: a.id,
+            dettaglio: a as unknown as Record<string, unknown>,
+          });
+          return a;
+        });
+        res.status(200).json(abilitazione);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.put(
+    '/backoffice/deleghe/:id/respingi',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaRespingiDelega.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const id = typeof req.params.id === 'string' ? req.params.id : '';
+        const abilitazione = await eseguiInTransazione(pool, async (client) => {
+          const a = await respingiAbilitazione(client, id, req.utente!.sub, parsed.data.motivazione);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'respingi_delega',
+            entitaTipo: 'abilitazioni',
+            entitaId: a.id,
+            dettaglio: a as unknown as Record<string, unknown>,
+          });
+          return a;
+        });
+        res.status(200).json(abilitazione);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
           return;
         }
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);

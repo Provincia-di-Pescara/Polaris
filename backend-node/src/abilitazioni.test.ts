@@ -9,8 +9,10 @@ import {
   trovaAbilitazioneAttiva,
   creaSubDelega,
   trovaAbilitazionePerId,
+  approvaAbilitazione,
+  respingiAbilitazione,
 } from './abilitazioni.ts';
-import { ErroreValoreDuplicato } from './erroriDominio.ts';
+import { ErroreValoreDuplicato, ErroreNonTrovato } from './erroriDominio.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 
@@ -29,6 +31,19 @@ async function fixture(pool: Pool) {
     cognome: 'Neri',
   });
   return { associazioneId: associazione.id, stagioneId: stagione.rows[0]!.id, rappresentanteId: rappresentante.id };
+}
+
+// abilitazioni.decisa_da referenzia utenti_backoffice (FK reale, vedi db/migrations/000001):
+// approvaAbilitazione/respingiAbilitazione richiedono un id di operatore esistente davvero,
+// non un randomUUID() qualsiasi (violerebbe abilitazioni_decisa_da_fk).
+async function creaOperatoreTest(pool: Pool): Promise<string> {
+  const email = `operatore-abilitazioni-${randomUUID()}@test.local`;
+  const r = await pool.query<{ id: string }>(
+    `INSERT INTO utenti_backoffice (email, password_hash, nome, cognome, ruolo, stato)
+     VALUES ($1, 'scrypt:test:test:test:test:test', 'Test', 'Operatore', 'operatore', 'attivo') RETURNING id`,
+    [email],
+  );
+  return r.rows[0]!.id;
 }
 
 test(
@@ -103,6 +118,71 @@ test(
           }),
         ErroreValoreDuplicato,
       );
+    } finally {
+      await pool.end();
+    }
+  },
+);
+
+test(
+  'approvaAbilitazione: solo prime abilitazioni in_attesa, sub-deleghe escluse',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async () => {
+    const pool = new Pool({ connectionString: dsn });
+    try {
+      const f = await fixture(pool);
+      const principale = await creaAbilitazionePrincipale(pool, {
+        personaFisicaId: f.rappresentanteId,
+        associazioneId: f.associazioneId,
+        stagioneId: f.stagioneId,
+      });
+      const operatoreId = await creaOperatoreTest(pool);
+
+      const approvata = await approvaAbilitazione(pool, principale.id, operatoreId);
+      assert.equal(approvata.stato, 'approvata');
+
+      await assert.rejects(() => approvaAbilitazione(pool, principale.id, operatoreId), ErroreNonTrovato, 'non ri-approvabile');
+
+      await pool.query(`UPDATE abilitazioni SET stato = 'approvata' WHERE id = $1`, [principale.id]);
+      const delegato = await creaPersonaFisicaShell(pool, {
+        codiceFiscale: `TSTAPR${randomUUID().slice(0, 10).toUpperCase()}`,
+        nome: 'Sara',
+        cognome: 'Gialli',
+      });
+      const subDelega = await creaSubDelega(pool, {
+        personaFisicaId: delegato.id,
+        associazioneId: f.associazioneId,
+        stagioneId: f.stagioneId,
+        ruolo: 'operatore',
+        creataDaAbilitazioneId: principale.id,
+      });
+      await assert.rejects(
+        () => approvaAbilitazione(pool, subDelega.id, operatoreId),
+        ErroreNonTrovato,
+        'le sub-deleghe non passano da qui, sono già approvata',
+      );
+    } finally {
+      await pool.end();
+    }
+  },
+);
+
+test(
+  'respingiAbilitazione richiede motivazione',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async () => {
+    const pool = new Pool({ connectionString: dsn });
+    try {
+      const f = await fixture(pool);
+      const principale = await creaAbilitazionePrincipale(pool, {
+        personaFisicaId: f.rappresentanteId,
+        associazioneId: f.associazioneId,
+        stagioneId: f.stagioneId,
+      });
+      const operatoreId = await creaOperatoreTest(pool);
+      const respinta = await respingiAbilitazione(pool, principale.id, operatoreId, 'documentazione incompleta');
+      assert.equal(respinta.stato, 'respinta');
+      assert.equal(respinta.motivazione, 'documentazione incompleta');
     } finally {
       await pool.end();
     }

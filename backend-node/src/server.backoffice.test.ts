@@ -5,6 +5,8 @@ import { Pool } from 'pg';
 import { creaApp } from './server.ts';
 import { hashPassword } from './auth/password.ts';
 import { generaAccessToken } from './auth/jwt.ts';
+import { creaAssociazione } from './associazioni.ts';
+import { creaAbilitazionePrincipale } from './abilitazioni.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 process.env.JWT_SECRET ??= 'segreto-di-test-non-usare-in-produzione';
@@ -525,6 +527,94 @@ test(
         body: JSON.stringify({ nome, dataInizio: '2044-09-01', dataFine: '2045-06-30' }),
       });
       assert.equal(secondaRisposta.status, 409);
+    });
+  },
+);
+
+test(
+  'PUT /backoffice/deleghe/:id/approva|respingi',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const pool = new Pool({ connectionString: dsn });
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return pool.end();
+    });
+
+    const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+    const associazione = await creaAssociazione(pool, {
+      denominazione: 'ASD Approvazione Test',
+      codiceFiscalePartitaIva: `PIVA-${randomUUID().slice(0, 8)}`,
+    });
+    const stagione = await pool.query<{ id: string }>(
+      `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2032-09-01', '2033-06-30') RETURNING id`,
+      [`stagione-approva-${randomUUID()}`],
+    );
+    // Una persona fisica dedicata per sub-test: abilitazioni_persona_associazione_attiva_uq
+    // considera "attiva" sia 'in_attesa' che 'approvata' — riusare la stessa persona dopo
+    // che il primo sub-test l'ha approvata farebbe collidere il setup dei sub-test successivi.
+    async function nuovaPersonaTest(): Promise<string> {
+      const id = randomUUID();
+      await pool.query(
+        `INSERT INTO persone_fisiche (id, codice_fiscale, nome, cognome) VALUES ($1, $2, 'Test', 'Persona')`,
+        [id, `TSTPRS${randomUUID().slice(0, 10).toUpperCase()}`],
+      );
+      return id;
+    }
+
+    await t.test('approva: 200, stato approvata', async () => {
+      const principale = await creaAbilitazionePrincipale(pool, {
+        personaFisicaId: await nuovaPersonaTest(),
+        associazioneId: associazione.id,
+        stagioneId: stagione.rows[0]!.id,
+      });
+      const r = await fetch(`${base}/backoffice/deleghe/${principale.id}/approva`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${operatore.token}` },
+      });
+      assert.equal(r.status, 200);
+      const body = (await r.json()) as { stato: string };
+      assert.equal(body.stato, 'approvata');
+    });
+
+    await t.test('respingi senza motivazione: 400', async () => {
+      const principale = await creaAbilitazionePrincipale(pool, {
+        personaFisicaId: await nuovaPersonaTest(),
+        associazioneId: associazione.id,
+        stagioneId: stagione.rows[0]!.id,
+      });
+      const r = await fetch(`${base}/backoffice/deleghe/${principale.id}/respingi`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({}),
+      });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('respingi con motivazione: 200, stato respinta', async () => {
+      const principale = await creaAbilitazionePrincipale(pool, {
+        personaFisicaId: await nuovaPersonaTest(),
+        associazioneId: associazione.id,
+        stagioneId: stagione.rows[0]!.id,
+      });
+      const r = await fetch(`${base}/backoffice/deleghe/${principale.id}/respingi`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ motivazione: 'documentazione mancante' }),
+      });
+      assert.equal(r.status, 200);
+      const body = (await r.json()) as { stato: string; motivazione: string };
+      assert.equal(body.stato, 'respinta');
+      assert.equal(body.motivazione, 'documentazione mancante');
+    });
+
+    await t.test('id inesistente: 404', async () => {
+      const r = await fetch(`${base}/backoffice/deleghe/${randomUUID()}/approva`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${operatore.token}` },
+      });
+      assert.equal(r.status, 404);
     });
   },
 );

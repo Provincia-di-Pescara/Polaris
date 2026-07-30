@@ -107,3 +107,8 @@ export const schemaCreaStagione = z
     path: ['dataFine'],
   });
 export type CreaStagioneRequest = z.infer<typeof schemaCreaStagione>;
+
+export const schemaRespingiDelega = z.object({
+  motivazione: z.string().min(1),
+});
+export type RespingiDelegaRequest = z.infer<typeof schemaRespingiDelega>;
