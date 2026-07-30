@@ -206,5 +206,45 @@ test(
       });
       assert.equal(r2.status, 409);
     });
+
+    await t.test('delegante operatore NON può assegnare ruolo rappresentante: 403', async () => {
+      const cfDelegatoOperatore = `TSTOPR${randomUUID().slice(0, 10).toUpperCase()}`;
+      const rOperatore = await fetch(`${base}/pubblico/deleghe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rappresentante.token}` },
+        body: JSON.stringify({
+          codiceFiscale: cfDelegatoOperatore,
+          nome: 'Delegato',
+          cognome: 'Operatore',
+          associazioneId: associazione.id,
+          stagioneId,
+          ruolo: 'operatore',
+        }),
+      });
+      assert.equal(rOperatore.status, 201);
+      const delegatoOperatore = (await rOperatore.json()) as { personaFisicaId: string };
+
+      // login del delegato operatore per ottenere un token proprio, poi tenta di
+      // creare una sub-sub-delega con ruolo='rappresentante' — deve essere rifiutata.
+      const tokenOperatore = generaAccessTokenPubblico({
+        sub: delegatoOperatore.personaFisicaId,
+        codiceFiscale: cfDelegatoOperatore,
+        nome: 'Delegato',
+        cognome: 'Operatore',
+      });
+      const r = await fetch(`${base}/pubblico/deleghe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenOperatore}` },
+        body: JSON.stringify({
+          codiceFiscale: `TSTESC${randomUUID().slice(0, 10).toUpperCase()}`,
+          nome: 'Escalation',
+          cognome: 'Test',
+          associazioneId: associazione.id,
+          stagioneId,
+          ruolo: 'rappresentante',
+        }),
+      });
+      assert.equal(r.status, 403);
+    });
   },
 );

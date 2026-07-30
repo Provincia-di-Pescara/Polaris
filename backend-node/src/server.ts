@@ -1091,6 +1091,10 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
           return;
         }
+        if (parsed.data.ruolo === 'rappresentante' && delegante.ruolo !== 'rappresentante') {
+          res.status(403).json({ errore: 'solo un delegante con ruolo rappresentante può assegnare ruolo rappresentante' });
+          return;
+        }
         const subDelega = await eseguiInTransazione(pool, async (client) => {
           let target = await trovaPersonaFisicaPerCf(client, parsed.data.codiceFiscale);
           if (!target) {
