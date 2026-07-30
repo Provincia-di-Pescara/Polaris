@@ -113,5 +113,37 @@ test(
       });
       assert.equal(r.status, 404);
     });
+
+    await t.test('id associazione malformato (non uuid): 400 JSON pulito, non 500 grezzo', async () => {
+      const form = new FormData();
+      form.append('tipo', 'statuto');
+      form.append('file', new Blob([pdfValido], { type: 'application/pdf' }), 'statuto.pdf');
+      const r = await fetch(`${base}/pubblico/associazioni/NON-UN-UUID/documenti`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${persona.token}` },
+        body: form,
+      });
+      assert.equal(r.status, 400);
+      const corpo = (await r.json()) as { errore: string };
+      assert.ok(typeof corpo.errore === 'string');
+      assert.ok(!corpo.errore.includes('invalid input syntax'), 'non deve esporre il messaggio Postgres grezzo');
+    });
+
+    await t.test('file oltre il limite dimensione: 413 JSON pulito, non pagina HTML di default Express', async () => {
+      const fileTroppoGrande = Buffer.alloc(11 * 1024 * 1024, 0x41); // 11MB > limite 10MB
+      const form = new FormData();
+      form.append('tipo', 'statuto');
+      form.append('file', new Blob([fileTroppoGrande], { type: 'application/pdf' }), 'grande.pdf');
+      const r = await fetch(`${base}/pubblico/associazioni/${associazione.id}/documenti`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${persona.token}` },
+        body: form,
+      });
+      assert.equal(r.status, 413);
+      const contentType = r.headers.get('content-type') ?? '';
+      assert.ok(contentType.includes('application/json'), `content-type doveva essere JSON, era: ${contentType}`);
+      const corpo = (await r.json()) as { errore: string };
+      assert.ok(typeof corpo.errore === 'string');
+    });
   },
 );

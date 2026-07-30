@@ -1,4 +1,4 @@
-import express, { type Express, type Request } from 'express';
+import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
 import { timingSafeEqual } from 'node:crypto';
@@ -56,6 +56,22 @@ function segretoCookie(): string {
     throw new Error('JWT_SECRET non impostata');
   }
   return s;
+}
+
+// multer(...).single('file') non è un middleware Express "normale": un errore al suo
+// interno (es. MulterError per superamento di limits.fileSize) non chiama next(err) verso
+// la catena della route ma finirebbe nel default error handler di Express — che risponde
+// con una pagina HTML completa di stack trace e path assoluti del server, mai accettabile
+// da esporre al client. Wrapper esplicito: intercetta l'errore invece di lasciarlo
+// propagare, risponde con JSON pulito (413, il codice corretto per "payload too large").
+function gestisciUpload(req: Request, res: Response, next: NextFunction): void {
+  uploadDocumento(req, res, (err: unknown) => {
+    if (err) {
+      res.status(413).json({ errore: 'file troppo grande o upload non valido' });
+      return;
+    }
+    next();
+  });
 }
 
 // Confronto a tempo costante: previene timing attack sul valore dello state (lo stesso
@@ -980,7 +996,7 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
   app.post(
     '/pubblico/associazioni/:id/documenti',
     richiedeAutenticazionePubblico,
-    uploadDocumento,
+    gestisciUpload,
     async (req: RequestAutenticataPubblico, res) => {
       const associazioneId = typeof req.params.id === 'string' ? req.params.id : '';
       const file = req.file;
@@ -1036,6 +1052,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         res.status(201).json(documento);
       } catch (err) {
         await unlink(file.path).catch(() => {});
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },
