@@ -41,6 +41,7 @@ import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, 
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
 import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
+import { MulterError } from 'multer';
 import { readFile, unlink } from 'node:fs/promises';
 import {
   creaAbilitazionePrincipale,
@@ -72,11 +73,18 @@ function segretoCookie(): string {
 // la catena della route ma finirebbe nel default error handler di Express — che risponde
 // con una pagina HTML completa di stack trace e path assoluti del server, mai accettabile
 // da esporre al client. Wrapper esplicito: intercetta l'errore invece di lasciarlo
-// propagare, risponde con JSON pulito (413, il codice corretto per "payload too large").
+// propagare. Solo il superamento del limite dimensione (LIMIT_FILE_SIZE) è davvero un
+// "payload too large" (413) — qualunque altro errore multer (es. LIMIT_UNEXPECTED_FILE
+// per un campo multipart sbagliato) è una richiesta malformata (400), non un file grande:
+// confonderli con un 413 generico fuorviava chi debugga un errore diverso.
 function gestisciUpload(req: Request, res: Response, next: NextFunction): void {
   uploadDocumento(req, res, (err: unknown) => {
+    if (err instanceof MulterError && err.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({ errore: 'file troppo grande' });
+      return;
+    }
     if (err) {
-      res.status(413).json({ errore: 'file troppo grande o upload non valido' });
+      res.status(400).json({ errore: 'upload non valido' });
       return;
     }
     next();

@@ -67,8 +67,8 @@ Confini architetturali fissi:
 
 | Art. | Tema | Stato |
 |---|---|---|
-| 3 | Identità digitale SPID/CIE/eIDAS, deleghe con approvazione operatore | OIDC ✅ · workflow deleghe/abilitazioni ❌ (schema `abilitazioni` pronto) |
-| 4 | Accreditamento associazioni (esistenza, affiliazioni, assicurazione, responsabili) | Schema ✅ (`associazioni`, `associazioni_documenti`) · API/UI ❌ |
+| 3 | Identità digitale SPID/CIE/eIDAS, deleghe con approvazione operatore | OIDC ✅ · workflow deleghe/abilitazioni 🔶 (API blocco 1/4 fatto: sub-delega gerarchica + approvazione/rigetto/revoca operatore, vedi §4 Fase 4 punto 5) |
+| 4 | Accreditamento associazioni (esistenza, affiliazioni, assicurazione, responsabili) | Schema ✅ (`associazioni`, `associazioni_documenti`) · API 🔶 (creazione + upload documenti fatti, vedi §4 Fase 4 punto 5) · UI ❌ |
 | 5 | Dichiarazione fabbisogno (minimo + ottimale) | Schema ✅ · **assunzione aperta: FD = fabbisogno ottimale** (da confermare con l'Ente) |
 | 12 | Tutela nuove associazioni (quota fasce riservabile) | **Non modellata** né in schema né nel motore. Facoltativa ("l'Ente può") — serve decisione: si implementa? Se sì: parametro 🔧 quota + ramo dedicato nel round-robin |
 | 19 | Rapporti con istituzioni scolastiche (convenzioni) | Schema ✅ (`convenzioni`) · logica ❌ |

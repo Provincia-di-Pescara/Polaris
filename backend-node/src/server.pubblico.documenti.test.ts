@@ -145,5 +145,19 @@ test(
       const corpo = (await r.json()) as { errore: string };
       assert.ok(typeof corpo.errore === 'string');
     });
+
+    await t.test('campo multipart sbagliato (non "file"): 400, non 413 (errore multer diverso da LIMIT_FILE_SIZE)', async () => {
+      const form = new FormData();
+      form.append('tipo', 'statuto');
+      form.append('campo-sbagliato', new Blob([pdfValido], { type: 'application/pdf' }), 'statuto.pdf');
+      const r = await fetch(`${base}/pubblico/associazioni/${associazione.id}/documenti`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${persona.token}` },
+        body: form,
+      });
+      assert.equal(r.status, 400);
+      const corpo = (await r.json()) as { errore: string };
+      assert.ok(typeof corpo.errore === 'string');
+    });
   },
 );
