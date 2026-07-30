@@ -12,3 +12,13 @@ export type CreaAssociazioneRequest = z.infer<typeof schemaCreaAssociazione>;
 export const schemaCaricaDocumento = z.object({
   tipo: z.enum(['statuto', 'atto_costitutivo', 'altro']),
 });
+
+export const schemaCreaDelega = z.object({
+  codiceFiscale: z.string().min(11).max(16),
+  nome: z.string().min(1),
+  cognome: z.string().min(1),
+  associazioneId: z.string().uuid(),
+  stagioneId: z.string().uuid(),
+  ruolo: z.enum(['rappresentante', 'operatore']),
+});
+export type CreaDelegaRequest = z.infer<typeof schemaCreaDelega>;

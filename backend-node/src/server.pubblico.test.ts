@@ -118,3 +118,93 @@ test(
     });
   },
 );
+
+test(
+  'POST /pubblico/deleghe: sub-delega auto-approvata, catena tracciata',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const pool = new Pool({ connectionString: dsn });
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return pool.end();
+    });
+
+    const rappresentante = await creaPersonaFisicaTest(pool);
+    const stagioneId = await creaStagioneTest(pool);
+    const rAss = await fetch(`${base}/pubblico/associazioni`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rappresentante.token}` },
+      body: JSON.stringify({
+        denominazione: 'ASD Delega Test',
+        codiceFiscalePartitaIva: `PIVA-${randomUUID().slice(0, 8)}`,
+        stagioneId,
+      }),
+    });
+    const associazione = (await rAss.json()) as { id: string };
+    await pool.query(`UPDATE abilitazioni SET stato = 'approvata' WHERE associazione_id = $1`, [associazione.id]);
+
+    await t.test('rappresentante senza abilitazione attiva su un\'altra associazione: 403', async () => {
+      const altraStagione = await creaStagioneTest(pool);
+      const r = await fetch(`${base}/pubblico/deleghe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rappresentante.token}` },
+        body: JSON.stringify({
+          codiceFiscale: `TSTX${randomUUID().slice(0, 12).toUpperCase()}`,
+          nome: 'X',
+          cognome: 'Y',
+          associazioneId: associazione.id,
+          stagioneId: altraStagione,
+          ruolo: 'operatore',
+        }),
+      });
+      assert.equal(r.status, 403);
+    });
+
+    await t.test('rappresentante approvato delega una persona nuova (mai autenticata): 201, auto-approvata', async () => {
+      const cfDelegato = `TSTDEL${randomUUID().slice(0, 10).toUpperCase()}`;
+      const r = await fetch(`${base}/pubblico/deleghe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rappresentante.token}` },
+        body: JSON.stringify({
+          codiceFiscale: cfDelegato,
+          nome: 'Nuovo',
+          cognome: 'Delegato',
+          associazioneId: associazione.id,
+          stagioneId,
+          ruolo: 'operatore',
+        }),
+      });
+      assert.equal(r.status, 201);
+      const body = (await r.json()) as { id: string; stato: string; creataDaAbilitazioneId: string | null };
+      assert.equal(body.stato, 'approvata');
+      assert.ok(body.creataDaAbilitazioneId, 'deve tracciare da quale abilitazione discende');
+
+      const persona = await pool.query(`SELECT id FROM persone_fisiche WHERE codice_fiscale = $1`, [cfDelegato]);
+      assert.equal(persona.rows.length, 1, 'deve aver creato la persona fisica shell');
+    });
+
+    await t.test('stesso delegato di nuovo sulla stessa associazione+stagione: 409', async () => {
+      const cfDelegato = `TSTDUP${randomUUID().slice(0, 10).toUpperCase()}`;
+      const dati = {
+        codiceFiscale: cfDelegato,
+        nome: 'Dup',
+        cognome: 'Licato',
+        associazioneId: associazione.id,
+        stagioneId,
+        ruolo: 'operatore',
+      };
+      await fetch(`${base}/pubblico/deleghe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rappresentante.token}` },
+        body: JSON.stringify(dati),
+      });
+      const r2 = await fetch(`${base}/pubblico/deleghe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rappresentante.token}` },
+        body: JSON.stringify(dati),
+      });
+      assert.equal(r2.status, 409);
+    });
+  },
+);

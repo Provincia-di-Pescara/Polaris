@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import type { Db } from '../db.ts';
 
 export interface PersonaFisica {
   id: string;
@@ -92,4 +93,30 @@ export async function trovaPersonaFisicaPerId(pool: Pool, id: string): Promise<P
   );
   const riga = risultato.rows[0];
   return riga ? daRiga(riga) : null;
+}
+
+export async function trovaPersonaFisicaPerCf(db: Db, codiceFiscale: string): Promise<PersonaFisica | null> {
+  const r = await db.query<RigaPersona>(
+    'SELECT id, codice_fiscale, nome, cognome FROM persone_fisiche WHERE codice_fiscale = $1',
+    [codiceFiscale],
+  );
+  return r.rows[0] ? daRiga(r.rows[0]) : null;
+}
+
+// Crea una persona fisica "shell": nessun login OIDC ancora avvenuto (oidc_subject/
+// oidc_provider NULL, colonne resa nullable dalla migration 000007). Usata quando una
+// persona già abilitata delega qualcuno che non si è mai autenticato sulla piattaforma.
+// trovaOCreaPersonaFisica completa questa riga al primo login reale per match su CF
+// (logica già esistente in quella funzione, invariata).
+export async function creaPersonaFisicaShell(
+  db: Db,
+  dati: { codiceFiscale: string; nome: string; cognome: string },
+): Promise<PersonaFisica> {
+  const r = await db.query<RigaPersona>(
+    `INSERT INTO persone_fisiche (codice_fiscale, nome, cognome)
+     VALUES ($1, $2, $3)
+     RETURNING id, codice_fiscale, nome, cognome`,
+    [dati.codiceFiscale, dati.nome, dati.cognome],
+  );
+  return daRiga(r.rows[0]!);
 }
