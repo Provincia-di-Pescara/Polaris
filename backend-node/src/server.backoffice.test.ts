@@ -8,6 +8,7 @@ import { generaAccessToken } from './auth/jwt.ts';
 import { creaAssociazione } from './associazioni.ts';
 import { creaAbilitazionePrincipale } from './abilitazioni.ts';
 import { creaDatabaseDedicato } from './testutil/dbDedicato.ts';
+import { leggiConfigOidc } from './oidc/config.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 process.env.JWT_SECRET ??= 'segreto-di-test-non-usare-in-produzione';
@@ -775,6 +776,31 @@ test(
       const bodyPut = (await rPut.json()) as { issuer: string; clientSecretConfigurato: boolean };
       assert.equal(bodyPut.issuer, 'https://idp-http-test-2.invalid');
       assert.equal(bodyPut.clientSecretConfigurato, true, 'il flag resta true anche se il secret non è stato reinviato');
+
+      // Non fidarsi solo del body HTTP (clientSecretConfigurato è un booleano, non prova
+      // che il valore sia rimasto INVARIATO): rileggere la config reale e confrontare il
+      // secret decifrato con quello del primo PUT.
+      const configReale = await leggiConfigOidc(pool);
+      assert.ok(configReale);
+      assert.equal(configReale!.clientSecret, 'segreto-http-test');
+    });
+
+    await t.test('admin, PUT con issuer con trailing slash: normalizzato senza slash finale', async () => {
+      const rPut = await fetch(`${base}/backoffice/impostazioni/oidc`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({
+          issuer: 'https://idp-http-test-3.invalid/',
+          clientId: 'client-http-test',
+          redirectUri: 'https://app-http-test.invalid/cb',
+        }),
+      });
+      assert.equal(rPut.status, 200);
+      const bodyPut = (await rPut.json()) as { issuer: string };
+      assert.equal(bodyPut.issuer, 'https://idp-http-test-3.invalid');
+
+      const configReale = await leggiConfigOidc(pool);
+      assert.equal(configReale!.issuer, 'https://idp-http-test-3.invalid');
     });
   },
 );

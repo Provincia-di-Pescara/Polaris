@@ -60,7 +60,7 @@ export async function leggiConfigOidcPubblica(db: Db): Promise<ConfigOidcPubblic
     issuer: memorizzata.issuer,
     clientId: memorizzata.clientId,
     redirectUri: memorizzata.redirectUri,
-    clientSecretConfigurato: true,
+    clientSecretConfigurato: Boolean(memorizzata.clientSecretCifrato),
   };
 }
 

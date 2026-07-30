@@ -16,7 +16,7 @@ export async function scriviImpostazione<T>(
   await db.query(
     `INSERT INTO impostazioni_sistema (chiave, valore, aggiornata_da)
      VALUES ($1, $2::jsonb, $3)
-     ON CONFLICT (chiave) DO UPDATE SET valore = EXCLUDED.valore, aggiornata_il = now(), aggiornata_da = EXCLUDED.aggiornata_da`,
+     ON CONFLICT (chiave) DO UPDATE SET valore = EXCLUDED.valore, aggiornata_il = now(), aggiornata_da = COALESCE(EXCLUDED.aggiornata_da, impostazioni_sistema.aggiornata_da)`,
     [chiave, JSON.stringify(valore), aggiornataDa ?? null],
   );
 }

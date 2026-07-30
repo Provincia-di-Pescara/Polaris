@@ -116,8 +116,17 @@ export type RespingiDelegaRequest = z.infer<typeof schemaRespingiDelega>;
 // clientSecret opzionale: merge-on-omit gestito da scriviConfigOidc (Task 1) — un PUT
 // senza clientSecret preserva quello già salvato, tranne al primo salvataggio in assoluto
 // (ErroreClientSecretMancante, mappato a 400 dalla route).
+// issuer: normalizzato senza trailing slash — CLAUDE.md documenta che l'issuer del
+// pa-sso-proxy va usato "senza /OIDC in fondo"; discovery.ts costruisce l'URL come
+// `${issuer}/.well-known/openid-configuration`, un trailing slash produrrebbe un
+// doppio slash e un fallimento di discovery confuso da debuggare. Non si restringe
+// il protocollo a `https`: in ambiente di sviluppo/test l'issuer mock gira su http,
+// e z.string().url() già esclude schemi palesemente non-URL (spazi, assenza di `://`).
 export const schemaImpostazioniOidc = z.object({
-  issuer: z.string().url(),
+  issuer: z
+    .string()
+    .url()
+    .transform((s) => s.replace(/\/+$/, '')),
   clientId: z.string().min(1),
   redirectUri: z.string().url(),
   clientSecret: z.string().min(1).optional(),
