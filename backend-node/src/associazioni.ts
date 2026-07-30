@@ -58,3 +58,36 @@ export async function trovaAssociazionePerId(db: Db, id: string): Promise<Associ
   const r = await db.query<RigaAssociazione>(`SELECT ${COLONNE_SELECT} FROM associazioni WHERE id = $1`, [id]);
   return r.rows[0] ? daRiga(r.rows[0]) : null;
 }
+
+export interface DocumentoAssociazione {
+  id: string;
+  associazioneId: string;
+  tipo: string;
+  filePath: string;
+  caricatoIl: string;
+}
+
+interface RigaDocumento {
+  id: string;
+  associazione_id: string;
+  tipo: string;
+  file_path: string;
+  caricato_il: string;
+}
+
+function daRigaDocumento(r: RigaDocumento): DocumentoAssociazione {
+  return { id: r.id, associazioneId: r.associazione_id, tipo: r.tipo, filePath: r.file_path, caricatoIl: r.caricato_il };
+}
+
+export async function creaDocumentoAssociazione(
+  db: Db,
+  dati: { associazioneId: string; tipo: string; filePath: string },
+): Promise<DocumentoAssociazione> {
+  const r = await db.query<RigaDocumento>(
+    `INSERT INTO associazioni_documenti (associazione_id, tipo, file_path)
+     VALUES ($1, $2, $3)
+     RETURNING id, associazione_id, tipo, file_path, caricato_il`,
+    [dati.associazioneId, dati.tipo, dati.filePath],
+  );
+  return daRigaDocumento(r.rows[0]!);
+}

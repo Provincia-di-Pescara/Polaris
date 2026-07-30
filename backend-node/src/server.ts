@@ -38,8 +38,10 @@ import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } fro
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
 import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione } from './backofficeSchema.ts';
-import { creaAssociazione } from './associazioni.ts';
-import { schemaCreaAssociazione } from './pubblicoSchema.ts';
+import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
+import { schemaCreaAssociazione, schemaCaricaDocumento } from './pubblicoSchema.ts';
+import { uploadDocumento } from './documenti/storage.ts';
+import { readFile, unlink } from 'node:fs/promises';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
 const COOKIE_PATH_OIDC = '/auth/oidc';
@@ -970,6 +972,70 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(400).json({ errore: erroreRiferimento.message });
           return;
         }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.post(
+    '/pubblico/associazioni/:id/documenti',
+    richiedeAutenticazionePubblico,
+    uploadDocumento,
+    async (req: RequestAutenticataPubblico, res) => {
+      const associazioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      const file = req.file;
+      if (!file) {
+        res.status(415).json({ errore: 'file mancante o mimetype non consentito (solo application/pdf)' });
+        return;
+      }
+      const parsed = schemaCaricaDocumento.safeParse(req.body);
+      if (!parsed.success) {
+        await unlink(file.path).catch(() => {});
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const associazione = await trovaAssociazionePerId(pool, associazioneId);
+        if (!associazione) {
+          await unlink(file.path).catch(() => {});
+          res.status(404).json({ errore: 'associazione non trovata' });
+          return;
+        }
+        const abilitazione = await pool.query(
+          `SELECT 1 FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2 AND stato IN ('in_attesa', 'approvata') LIMIT 1`,
+          [req.persona!.sub, associazioneId],
+        );
+        if (abilitazione.rows.length === 0) {
+          await unlink(file.path).catch(() => {});
+          res.status(403).json({ errore: 'nessuna abilitazione propria su questa associazione' });
+          return;
+        }
+        // Il mimetype dichiarato dal client non è fidato (fileFilter di multer lo usa solo
+        // per scartare subito i casi ovvi): verifica sui primi byte reali del file salvato.
+        const intestazione = (await readFile(file.path)).subarray(0, 5).toString('utf8');
+        if (intestazione !== '%PDF-') {
+          await unlink(file.path).catch(() => {});
+          res.status(415).json({ errore: 'il contenuto del file non è un PDF valido' });
+          return;
+        }
+        const documento = await eseguiInTransazione(pool, async (client) => {
+          const d = await creaDocumentoAssociazione(client, {
+            associazioneId,
+            tipo: parsed.data.tipo,
+            filePath: file.filename,
+          });
+          await registraOperazione(client, {
+            attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId, ruolo: null },
+            azione: 'carica_documento_associazione',
+            entitaTipo: 'associazioni_documenti',
+            entitaId: d.id,
+            dettaglio: d as unknown as Record<string, unknown>,
+          });
+          return d;
+        });
+        res.status(201).json(documento);
+      } catch (err) {
+        await unlink(file.path).catch(() => {});
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },

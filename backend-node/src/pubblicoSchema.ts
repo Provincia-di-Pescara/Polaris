@@ -8,3 +8,7 @@ export const schemaCreaAssociazione = z.object({
   stagioneId: z.string().uuid(),
 });
 export type CreaAssociazioneRequest = z.infer<typeof schemaCreaAssociazione>;
+
+export const schemaCaricaDocumento = z.object({
+  tipo: z.enum(['statuto', 'atto_costitutivo', 'altro']),
+});

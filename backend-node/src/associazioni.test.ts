@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { creaAssociazione, trovaAssociazionePerId } from './associazioni.ts';
+import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
 import { ErroreValoreDuplicato } from './erroriDominio.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
@@ -43,6 +43,32 @@ test(
     try {
       const risultato = await trovaAssociazionePerId(pool, randomUUID());
       assert.equal(risultato, null);
+    } finally {
+      await pool.end();
+    }
+  },
+);
+
+test(
+  'creaDocumentoAssociazione contro Postgres reale',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async () => {
+    const pool = new Pool({ connectionString: dsn });
+    try {
+      const piva = `PIVA-${randomUUID().slice(0, 8)}`;
+      const associazione = await creaAssociazione(pool, { denominazione: 'ASD Doc Test', codiceFiscalePartitaIva: piva });
+
+      const documento = await creaDocumentoAssociazione(pool, {
+        associazioneId: associazione.id,
+        tipo: 'statuto',
+        filePath: `${randomUUID()}.pdf`,
+      });
+      assert.equal(documento.associazioneId, associazione.id);
+      assert.equal(documento.tipo, 'statuto');
+
+      await assert.rejects(
+        () => creaDocumentoAssociazione(pool, { associazioneId: randomUUID(), tipo: 'statuto', filePath: 'x.pdf' }),
+      );
     } finally {
       await pool.end();
     }
