@@ -42,7 +42,14 @@ import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } f
 import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
 import { readFile, unlink } from 'node:fs/promises';
-import { creaAbilitazionePrincipale, trovaAbilitazioneAttiva, creaSubDelega, approvaAbilitazione, respingiAbilitazione } from './abilitazioni.ts';
+import {
+  creaAbilitazionePrincipale,
+  trovaAbilitazioneAttiva,
+  creaSubDelega,
+  approvaAbilitazione,
+  respingiAbilitazione,
+  revocaAbilitazioneConCascata,
+} from './abilitazioni.ts';
 import { trovaPersonaFisicaPerCf, creaPersonaFisicaShell } from './repository/personeFisiche.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
@@ -1183,6 +1190,42 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           return a;
         });
         res.status(200).json(abilitazione);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.put(
+    '/backoffice/deleghe/:id/revoca',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      try {
+        const id = typeof req.params.id === 'string' ? req.params.id : '';
+        const revocate = await eseguiInTransazione(pool, async (client) => {
+          const lista = await revocaAbilitazioneConCascata(client, id);
+          for (const a of lista) {
+            await registraOperazione(client, {
+              attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+              azione: 'revoca_delega',
+              entitaTipo: 'abilitazioni',
+              entitaId: a.id,
+              dettaglio: a as unknown as Record<string, unknown>,
+            });
+          }
+          return lista;
+        });
+        res.status(200).json(revocate);
       } catch (err) {
         if (err instanceof ErroreNonTrovato) {
           res.status(404).json({ errore: err.message });

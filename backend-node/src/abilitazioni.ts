@@ -137,3 +137,22 @@ export async function respingiAbilitazione(
   }
   return daRiga(riga);
 }
+
+export async function revocaAbilitazioneConCascata(db: Db, id: string): Promise<Abilitazione[]> {
+  const esiste = await db.query('SELECT 1 FROM abilitazioni WHERE id = $1', [id]);
+  if (esiste.rows.length === 0) {
+    throw new ErroreNonTrovato('abilitazione non trovata');
+  }
+  const r = await db.query<RigaAbilitazione>(
+    `WITH RECURSIVE catena AS (
+       SELECT id FROM abilitazioni WHERE id = $1
+       UNION ALL
+       SELECT a.id FROM abilitazioni a JOIN catena c ON a.creata_da_abilitazione_id = c.id
+     )
+     UPDATE abilitazioni SET stato = 'revocata', revocata_il = now()
+     WHERE id IN (SELECT id FROM catena) AND stato IN ('in_attesa', 'approvata')
+     RETURNING ${COLONNE_SELECT}`,
+    [id],
+  );
+  return r.rows.map(daRiga);
+}

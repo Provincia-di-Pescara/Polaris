@@ -618,3 +618,59 @@ test(
     });
   },
 );
+
+test(
+  'PUT /backoffice/deleghe/:id/revoca: cascata sulle sub-deleghe',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const pool = new Pool({ connectionString: dsn });
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return pool.end();
+    });
+
+    const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+    const associazione = await creaAssociazione(pool, {
+      denominazione: 'ASD Revoca Test',
+      codiceFiscalePartitaIva: `PIVA-${randomUUID().slice(0, 8)}`,
+    });
+    const stagione = await pool.query<{ id: string }>(
+      `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2033-09-01', '2034-06-30') RETURNING id`,
+      [`stagione-revoca-${randomUUID()}`],
+    );
+    const personaId = randomUUID();
+    await pool.query(
+      `INSERT INTO persone_fisiche (id, codice_fiscale, nome, cognome) VALUES ($1, $2, 'Test', 'Revoca')`,
+      [personaId, `TSTREV${randomUUID().slice(0, 10).toUpperCase()}`],
+    );
+    const principale = await creaAbilitazionePrincipale(pool, {
+      personaFisicaId: personaId,
+      associazioneId: associazione.id,
+      stagioneId: stagione.rows[0]!.id,
+    });
+    await pool.query(`UPDATE abilitazioni SET stato = 'approvata' WHERE id = $1`, [principale.id]);
+
+    await t.test('revoca: 200, log_operazioni tracciato', async () => {
+      const r = await fetch(`${base}/backoffice/deleghe/${principale.id}/revoca`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${operatore.token}` },
+      });
+      assert.equal(r.status, 200);
+
+      const log = await pool.query(
+        `SELECT azione FROM log_operazioni WHERE utente_backoffice_id = $1 AND azione = 'revoca_delega'`,
+        [operatore.id],
+      );
+      assert.equal(log.rows.length, 1);
+    });
+
+    await t.test('id inesistente: 404', async () => {
+      const r = await fetch(`${base}/backoffice/deleghe/${randomUUID()}/revoca`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${operatore.token}` },
+      });
+      assert.equal(r.status, 404);
+    });
+  },
+);

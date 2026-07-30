@@ -11,6 +11,7 @@ import {
   trovaAbilitazionePerId,
   approvaAbilitazione,
   respingiAbilitazione,
+  revocaAbilitazioneConCascata,
 } from './abilitazioni.ts';
 import { ErroreValoreDuplicato, ErroreNonTrovato } from './erroriDominio.ts';
 
@@ -183,6 +184,67 @@ test(
       const respinta = await respingiAbilitazione(pool, principale.id, operatoreId, 'documentazione incompleta');
       assert.equal(respinta.stato, 'respinta');
       assert.equal(respinta.motivazione, 'documentazione incompleta');
+    } finally {
+      await pool.end();
+    }
+  },
+);
+
+test(
+  'revocaAbilitazioneConCascata: cascata su 3 livelli, idempotente, 404 su id inesistente',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async () => {
+    const pool = new Pool({ connectionString: dsn });
+    try {
+      const f = await fixture(pool);
+      const livello1 = await creaAbilitazionePrincipale(pool, {
+        personaFisicaId: f.rappresentanteId,
+        associazioneId: f.associazioneId,
+        stagioneId: f.stagioneId,
+      });
+      await pool.query(`UPDATE abilitazioni SET stato = 'approvata' WHERE id = $1`, [livello1.id]);
+
+      const personaA = await creaPersonaFisicaShell(pool, {
+        codiceFiscale: `TSTCSC1${randomUUID().slice(0, 9).toUpperCase()}`,
+        nome: 'A',
+        cognome: 'Livello2',
+      });
+      const livello2 = await creaSubDelega(pool, {
+        personaFisicaId: personaA.id,
+        associazioneId: f.associazioneId,
+        stagioneId: f.stagioneId,
+        ruolo: 'operatore',
+        creataDaAbilitazioneId: livello1.id,
+      });
+
+      const personaB = await creaPersonaFisicaShell(pool, {
+        codiceFiscale: `TSTCSC2${randomUUID().slice(0, 9).toUpperCase()}`,
+        nome: 'B',
+        cognome: 'Livello3',
+      });
+      const livello3 = await creaSubDelega(pool, {
+        personaFisicaId: personaB.id,
+        associazioneId: f.associazioneId,
+        stagioneId: f.stagioneId,
+        ruolo: 'operatore',
+        creataDaAbilitazioneId: livello2.id,
+      });
+
+      const revocate = await revocaAbilitazioneConCascata(pool, livello1.id);
+      assert.equal(revocate.length, 3, 'deve revocare padre + entrambi i discendenti');
+      assert.ok(revocate.every((a) => a.stato === 'revocata'));
+
+      const rilette = await pool.query(`SELECT id, stato FROM abilitazioni WHERE id IN ($1, $2, $3)`, [
+        livello1.id,
+        livello2.id,
+        livello3.id,
+      ]);
+      assert.ok(rilette.rows.every((r) => r.stato === 'revocata'));
+
+      const secondaVolta = await revocaAbilitazioneConCascata(pool, livello1.id);
+      assert.equal(secondaVolta.length, 0, 'idempotente: già tutto revocato, nessuna riga da aggiornare');
+
+      await assert.rejects(() => revocaAbilitazioneConCascata(pool, randomUUID()), ErroreNonTrovato);
     } finally {
       await pool.end();
     }
