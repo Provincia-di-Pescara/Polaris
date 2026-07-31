@@ -122,6 +122,14 @@ export type RespingiDelegaRequest = z.infer<typeof schemaRespingiDelega>;
 // doppio slash e un fallimento di discovery confuso da debuggare. Non si restringe
 // il protocollo a `https`: in ambiente di sviluppo/test l'issuer mock gira su http,
 // e z.string().url() già esclude schemi palesemente non-URL (spazi, assenza di `://`).
+export const schemaCreaUtenteBackoffice = z.object({
+  email: z.string().email(),
+  nome: z.string().min(1),
+  cognome: z.string().min(1),
+  ruolo: z.enum(['admin', 'operatore']),
+});
+export type CreaUtenteBackofficeRequest = z.infer<typeof schemaCreaUtenteBackoffice>;
+
 export const schemaImpostazioniOidc = z.object({
   issuer: z
     .string()

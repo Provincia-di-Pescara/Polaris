@@ -32,13 +32,14 @@ import { costruisciUrlAutorizzazione, ErroreOidcNonConfigurato, ErroreScambioCod
 import { leggiConfigOidcPubblica, scriviConfigOidc, ErroreClientSecretMancante } from './oidc/config.ts';
 import { richiedeRuolo } from './auth/middleware.ts';
 import { registraOperazione } from './repository/logOperazioni.ts';
+import { creaUtenteInvitato, listaUtenti, trovaUtentePerId, aPubblico } from './repository/utentiBackoffice.ts';
 import { ErroreValoreDuplicato, ErroreNonTrovato, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
 import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './discipline.ts';
 import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstituzione } from './istituzioni.ts';
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc } from './backofficeSchema.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice } from './backofficeSchema.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
 import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
@@ -1306,6 +1307,88 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       }
     },
   );
+
+  app.post(
+    '/backoffice/utenti',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaCreaUtenteBackoffice.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      if (!inviaEmailFn || !backofficeBaseUrl) {
+        res.status(503).json({ errore: 'SMTP non configurato (SMTP_HOST/BACKOFFICE_BASE_URL in .env)' });
+        return;
+      }
+      try {
+        const utente = await eseguiInTransazione(pool, async (client) => {
+          const { utente: u, token } = await creaUtenteInvitato(client, parsed.data, req.utente!.sub);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'crea_utente_backoffice',
+            entitaTipo: 'utenti_backoffice',
+            entitaId: u.id,
+            dettaglio: { email: u.email, nome: u.nome, cognome: u.cognome, ruolo: u.ruolo },
+          });
+          await inviaEmailFn({
+            a: u.email,
+            oggetto: 'POLARIS — invito account backoffice',
+            testo: [
+              `Buongiorno ${u.nome} ${u.cognome},`,
+              '',
+              'è stato creato per lei un account sul backoffice POLARIS. Per attivarlo e impostare la password apra questo link:',
+              '',
+              `${backofficeBaseUrl}/utenti/accetta-invito?token=${token}`,
+              '',
+              'Il link scade tra 24 ore.',
+            ].join('\n'),
+          });
+          return u;
+        });
+        res.status(201).json(aPubblico(utente));
+      } catch (err) {
+        if (err instanceof ErroreValoreDuplicato) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get('/backoffice/utenti', richiedeAutenticazione, richiedeRuolo('admin'), async (_req, res) => {
+    try {
+      res.status(200).json((await listaUtenti(pool)).map(aPubblico));
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/backoffice/utenti/:id', richiedeAutenticazione, richiedeRuolo('admin'), async (req, res) => {
+    try {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      const utente = await trovaUtentePerId(pool, id);
+      if (!utente) {
+        res.status(404).json({ errore: 'utente non trovato' });
+        return;
+      }
+      res.status(200).json(aPubblico(utente));
+    } catch (err) {
+      const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+      if (erroreRiferimento) {
+        res.status(400).json({ errore: erroreRiferimento.message });
+        return;
+      }
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
 
   return app;
 }

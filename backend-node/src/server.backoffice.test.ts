@@ -13,8 +13,19 @@ import { leggiConfigOidc } from './oidc/config.ts';
 const dsn = process.env.TEST_DATABASE_URL;
 process.env.JWT_SECRET ??= 'segreto-di-test-non-usare-in-produzione';
 
-async function avviaServerTest(pool: Pool): Promise<{ base: string; chiudi: () => void }> {
-  const app = creaApp(pool);
+// inviaEmail/backofficeBaseUrl iniettati con un default no-op: la maggior parte degli
+// scenari CRUD di questo file non tocca l'email, ma la route di invito utenti (Task 2)
+// ne ha bisogno per non rispondere 503 — nessun SMTP_HOST reale nell'ambiente di test.
+async function avviaServerTest(
+  pool: Pool,
+  emailInviate: Array<{ a: string; oggetto: string; testo: string }> = [],
+): Promise<{ base: string; chiudi: () => void }> {
+  const app = creaApp(pool, {
+    inviaEmail: async (email) => {
+      emailInviate.push(email);
+    },
+    backofficeBaseUrl: 'https://backoffice.test',
+  });
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.on('listening', resolve));
   const addr = server.address();
@@ -801,6 +812,73 @@ test(
 
       const configReale = await leggiConfigOidc(pool);
       assert.equal(configReale!.issuer, 'https://idp-http-test-3.invalid');
+    });
+  },
+);
+
+test(
+  'POST/GET /backoffice/utenti: invito, lista, dettaglio',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const pool = new Pool({ connectionString: dsn });
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return pool.end();
+    });
+
+    const admin = await creaUtenteBackofficeTest(pool, 'admin');
+    const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+
+    await t.test('operatore: 403', async () => {
+      const r = await fetch(`${base}/backoffice/utenti`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ email: 'x@test.local', nome: 'X', cognome: 'Y', ruolo: 'operatore' }),
+      });
+      assert.equal(r.status, 403);
+    });
+
+    const emailInvitato = `invitato-http-${randomUUID()}@test.local`;
+    await t.test('admin: crea invito, 201, stato in_attesa_verifica, nessun campo sensibile', async () => {
+      const r = await fetch(`${base}/backoffice/utenti`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ email: emailInvitato, nome: 'Nuovo', cognome: 'Invitato', ruolo: 'operatore' }),
+      });
+      assert.equal(r.status, 201);
+      const body = (await r.json()) as Record<string, unknown>;
+      assert.equal(body.stato, 'in_attesa_verifica');
+      assert.equal('passwordHash' in body, false);
+      assert.equal('tokenVerificaHash' in body, false);
+    });
+
+    await t.test('email duplicata: 409', async () => {
+      const r = await fetch(`${base}/backoffice/utenti`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ email: emailInvitato, nome: 'Dup', cognome: 'Licato', ruolo: 'operatore' }),
+      });
+      assert.equal(r.status, 409);
+    });
+
+    await t.test('GET lista: include l\'invitato, nessun campo sensibile', async () => {
+      const r = await fetch(`${base}/backoffice/utenti`, { headers: { Authorization: `Bearer ${admin.token}` } });
+      assert.equal(r.status, 200);
+      const lista = (await r.json()) as Array<Record<string, unknown>>;
+      const trovato = lista.find((u) => u.email === emailInvitato);
+      assert.ok(trovato);
+      assert.equal('passwordHash' in trovato!, false);
+    });
+
+    await t.test('GET dettaglio inesistente: 404', async () => {
+      const r = await fetch(`${base}/backoffice/utenti/${randomUUID()}`, { headers: { Authorization: `Bearer ${admin.token}` } });
+      assert.equal(r.status, 404);
+    });
+
+    await t.test('GET dettaglio id malformato: 400', async () => {
+      const r = await fetch(`${base}/backoffice/utenti/non-un-uuid`, { headers: { Authorization: `Bearer ${admin.token}` } });
+      assert.equal(r.status, 400);
     });
   },
 );
