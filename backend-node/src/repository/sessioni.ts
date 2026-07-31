@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import type { Db } from '../db.ts';
 
 export interface Sessione {
   id: string;
@@ -61,4 +62,11 @@ export async function trovaSessionePerHash(pool: Pool, refreshTokenHash: string)
 
 export async function revocaSessione(pool: Pool, id: string): Promise<void> {
   await pool.query('UPDATE sessioni_backoffice SET revocata_il = now() WHERE id = $1 AND revocata_il IS NULL', [id]);
+}
+
+export async function revocaSessioniUtente(db: Db, utenteBackofficeId: string): Promise<void> {
+  await db.query(
+    'UPDATE sessioni_backoffice SET revocata_il = now() WHERE utente_backoffice_id = $1 AND revocata_il IS NULL',
+    [utenteBackofficeId],
+  );
 }
