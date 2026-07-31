@@ -207,45 +207,50 @@ test(
     });
 
     await t.test(
-      'Finding 1 (regressione): reset-password su admin già loggato non deve riaprire il bootstrap pubblico',
+      "Finding 1 (regressione, aggiornato): un reset-password sull'invitato (che resta 'attivo') " +
+        'non deve mai riaprire il bootstrap pubblico finché esiste un altro utente attivo',
       async () => {
-        // Simula un admin che ha già completato un login almeno una volta in passato
-        // (ultimo_accesso_il valorizzato), poi viene messo in reset (stato torna
-        // in_attesa_verifica tramite impostaNuovoInvito). bootstrapDisponibile() deve
-        // restare false: un vero bootstrap non è mai stato "riaperto".
-        await pool.query(`UPDATE utenti_backoffice SET ultimo_accesso_il = now() WHERE id = $1`, [
+        // A questo punto sia secondoAdminIdPerReset (admin) sia invitatoId (operatore) sono
+        // 'attivo'. bootstrapDisponibile() dipende SOLO da stato = 'attivo' (ultimo_accesso_il
+        // è stata rimossa: colonna mai scritta da nessun percorso di produzione, era codice
+        // morto — vedi commento in auth/bootstrapAdmin.ts). Resettare secondoAdminIdPerReset
+        // (stato -> in_attesa_verifica) non deve riaprire il bootstrap finché invitatoId
+        // resta attivo: questo è il comportamento reale che l'admin si aspetta durante un
+        // reset-password ordinario, e non dipende in alcun modo da ultimo_accesso_il.
+        assert.equal(
+          await bootstrapDisponibile(pool),
+          false,
+          'precondizione: bootstrap non disponibile con almeno un utente attivo',
+        );
+
+        // Reset diretto via SQL (stato + token con scopo 'invito_utente', migration 000008)
+        // per isolare il test sul comportamento di bootstrapDisponibile, bypassando il
+        // check self/last-admin/disattivato di impostaNuovoInvito che altrimenti
+        // impedirebbe comunque il reset su questo specifico utente.
+        await pool.query(
+          `UPDATE utenti_backoffice
+           SET stato = 'in_attesa_verifica', token_verifica_hash = 'x', token_verifica_scade_il = now() + interval '1 day',
+               token_verifica_scopo = 'invito_utente'
+           WHERE id = $1`,
+          [secondoAdminIdPerReset],
+        );
+
+        const riga = await pool.query<{ stato: string }>('SELECT stato FROM utenti_backoffice WHERE id = $1', [
           secondoAdminIdPerReset,
         ]);
-        assert.equal(
-          await bootstrapDisponibile(pool),
-          false,
-          'precondizione: bootstrap non disponibile con un admin già loggato',
-        );
-
-        // Reset diretto via SQL per isolare il test sul fix 1a (bootstrapDisponibile),
-        // bypassando il fix 1b (self/last-admin/disattivato check di impostaNuovoInvito)
-        // che altrimenti impedirebbe comunque il reset su questo specifico utente.
-        await pool.query(
-          `UPDATE utenti_backoffice SET stato = 'in_attesa_verifica', token_verifica_hash = 'x', token_verifica_scade_il = now() + interval '1 day' WHERE id = $1`,
-          [secondoAdminIdPerReset],
-        );
-
-        const riga = await pool.query<{ stato: string; ultimo_accesso_il: string | null }>(
-          'SELECT stato, ultimo_accesso_il FROM utenti_backoffice WHERE id = $1',
-          [secondoAdminIdPerReset],
-        );
         assert.equal(riga.rows[0]!.stato, 'in_attesa_verifica');
-        assert.ok(riga.rows[0]!.ultimo_accesso_il, 'precondizione: ultimo_accesso_il resta valorizzato dopo il reset');
 
         assert.equal(
           await bootstrapDisponibile(pool),
           false,
-          'bootstrap NON deve riaprirsi: un admin con ultimo_accesso_il valorizzato è già stato bootstrappato una volta, indipendentemente dallo stato attuale',
+          "bootstrap NON deve riaprirsi: invitatoId resta 'attivo', indipendentemente da ultimo_accesso_il",
         );
 
         // Ripristina lo stato per non alterare le precondizioni dei test seguenti.
         await pool.query(
-          `UPDATE utenti_backoffice SET stato = 'attivo', token_verifica_hash = NULL, token_verifica_scade_il = NULL WHERE id = $1`,
+          `UPDATE utenti_backoffice
+           SET stato = 'attivo', token_verifica_hash = NULL, token_verifica_scade_il = NULL, token_verifica_scopo = NULL
+           WHERE id = $1`,
           [secondoAdminIdPerReset],
         );
       },

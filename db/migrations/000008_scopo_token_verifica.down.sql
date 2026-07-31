@@ -1,0 +1,3 @@
+ALTER TABLE utenti_backoffice DROP CONSTRAINT utenti_backoffice_token_verifica_scopo_check;
+ALTER TABLE utenti_backoffice DROP CONSTRAINT utenti_backoffice_token_verifica_scopo_coerente;
+ALTER TABLE utenti_backoffice DROP COLUMN token_verifica_scopo;

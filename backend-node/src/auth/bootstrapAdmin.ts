@@ -35,24 +35,22 @@ function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
-// Disponibile finché nessun utente ha MAI completato un login e nessun utente è
-// correntemente attivo. Non ci si può basare solo sullo stato 'in_attesa_verifica'
-// corrente: un admin reale può trovarsi in quello stato temporaneamente durante un
-// reset-password (POST /backoffice/utenti/:id/reset-password), non solo durante un
-// bootstrap mai completato.
-// - ultimo_accesso_il valorizzato è prova che un login è già avvenuto in passato (per
-//   QUALUNQUE utente, non solo il target di un eventuale reset): il valore non viene mai
-//   azzerato da impostaNuovoInvito, quindi un admin "in reset" che ha già fatto login
-//   almeno una volta continua a bloccare il bootstrap anche mentre è in_attesa_verifica.
-// - stato = 'attivo' copre il caso di un admin verificato via email (bootstrap appena
-//   completato) ma che non ha ancora effettuato il primo login: senza questa condizione
-//   il solo criterio ultimo_accesso_il lascerebbe una finestra in cui un bootstrap appena
-//   completato e mai ancora "loggato" risulterebbe erroneamente ancora disponibile,
-//   riaprendo lo stesso tipo di problema che questo fix vuole chiudere.
+// Disponibile finché nessun utente backoffice è correntemente attivo. Non basta
+// l'assenza di righe 'in_attesa_verifica': un admin reale può trovarsi in quello
+// stato temporaneamente durante un reset-password (POST /backoffice/utenti/:id/
+// reset-password), non solo durante un bootstrap mai completato — per questo il
+// criterio è positivo (esiste un attivo) e non negativo (non esiste un pendente).
+//
+// Nota: in precedenza il criterio includeva anche `ultimo_accesso_il IS NOT NULL`
+// come segnale aggiuntivo ("un login è già avvenuto in passato"). Rimosso perché
+// era codice morto: `utenti_backoffice.ultimo_accesso_il` non viene mai scritta da
+// nessun percorso di produzione (auth/login.ts non la tocca al login riuscito, a
+// differenza dell'omonima colonna su persone_fisiche) — il disgiunto non era mai
+// vero in pratica. La difesa reale contro il bypass del reset-password è il
+// binding di `token_verifica_scopo` (migration 000008): un token emesso da
+// impostaNuovoInvito non è più utilizzabile su questo endpoint.
 export async function bootstrapDisponibile(db: Db): Promise<boolean> {
-  const r = await db.query(
-    `SELECT 1 FROM utenti_backoffice WHERE ultimo_accesso_il IS NOT NULL OR stato = 'attivo' LIMIT 1`,
-  );
+  const r = await db.query(`SELECT 1 FROM utenti_backoffice WHERE stato = 'attivo' LIMIT 1`);
   return r.rows.length === 0;
 }
 
@@ -76,14 +74,19 @@ export async function richiediPrimoAdmin(
   const passwordHash = await hashPassword(dati.password);
 
   // Sostituisce eventuali bootstrap pendenti mai verificati (uno solo alla volta).
-  // Ristretto a ultimo_accesso_il IS NULL: una riga in_attesa_verifica con un login
-  // già avvenuto in passato è un utente REALE in mezzo a un reset-password, non un
-  // tentativo di bootstrap mai completato — non va mai cancellata da qui.
-  await db.query(`DELETE FROM utenti_backoffice WHERE stato = 'in_attesa_verifica' AND ultimo_accesso_il IS NULL`);
+  // Ristretto a token_verifica_scopo = 'bootstrap' (migration 000008): una riga
+  // in_attesa_verifica con scopo 'invito_utente' è un utente REALE in mezzo a un
+  // invito o un reset-password (POST /backoffice/utenti/:id/reset-password), non
+  // un tentativo di bootstrap mai completato — non va mai cancellata da qui. Prima
+  // dell'introduzione dello scopo esplicito questo filtro si basava su
+  // `ultimo_accesso_il IS NULL`, un criterio che si è rivelato codice morto (la
+  // colonna non viene mai scritta in produzione) e che avrebbe cancellato anche
+  // righe di invito/reset legittime.
+  await db.query(`DELETE FROM utenti_backoffice WHERE stato = 'in_attesa_verifica' AND token_verifica_scopo = 'bootstrap'`);
   await db.query(
     `INSERT INTO utenti_backoffice
-       (email, password_hash, nome, cognome, ruolo, stato, token_verifica_hash, token_verifica_scade_il)
-     VALUES ($1, $2, $3, $4, 'admin', 'in_attesa_verifica', $5, $6)`,
+       (email, password_hash, nome, cognome, ruolo, stato, token_verifica_hash, token_verifica_scade_il, token_verifica_scopo)
+     VALUES ($1, $2, $3, $4, 'admin', 'in_attesa_verifica', $5, $6, 'bootstrap')`,
     [dati.email, passwordHash, dati.nome, dati.cognome, hashToken(token), new Date(Date.now() + TTL_TOKEN_VERIFICA_MS)],
   );
 
@@ -105,8 +108,9 @@ export async function richiediPrimoAdmin(
 export async function verificaPrimoAdmin(db: Db, token: string): Promise<{ id: string; email: string }> {
   const r = await db.query<{ id: string; email: string }>(
     `UPDATE utenti_backoffice
-     SET stato = 'attivo', token_verifica_hash = NULL, token_verifica_scade_il = NULL
+     SET stato = 'attivo', token_verifica_hash = NULL, token_verifica_scade_il = NULL, token_verifica_scopo = NULL
      WHERE token_verifica_hash = $1 AND stato = 'in_attesa_verifica' AND token_verifica_scade_il > now()
+       AND token_verifica_scopo = 'bootstrap'
      RETURNING id, email`,
     [hashToken(token)],
   );

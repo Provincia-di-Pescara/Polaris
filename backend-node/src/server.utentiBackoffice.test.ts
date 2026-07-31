@@ -139,6 +139,63 @@ test(
       assert.equal(rNuovoAccesso.status, 200);
     });
 
+    await t.test(
+      'CRITICAL (regressione): un token di reset-password NON deve essere accettato da POST /auth/bootstrap/verifica ' +
+        '(bypasserebbe il reset amministrativo lasciando invariata la vecchia password)',
+      async () => {
+        // L'invitato è tornato 'attivo' con password 'password-dopo-reset-123456' dal test
+        // precedente. L'admin forza un altro reset (es. sospetto credenziali compromesse).
+        const utenteInvitato = await pool.query<{ id: string }>('SELECT id FROM utenti_backoffice WHERE email = $1', [
+          emailInvitato,
+        ]);
+        const rReset = await fetch(`${base}/backoffice/utenti/${utenteInvitato.rows[0]!.id}/reset-password`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${adminToken}` },
+        });
+        assert.equal(rReset.status, 200);
+        const token = estraiToken(emailInviate[emailInviate.length - 1]!);
+
+        const rigaPrima = await pool.query<{ password_hash: string }>(
+          'SELECT password_hash FROM utenti_backoffice WHERE id = $1',
+          [utenteInvitato.rows[0]!.id],
+        );
+
+        // Exploit: usare il token di reset (scopo 'invito_utente') sull'endpoint di
+        // bootstrap invece che su /backoffice/utenti/accetta-invito.
+        const rExploit = await fetch(`${base}/auth/bootstrap/verifica`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+        assert.equal(rExploit.status, 401, "il token di reset non deve essere accettato dall'endpoint di bootstrap");
+
+        // Lo stato deve restare esattamente quello prima del tentativo: ancora
+        // in_attesa_verifica (il reset amministrativo non deve essere annullato) e la
+        // password precedente al reset invariata (nessun login possibile con lo stato
+        // in_attesa_verifica, ma verifichiamo anche l'hash direttamente per essere certi
+        // che nessuna scrittura sia avvenuta lato password_hash — verificaPrimoAdmin non
+        // tocca mai quella colonna, a differenza di completaInvito).
+        const riga = await pool.query<{ stato: string; password_hash: string }>(
+          'SELECT stato, password_hash FROM utenti_backoffice WHERE id = $1',
+          [utenteInvitato.rows[0]!.id],
+        );
+        assert.equal(riga.rows[0]!.stato, 'in_attesa_verifica', 'lo stato non deve tornare attivo tramite il bypass');
+        assert.equal(
+          riga.rows[0]!.password_hash,
+          rigaPrima.rows[0]!.password_hash,
+          "l'hash password non deve cambiare: verificaPrimoAdmin non deve mai scrivere password_hash",
+        );
+
+        // Il canale legittimo (accetta-invito) resta invece utilizzabile con lo stesso token.
+        const rAccettaLegittimo = await fetch(`${base}/backoffice/utenti/accetta-invito`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, password: 'password-dopo-secondo-reset-123456' }),
+        });
+        assert.equal(rAccettaLegittimo.status, 200);
+      },
+    );
+
     await t.test('reset-password su id inesistente: 404', async () => {
       const r = await fetch(`${base}/backoffice/utenti/${randomUUID()}/reset-password`, {
         method: 'POST',

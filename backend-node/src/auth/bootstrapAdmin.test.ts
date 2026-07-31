@@ -4,6 +4,7 @@ import type { Pool } from 'pg';
 import {
   richiediPrimoAdmin,
   verificaPrimoAdmin,
+  bootstrapDisponibile,
   ErroreBootstrapNonDisponibile,
   ErroreTokenVerificaNonValido,
 } from './bootstrapAdmin.ts';
@@ -139,5 +140,41 @@ test(
       );
       assert.equal(emailInviate.length, 0);
     });
+
+    await t.test(
+      'bootstrapDisponibile dipende solo da stato = \'attivo\' (ultimo_accesso_il rimossa: era codice morto, ' +
+        'la colonna non viene mai scritta in produzione) — con zero utenti attivi il bootstrap torna disponibile ' +
+        'anche se un utente esiste in in_attesa_verifica (es. mid-reset)',
+      async () => {
+        await svuotaUtenti(pool);
+        emailInviate.length = 0;
+
+        const attivo = await pool.query<{ id: string }>(
+          `INSERT INTO utenti_backoffice (email, password_hash, nome, cognome, ruolo, stato)
+           VALUES ('unico-attivo@provincia.test', 'scrypt:1:1:1:aa:bb', 'Unico', 'Attivo', 'admin', 'attivo')
+           RETURNING id`,
+        );
+        assert.equal(await bootstrapDisponibile(pool), false);
+
+        // Simula un reset-password (impostaNuovoInvito) sull'unico utente attivo: torna
+        // in_attesa_verifica con token scopo 'invito_utente'. Senza alcun altro utente
+        // attivo, bootstrapDisponibile torna disponibile: questa non è una regressione
+        // introdotta dalla rimozione di ultimo_accesso_il, era già così in produzione
+        // (quella colonna non è mai stata scritta). La difesa reale in questo scenario è
+        // il binding di token_verifica_scopo (migration 000008): anche se il bootstrap
+        // risultasse "disponibile", un eventuale nuovo richiediPrimoAdmin() creerebbe un
+        // account SEPARATO con la propria email — non toccherebbe né lo stato né il token
+        // dell'utente in reset (quel token resta scopo 'invito_utente', mai accettato da
+        // verificaPrimoAdmin).
+        await pool.query(
+          `UPDATE utenti_backoffice
+           SET stato = 'in_attesa_verifica', token_verifica_hash = 'y', token_verifica_scade_il = now() + interval '1 day',
+               token_verifica_scopo = 'invito_utente'
+           WHERE id = $1`,
+          [attivo.rows[0]!.id],
+        );
+        assert.equal(await bootstrapDisponibile(pool), true);
+      },
+    );
   },
 );

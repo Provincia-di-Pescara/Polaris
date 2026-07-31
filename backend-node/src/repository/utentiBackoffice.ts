@@ -126,8 +126,8 @@ export async function creaUtenteInvitato(
   try {
     const r = await db.query<RigaUtenteBackoffice>(
       `INSERT INTO utenti_backoffice
-         (email, password_hash, nome, cognome, ruolo, stato, creato_da, token_verifica_hash, token_verifica_scade_il)
-       VALUES ($1, $2, $3, $4, $5, 'in_attesa_verifica', $6, $7, $8)
+         (email, password_hash, nome, cognome, ruolo, stato, creato_da, token_verifica_hash, token_verifica_scade_il, token_verifica_scopo)
+       VALUES ($1, $2, $3, $4, $5, 'in_attesa_verifica', $6, $7, $8, 'invito_utente')
        RETURNING ${COLONNE_SELECT}`,
       [
         dati.email,
@@ -217,7 +217,7 @@ export async function cambiaStatoUtente(
   // dovrebbe restare valido dopo un cambio di stato deciso da un admin.
   const r = await db.query<RigaUtenteBackoffice>(
     `UPDATE utenti_backoffice
-     SET stato = $2, token_verifica_hash = NULL, token_verifica_scade_il = NULL
+     SET stato = $2, token_verifica_hash = NULL, token_verifica_scade_il = NULL, token_verifica_scopo = NULL
      WHERE id = $1
      RETURNING ${COLONNE_SELECT}`,
     [id, nuovoStato],
@@ -251,7 +251,7 @@ export async function impostaNuovoInvito(
   const token = randomBytes(32).toString('hex');
   const r = await db.query<RigaUtenteBackoffice>(
     `UPDATE utenti_backoffice
-     SET stato = 'in_attesa_verifica', token_verifica_hash = $2, token_verifica_scade_il = $3
+     SET stato = 'in_attesa_verifica', token_verifica_hash = $2, token_verifica_scade_il = $3, token_verifica_scopo = 'invito_utente'
      WHERE id = $1
      RETURNING ${COLONNE_SELECT}`,
     [id, hashToken(token), new Date(Date.now() + TTL_TOKEN_INVITO_MS)],
@@ -267,8 +267,9 @@ export async function completaInvito(db: Db, token: string, password: string): P
   const passwordHash = await hashPassword(password);
   const r = await db.query<RigaUtenteBackoffice>(
     `UPDATE utenti_backoffice
-     SET stato = 'attivo', password_hash = $2, token_verifica_hash = NULL, token_verifica_scade_il = NULL
+     SET stato = 'attivo', password_hash = $2, token_verifica_hash = NULL, token_verifica_scade_il = NULL, token_verifica_scopo = NULL
      WHERE token_verifica_hash = $1 AND stato = 'in_attesa_verifica' AND token_verifica_scade_il > now()
+       AND token_verifica_scopo = 'invito_utente'
      RETURNING ${COLONNE_SELECT}`,
     [hashToken(token), passwordHash],
   );
