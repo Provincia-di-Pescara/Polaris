@@ -150,5 +150,31 @@ test(
       assert.equal(t2?.nome, 'Rinominato');
       assert.equal(t2?.creatoDa, primoAdminId);
     });
+
+    await t.test('cambiaStatoUtente su un utente in_attesa_verifica ripulisce il token invito pendente (CHECK utenti_backoffice_token_verifica_coerente)', async () => {
+      const email = `pendente-${randomUUID()}@test.local`;
+      const { utente: pendente } = await creaUtenteInvitato(
+        pool,
+        { email, nome: 'Pendente', cognome: 'Invito', ruolo: 'operatore' },
+        primoAdminId,
+      );
+      assert.equal(pendente.stato, 'in_attesa_verifica');
+
+      const prima = await pool.query<{ token_verifica_hash: string | null }>(
+        'SELECT token_verifica_hash FROM utenti_backoffice WHERE id = $1',
+        [pendente.id],
+      );
+      assert.ok(prima.rows[0]!.token_verifica_hash, 'precondizione: token invito presente prima del cambio stato');
+
+      const disattivato = await cambiaStatoUtente(pool, pendente.id, 'disattivato', primoAdminId);
+      assert.equal(disattivato.stato, 'disattivato');
+
+      const dopo = await pool.query<{ token_verifica_hash: string | null; token_verifica_scade_il: string | null }>(
+        'SELECT token_verifica_hash, token_verifica_scade_il FROM utenti_backoffice WHERE id = $1',
+        [pendente.id],
+      );
+      assert.equal(dopo.rows[0]!.token_verifica_hash, null);
+      assert.equal(dopo.rows[0]!.token_verifica_scade_il, null);
+    });
   },
 );

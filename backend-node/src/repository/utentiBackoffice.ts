@@ -199,8 +199,17 @@ export async function cambiaStatoUtente(
       throw new ErroreUltimoAdmin("non è possibile disattivare l'ultimo admin attivo");
     }
   }
+  // Ripulisce sempre un eventuale invito pendente: cambiare esplicitamente lo stato
+  // qui è sempre attivo<->disattivato (mai in_attesa_verifica, di competenza esclusiva
+  // di impostaNuovoInvito/completaInvito) — un token_verifica lasciato valorizzato
+  // violerebbe il CHECK utenti_backoffice_token_verifica_coerente (migration 000005)
+  // se lo stato precedente era in_attesa_verifica, e comunque un invito pendente non
+  // dovrebbe restare valido dopo un cambio di stato deciso da un admin.
   const r = await db.query<RigaUtenteBackoffice>(
-    `UPDATE utenti_backoffice SET stato = $2 WHERE id = $1 RETURNING ${COLONNE_SELECT}`,
+    `UPDATE utenti_backoffice
+     SET stato = $2, token_verifica_hash = NULL, token_verifica_scade_il = NULL
+     WHERE id = $1
+     RETURNING ${COLONNE_SELECT}`,
     [id, nuovoStato],
   );
   const riga = r.rows[0];
