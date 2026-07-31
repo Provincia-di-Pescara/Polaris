@@ -8,6 +8,7 @@ import { eseguiLogin, eseguiLogout, eseguiRefresh } from './auth/login.ts';
 import { eseguiCallbackOidc, eseguiLogoutPubblico, eseguiRefreshPubblico } from './auth/loginPubblico.ts';
 import { ErroreCredenzialiNonValide, ErroreRefreshTokenNonValido, ErroreUtenteDisattivato } from './auth/errori.ts';
 import {
+  schemaAccettaInvitoUtente,
   schemaBootstrapPrimoAdmin,
   schemaBootstrapVerifica,
   schemaLoginRequest,
@@ -32,7 +33,19 @@ import { costruisciUrlAutorizzazione, ErroreOidcNonConfigurato, ErroreScambioCod
 import { leggiConfigOidcPubblica, scriviConfigOidc, ErroreClientSecretMancante } from './oidc/config.ts';
 import { richiedeRuolo } from './auth/middleware.ts';
 import { registraOperazione } from './repository/logOperazioni.ts';
-import { creaUtenteInvitato, listaUtenti, trovaUtentePerId, aggiornaUtente, cambiaStatoUtente, ErroreUltimoAdmin, aPubblico } from './repository/utentiBackoffice.ts';
+import {
+  creaUtenteInvitato,
+  listaUtenti,
+  trovaUtentePerId,
+  aggiornaUtente,
+  cambiaStatoUtente,
+  impostaNuovoInvito,
+  completaInvito,
+  ErroreUltimoAdmin,
+  ErroreTokenInvitoNonValido,
+  aPubblico,
+} from './repository/utentiBackoffice.ts';
+import { revocaSessioniUtente } from './repository/sessioni.ts';
 import { ErroreValoreDuplicato, ErroreNonTrovato, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
 import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './discipline.ts';
 import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstituzione } from './istituzioni.ts';
@@ -1475,6 +1488,87 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       }
     },
   );
+
+  app.post(
+    '/backoffice/utenti/:id/reset-password',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      if (!inviaEmailFn || !backofficeBaseUrl) {
+        res.status(503).json({ errore: 'SMTP non configurato (SMTP_HOST/BACKOFFICE_BASE_URL in .env)' });
+        return;
+      }
+      try {
+        const id = typeof req.params.id === 'string' ? req.params.id : '';
+        const risultato = await eseguiInTransazione(pool, async (client) => {
+          const esito = await impostaNuovoInvito(client, id);
+          if (!esito) {
+            return null;
+          }
+          await revocaSessioniUtente(client, id);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'richiedi_reset_password_utente_backoffice',
+            entitaTipo: 'utenti_backoffice',
+            entitaId: id,
+          });
+          return esito;
+        });
+        if (!risultato) {
+          res.status(404).json({ errore: 'utente non trovato' });
+          return;
+        }
+        await inviaEmailFn({
+          a: risultato.utente.email,
+          oggetto: 'POLARIS — reimposta la password del tuo account backoffice',
+          testo: [
+            `Buongiorno ${risultato.utente.nome} ${risultato.utente.cognome},`,
+            '',
+            'è stato richiesto un reset della password del suo account backoffice POLARIS. Per impostarne una nuova apra questo link:',
+            '',
+            `${backofficeBaseUrl}/utenti/accetta-invito?token=${risultato.token}`,
+            '',
+            'Il link scade tra 24 ore. Le sessioni attive precedenti sono state disconnesse.',
+          ].join('\n'),
+        });
+        res.status(200).json(aPubblico(risultato.utente));
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.post('/backoffice/utenti/accetta-invito', limitatoreLogin, async (req, res) => {
+    const parsed = schemaAccettaInvitoUtente.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+      return;
+    }
+    try {
+      const utente = await eseguiInTransazione(pool, async (client) => {
+        const u = await completaInvito(client, parsed.data.token, parsed.data.password);
+        await registraOperazione(client, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: u.id, ruolo: u.ruolo },
+          azione: 'accetta_invito_utente_backoffice',
+          entitaTipo: 'utenti_backoffice',
+          entitaId: u.id,
+        });
+        return u;
+      });
+      res.status(200).json(aPubblico(utente));
+    } catch (err) {
+      if (err instanceof ErroreTokenInvitoNonValido) {
+        res.status(400).json({ errore: err.message });
+        return;
+      }
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
 
   return app;
 }

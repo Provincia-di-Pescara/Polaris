@@ -29,3 +29,9 @@ export const schemaBootstrapVerifica = z.object({
   token: z.string().regex(/^[a-f0-9]{64}$/),
 });
 export type BootstrapVerificaRequest = z.infer<typeof schemaBootstrapVerifica>;
+
+export const schemaAccettaInvitoUtente = z.object({
+  token: z.string().regex(/^[a-f0-9]{64}$/),
+  password: z.string().min(12),
+});
+export type AccettaInvitoUtenteRequest = z.infer<typeof schemaAccettaInvitoUtente>;
