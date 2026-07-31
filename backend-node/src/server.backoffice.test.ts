@@ -882,3 +882,73 @@ test(
     });
   },
 );
+
+test(
+  'PUT /backoffice/utenti/:id e /:id/stato: modifica, protezione ultimo admin',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const pool = new Pool({ connectionString: dsn });
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return pool.end();
+    });
+
+    const admin = await creaUtenteBackofficeTest(pool, 'admin');
+    const secondoAdmin = await creaUtenteBackofficeTest(pool, 'admin');
+    const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+
+    await t.test('operatore: 403 su entrambe', async () => {
+      const r1 = await fetch(`${base}/backoffice/utenti/${operatore.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ nome: 'X', cognome: 'Y', ruolo: 'operatore' }),
+      });
+      assert.equal(r1.status, 403);
+      const r2 = await fetch(`${base}/backoffice/utenti/${operatore.id}/stato`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ stato: 'disattivato' }),
+      });
+      assert.equal(r2.status, 403);
+    });
+
+    await t.test('admin aggiorna anagrafica operatore: 200', async () => {
+      const r = await fetch(`${base}/backoffice/utenti/${operatore.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ nome: 'Rinominato', cognome: 'Cognome', ruolo: 'operatore' }),
+      });
+      assert.equal(r.status, 200);
+      const body = (await r.json()) as { nome: string };
+      assert.equal(body.nome, 'Rinominato');
+    });
+
+    await t.test('admin disattiva se stesso: 409', async () => {
+      const r = await fetch(`${base}/backoffice/utenti/${admin.id}/stato`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ stato: 'disattivato' }),
+      });
+      assert.equal(r.status, 409);
+    });
+
+    await t.test('secondoAdmin disattiva operatore: 200 (non è l\'ultimo admin, non è auto-modifica)', async () => {
+      const r = await fetch(`${base}/backoffice/utenti/${operatore.id}/stato`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secondoAdmin.token}` },
+        body: JSON.stringify({ stato: 'disattivato' }),
+      });
+      assert.equal(r.status, 200);
+    });
+
+    await t.test('id inesistente: 404', async () => {
+      const r = await fetch(`${base}/backoffice/utenti/${randomUUID()}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ nome: 'X', cognome: 'Y', ruolo: 'operatore' }),
+      });
+      assert.equal(r.status, 404);
+    });
+  },
+);

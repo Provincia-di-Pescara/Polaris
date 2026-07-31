@@ -130,6 +130,18 @@ export const schemaCreaUtenteBackoffice = z.object({
 });
 export type CreaUtenteBackofficeRequest = z.infer<typeof schemaCreaUtenteBackoffice>;
 
+export const schemaAggiornaUtenteBackoffice = z.object({
+  nome: z.string().min(1),
+  cognome: z.string().min(1),
+  ruolo: z.enum(['admin', 'operatore']),
+});
+export type AggiornaUtenteBackofficeRequest = z.infer<typeof schemaAggiornaUtenteBackoffice>;
+
+export const schemaCambiaStatoUtenteBackoffice = z.object({
+  stato: z.enum(['attivo', 'disattivato']),
+});
+export type CambiaStatoUtenteBackofficeRequest = z.infer<typeof schemaCambiaStatoUtenteBackoffice>;
+
 export const schemaImpostazioniOidc = z.object({
   issuer: z
     .string()
