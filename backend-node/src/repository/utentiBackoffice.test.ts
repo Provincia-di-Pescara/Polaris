@@ -14,8 +14,10 @@ import {
 } from './utentiBackoffice.ts';
 import { revocaSessioniUtente, creaSessione } from './sessioni.ts';
 import { ErroreValoreDuplicato, ErroreNonTrovato } from '../erroriDominio.ts';
+import { ErroreUtenteDisattivato } from '../auth/errori.ts';
 import { verificaPassword } from '../auth/password.ts';
 import { creaDatabaseDedicato } from '../testutil/dbDedicato.ts';
+import { bootstrapDisponibile } from '../auth/bootstrapAdmin.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 
@@ -23,6 +25,28 @@ async function svuota(pool: import('pg').Pool): Promise<void> {
   await pool.query('DELETE FROM sessioni_backoffice');
   await pool.query('DELETE FROM log_operazioni WHERE utente_backoffice_id IS NOT NULL');
   await pool.query('DELETE FROM utenti_backoffice');
+}
+
+// Replica minimale di eseguiInTransazione (server.ts): pg_advisory_xact_lock ha effetto
+// solo dentro una vera transazione client-scoped, non su chiamate pool.query() sciolte
+// (che sono ciascuna un auto-commit separato). Serve per il test di concorrenza del
+// Finding 2, che deve esercitare lo stesso ambito transazionale del codice reale.
+async function eseguiInTransazione<T>(
+  pool: import('pg').Pool,
+  azione: (client: import('pg').PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const risultato = await azione(client);
+    await client.query('COMMIT');
+    return risultato;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 test(
@@ -130,9 +154,19 @@ test(
       assert.equal(disattivato.stato, 'disattivato');
     });
 
+    let secondoAdminIdPerReset = '';
+
     await t.test('impostaNuovoInvito: rigenera token, stato torna in_attesa_verifica, sessioni revocate', async () => {
+      // secondoAdmin è stato creato+attivato nel test precedente ed è l'unico admin
+      // attivo rimasto (primoAdminId è ora operatore disattivato). Lo usiamo come
+      // chiamante per rispettare la firma aggiornata (chiamanteId != target).
+      const admins = await listaUtenti(pool);
+      const secondoAdmin = admins.find((u) => u.ruolo === 'admin' && u.stato === 'attivo');
+      assert.ok(secondoAdmin, 'precondizione: deve esistere un admin attivo diverso da invitatoId');
+      secondoAdminIdPerReset = secondoAdmin!.id;
+
       const { id: sessioneId } = { id: await creaSessione(pool, { utenteBackofficeId: invitatoId, refreshTokenHash: 'hash-finto', scadeIl: new Date(Date.now() + 3600_000) }) };
-      const reset = await impostaNuovoInvito(pool, invitatoId);
+      const reset = await impostaNuovoInvito(pool, invitatoId, secondoAdminIdPerReset);
       assert.ok(reset);
       assert.equal(reset!.utente.stato, 'in_attesa_verifica');
       assert.match(reset!.token, /^[a-f0-9]{64}$/);
@@ -141,8 +175,122 @@ test(
       const sessione = await pool.query<{ revocata_il: string | null }>('SELECT revocata_il FROM sessioni_backoffice WHERE id = $1', [sessioneId]);
       assert.ok(sessione.rows[0]!.revocata_il, 'la sessione precedente deve risultare revocata');
 
-      const idInesistente = await impostaNuovoInvito(pool, '00000000-0000-0000-0000-000000000000');
+      const idInesistente = await impostaNuovoInvito(pool, '00000000-0000-0000-0000-000000000000', secondoAdminIdPerReset);
       assert.equal(idInesistente, null);
+
+      // Riporta invitatoId ad 'attivo' per non alterare le precondizioni dei test seguenti
+      // (rimane un dato del test, non deve inquinare gli scenari successivi).
+      await completaInvito(pool, reset!.token, 'password-nuova-di-nuovo-123456');
+    });
+
+    await t.test('impostaNuovoInvito: auto-reset vietato', async () => {
+      await assert.rejects(
+        () => impostaNuovoInvito(pool, secondoAdminIdPerReset, secondoAdminIdPerReset),
+        ErroreUltimoAdmin,
+      );
+    });
+
+    await t.test('impostaNuovoInvito: ultimo admin attivo non resettabile da altri', async () => {
+      // secondoAdminIdPerReset è l'unico admin attivo: nessun altro admin può resettarlo.
+      await assert.rejects(
+        () => impostaNuovoInvito(pool, secondoAdminIdPerReset, invitatoId),
+        ErroreUltimoAdmin,
+      );
+    });
+
+    await t.test('impostaNuovoInvito: utente disattivato non resettabile', async () => {
+      // primoAdminId è stato disattivato in un test precedente.
+      await assert.rejects(
+        () => impostaNuovoInvito(pool, primoAdminId, secondoAdminIdPerReset),
+        ErroreUtenteDisattivato,
+      );
+    });
+
+    await t.test(
+      'Finding 1 (regressione): reset-password su admin già loggato non deve riaprire il bootstrap pubblico',
+      async () => {
+        // Simula un admin che ha già completato un login almeno una volta in passato
+        // (ultimo_accesso_il valorizzato), poi viene messo in reset (stato torna
+        // in_attesa_verifica tramite impostaNuovoInvito). bootstrapDisponibile() deve
+        // restare false: un vero bootstrap non è mai stato "riaperto".
+        await pool.query(`UPDATE utenti_backoffice SET ultimo_accesso_il = now() WHERE id = $1`, [
+          secondoAdminIdPerReset,
+        ]);
+        assert.equal(
+          await bootstrapDisponibile(pool),
+          false,
+          'precondizione: bootstrap non disponibile con un admin già loggato',
+        );
+
+        // Reset diretto via SQL per isolare il test sul fix 1a (bootstrapDisponibile),
+        // bypassando il fix 1b (self/last-admin/disattivato check di impostaNuovoInvito)
+        // che altrimenti impedirebbe comunque il reset su questo specifico utente.
+        await pool.query(
+          `UPDATE utenti_backoffice SET stato = 'in_attesa_verifica', token_verifica_hash = 'x', token_verifica_scade_il = now() + interval '1 day' WHERE id = $1`,
+          [secondoAdminIdPerReset],
+        );
+
+        const riga = await pool.query<{ stato: string; ultimo_accesso_il: string | null }>(
+          'SELECT stato, ultimo_accesso_il FROM utenti_backoffice WHERE id = $1',
+          [secondoAdminIdPerReset],
+        );
+        assert.equal(riga.rows[0]!.stato, 'in_attesa_verifica');
+        assert.ok(riga.rows[0]!.ultimo_accesso_il, 'precondizione: ultimo_accesso_il resta valorizzato dopo il reset');
+
+        assert.equal(
+          await bootstrapDisponibile(pool),
+          false,
+          'bootstrap NON deve riaprirsi: un admin con ultimo_accesso_il valorizzato è già stato bootstrappato una volta, indipendentemente dallo stato attuale',
+        );
+
+        // Ripristina lo stato per non alterare le precondizioni dei test seguenti.
+        await pool.query(
+          `UPDATE utenti_backoffice SET stato = 'attivo', token_verifica_hash = NULL, token_verifica_scade_il = NULL WHERE id = $1`,
+          [secondoAdminIdPerReset],
+        );
+      },
+    );
+
+    await t.test('Finding 2 (concorrenza): due disattivazioni concorrenti non devono azzerare gli admin attivi', async () => {
+      // Due admin attivi indipendenti, ciascuno disattiva l'altro in parallelo. Sotto
+      // READ COMMITTED senza advisory lock entrambe le transazioni potrebbero vedere
+      // l'altro admin come "ancora attivo" e committare entrambe -> zero admin attivi.
+      const { utente: adminA, token: tokenA } = await creaUtenteInvitato(
+        pool,
+        { email: `concorrenza-a-${randomUUID()}@test.local`, nome: 'Concorrenza', cognome: 'A', ruolo: 'admin' },
+        secondoAdminIdPerReset,
+      );
+      await completaInvito(pool, tokenA, 'password-concorrenza-a-123');
+
+      const { utente: adminB, token: tokenB } = await creaUtenteInvitato(
+        pool,
+        { email: `concorrenza-b-${randomUUID()}@test.local`, nome: 'Concorrenza', cognome: 'B', ruolo: 'admin' },
+        secondoAdminIdPerReset,
+      );
+      await completaInvito(pool, tokenB, 'password-concorrenza-b-123');
+
+      // A questo punto ci sono 3 admin attivi: secondoAdminIdPerReset, adminA, adminB.
+      // Disattiviamo prima secondoAdminIdPerReset per isolare lo scenario a soli 2
+      // admin attivi concorrenti (adminA e adminB), poi lanciamo le due disattivazioni
+      // reciproche in parallelo.
+      await cambiaStatoUtente(pool, secondoAdminIdPerReset, 'disattivato', adminA.id);
+
+      const risultati = await Promise.allSettled([
+        eseguiInTransazione(pool, (client) => cambiaStatoUtente(client, adminA.id, 'disattivato', adminB.id)),
+        eseguiInTransazione(pool, (client) => cambiaStatoUtente(client, adminB.id, 'disattivato', adminA.id)),
+      ]);
+
+      const falliti = risultati.filter((r) => r.status === 'rejected');
+      const riusciti = risultati.filter((r) => r.status === 'fulfilled');
+      assert.equal(falliti.length, 1, 'esattamente una delle due disattivazioni concorrenti deve fallire');
+      assert.equal(riusciti.length, 1, 'esattamente una delle due disattivazioni concorrenti deve riuscire');
+      const fallito = falliti[0] as PromiseRejectedResult;
+      assert.ok(fallito.reason instanceof ErroreUltimoAdmin, 'il fallimento deve essere ErroreUltimoAdmin, non un errore generico');
+
+      const attivi = await pool.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM utenti_backoffice WHERE ruolo = 'admin' AND stato = 'attivo'`,
+      );
+      assert.equal(Number(attivi.rows[0]!.count), 1, 'deve restare esattamente 1 admin attivo, mai zero');
     });
 
     await t.test('trovaUtentePerId legge i nuovi campi', async () => {

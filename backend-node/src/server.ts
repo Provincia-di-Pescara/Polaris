@@ -1336,8 +1336,8 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         return;
       }
       try {
-        const utente = await eseguiInTransazione(pool, async (client) => {
-          const { utente: u, token } = await creaUtenteInvitato(client, parsed.data, req.utente!.sub);
+        const { utente, token } = await eseguiInTransazione(pool, async (client) => {
+          const { utente: u, token: t } = await creaUtenteInvitato(client, parsed.data, req.utente!.sub);
           await registraOperazione(client, {
             attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
             azione: 'crea_utente_backoffice',
@@ -1345,20 +1345,24 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
             entitaId: u.id,
             dettaglio: { email: u.email, nome: u.nome, cognome: u.cognome, ruolo: u.ruolo },
           });
-          await inviaEmailFn({
-            a: u.email,
-            oggetto: 'POLARIS — invito account backoffice',
-            testo: [
-              `Buongiorno ${u.nome} ${u.cognome},`,
-              '',
-              'è stato creato per lei un account sul backoffice POLARIS. Per attivarlo e impostare la password apra questo link:',
-              '',
-              `${backofficeBaseUrl}/utenti/accetta-invito?token=${token}`,
-              '',
-              'Il link scade tra 24 ore.',
-            ].join('\n'),
-          });
-          return u;
+          return { utente: u, token: t };
+        });
+        // Invio email FUORI dalla transazione (già commessa sopra): stesso pattern di
+        // reset-password, non tiene occupata una connessione del pool per la durata SMTP.
+        // Se l'invio fallisce, l'utente resta comunque creato in_attesa_verifica — un
+        // admin può rigenerare l'invito con reset-password se l'email si perde.
+        await inviaEmailFn({
+          a: utente.email,
+          oggetto: 'POLARIS — invito account backoffice',
+          testo: [
+            `Buongiorno ${utente.nome} ${utente.cognome},`,
+            '',
+            'è stato creato per lei un account sul backoffice POLARIS. Per attivarlo e impostare la password apra questo link:',
+            '',
+            `${backofficeBaseUrl}/utenti/accetta-invito?token=${token}`,
+            '',
+            'Il link scade tra 24 ore.',
+          ].join('\n'),
         });
         res.status(201).json(aPubblico(utente));
       } catch (err) {
@@ -1501,7 +1505,7 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       try {
         const id = typeof req.params.id === 'string' ? req.params.id : '';
         const risultato = await eseguiInTransazione(pool, async (client) => {
-          const esito = await impostaNuovoInvito(client, id);
+          const esito = await impostaNuovoInvito(client, id, req.utente!.sub);
           if (!esito) {
             return null;
           }
@@ -1533,6 +1537,10 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         });
         res.status(200).json(aPubblico(risultato.utente));
       } catch (err) {
+        if (err instanceof ErroreUltimoAdmin || err instanceof ErroreUtenteDisattivato) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
         if (erroreRiferimento) {
           res.status(400).json({ errore: erroreRiferimento.message });

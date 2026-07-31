@@ -35,11 +35,24 @@ function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
-// Disponibile finché non esiste nessun utente già verificato: i soli account
-// 'in_attesa_verifica' non bloccano (l'email potrebbe essere andata persa — una nuova
-// richiesta li sostituisce).
+// Disponibile finché nessun utente ha MAI completato un login e nessun utente è
+// correntemente attivo. Non ci si può basare solo sullo stato 'in_attesa_verifica'
+// corrente: un admin reale può trovarsi in quello stato temporaneamente durante un
+// reset-password (POST /backoffice/utenti/:id/reset-password), non solo durante un
+// bootstrap mai completato.
+// - ultimo_accesso_il valorizzato è prova che un login è già avvenuto in passato (per
+//   QUALUNQUE utente, non solo il target di un eventuale reset): il valore non viene mai
+//   azzerato da impostaNuovoInvito, quindi un admin "in reset" che ha già fatto login
+//   almeno una volta continua a bloccare il bootstrap anche mentre è in_attesa_verifica.
+// - stato = 'attivo' copre il caso di un admin verificato via email (bootstrap appena
+//   completato) ma che non ha ancora effettuato il primo login: senza questa condizione
+//   il solo criterio ultimo_accesso_il lascerebbe una finestra in cui un bootstrap appena
+//   completato e mai ancora "loggato" risulterebbe erroneamente ancora disponibile,
+//   riaprendo lo stesso tipo di problema che questo fix vuole chiudere.
 export async function bootstrapDisponibile(db: Db): Promise<boolean> {
-  const r = await db.query(`SELECT 1 FROM utenti_backoffice WHERE stato <> 'in_attesa_verifica' LIMIT 1`);
+  const r = await db.query(
+    `SELECT 1 FROM utenti_backoffice WHERE ultimo_accesso_il IS NOT NULL OR stato = 'attivo' LIMIT 1`,
+  );
   return r.rows.length === 0;
 }
 
@@ -63,7 +76,10 @@ export async function richiediPrimoAdmin(
   const passwordHash = await hashPassword(dati.password);
 
   // Sostituisce eventuali bootstrap pendenti mai verificati (uno solo alla volta).
-  await db.query(`DELETE FROM utenti_backoffice WHERE stato = 'in_attesa_verifica'`);
+  // Ristretto a ultimo_accesso_il IS NULL: una riga in_attesa_verifica con un login
+  // già avvenuto in passato è un utente REALE in mezzo a un reset-password, non un
+  // tentativo di bootstrap mai completato — non va mai cancellata da qui.
+  await db.query(`DELETE FROM utenti_backoffice WHERE stato = 'in_attesa_verifica' AND ultimo_accesso_il IS NULL`);
   await db.query(
     `INSERT INTO utenti_backoffice
        (email, password_hash, nome, cognome, ruolo, stato, token_verifica_hash, token_verifica_scade_il)

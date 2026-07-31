@@ -3,8 +3,16 @@ import { DatabaseError } from 'pg';
 import type { Db } from '../db.ts';
 import { hashPassword } from '../auth/password.ts';
 import { ErroreValoreDuplicato, ErroreNonTrovato } from '../erroriDominio.ts';
+import { ErroreUtenteDisattivato } from '../auth/errori.ts';
 
 const TTL_TOKEN_INVITO_MS = 24 * 60 * 60 * 1000;
+
+// Chiave arbitraria fissa per l'advisory lock a transazione che serializza le
+// operazioni sensibili al conteggio "ultimo admin attivo" (declassamento a
+// operatore, disattivazione, reset password) — previene la race condition di
+// due transazioni concorrenti che si vedono a vicenda come "ancora attive"
+// sotto READ COMMITTED e portano a zero admin attivi.
+export const CHIAVE_LOCK_ULTIMO_ADMIN = 872364871;
 
 export class ErroreUltimoAdmin extends Error {}
 export class ErroreTokenInvitoNonValido extends Error {}
@@ -146,7 +154,7 @@ export async function listaUtenti(db: Db): Promise<UtenteBackoffice[]> {
   return r.rows.map(daRiga);
 }
 
-async function contaAltriAdminAttivi(db: Db, idEscluso: string): Promise<number> {
+export async function contaAltriAdminAttivi(db: Db, idEscluso: string): Promise<number> {
   const r = await db.query<{ count: string }>(
     `SELECT count(*)::text AS count FROM utenti_backoffice WHERE ruolo = 'admin' AND stato = 'attivo' AND id <> $1`,
     [idEscluso],
@@ -162,6 +170,7 @@ export interface DatiAggiornaUtente {
 
 export async function aggiornaUtente(db: Db, id: string, dati: DatiAggiornaUtente): Promise<UtenteBackoffice> {
   if (dati.ruolo === 'operatore') {
+    await db.query(`SELECT pg_advisory_xact_lock($1)`, [CHIAVE_LOCK_ULTIMO_ADMIN]);
     const attuale = await trovaUtentePerId(db, id);
     if (!attuale) {
       throw new ErroreNonTrovato('utente non trovato');
@@ -191,6 +200,7 @@ export async function cambiaStatoUtente(
     throw new ErroreUltimoAdmin('non puoi modificare lo stato del tuo stesso account');
   }
   if (nuovoStato === 'disattivato') {
+    await db.query(`SELECT pg_advisory_xact_lock($1)`, [CHIAVE_LOCK_ULTIMO_ADMIN]);
     const attuale = await trovaUtentePerId(db, id);
     if (!attuale) {
       throw new ErroreNonTrovato('utente non trovato');
@@ -219,7 +229,25 @@ export async function cambiaStatoUtente(
   return daRiga(riga);
 }
 
-export async function impostaNuovoInvito(db: Db, id: string): Promise<{ utente: UtenteBackoffice; token: string } | null> {
+export async function impostaNuovoInvito(
+  db: Db,
+  id: string,
+  chiamanteId: string,
+): Promise<{ utente: UtenteBackoffice; token: string } | null> {
+  if (id === chiamanteId) {
+    throw new ErroreUltimoAdmin('non puoi resettare la password del tuo stesso account');
+  }
+  await db.query(`SELECT pg_advisory_xact_lock($1)`, [CHIAVE_LOCK_ULTIMO_ADMIN]);
+  const attuale = await trovaUtentePerId(db, id);
+  if (!attuale) {
+    return null;
+  }
+  if (attuale.stato === 'disattivato') {
+    throw new ErroreUtenteDisattivato('non è possibile resettare la password di un utente disattivato');
+  }
+  if (attuale.ruolo === 'admin' && attuale.stato === 'attivo' && (await contaAltriAdminAttivi(db, id)) === 0) {
+    throw new ErroreUltimoAdmin("non è possibile resettare la password dell'ultimo admin attivo");
+  }
   const token = randomBytes(32).toString('hex');
   const r = await db.query<RigaUtenteBackoffice>(
     `UPDATE utenti_backoffice
