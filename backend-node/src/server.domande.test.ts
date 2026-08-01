@@ -435,4 +435,26 @@ test('POST /pubblico/domande/:id/osservazioni', { skip: dsn ? false : 'TEST_DATA
     });
     assert.equal(r.status, 403);
   });
+
+  await t.test('abilitazione approvata ma su una stagione diversa: 403', async () => {
+    // Scenario: la persona è stata delegata sulla stessa associazione in una stagione
+    // precedente/diversa (mai revocata) ma non ha alcuna abilitazione per la stagione a
+    // cui appartiene questa domanda — non deve poter osservare (art. 53, tracciabilità).
+    const personaAltraStagione = await creaPersonaFisicaTest(pool);
+    const altraStagione = await pool.query<{ id: string }>(
+      `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2028-09-01', '2029-06-30') RETURNING id`,
+      [`stagione-oss-altra-${randomUUID()}`],
+    );
+    await pool.query(
+      `INSERT INTO abilitazioni (persona_fisica_id, associazione_id, stagione_id, titolo, ruolo, stato)
+       VALUES ($1, $2, $3, 'legale_rappresentante', 'rappresentante', 'approvata')`,
+      [personaAltraStagione.id, fx.associazioneId, altraStagione.rows[0]!.id],
+    );
+    const r = await fetch(`${base}/pubblico/domande/${domanda.id}/osservazioni`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${personaAltraStagione.token}` },
+      body: JSON.stringify({ testo: 'x' }),
+    });
+    assert.equal(r.status, 403);
+  });
 });

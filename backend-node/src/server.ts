@@ -1918,15 +1918,12 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(404).json({ errore: 'domanda non trovata' });
           return;
         }
-        const abilitazione = await pool.query(
-          `SELECT ruolo FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2 AND stato = 'approvata' LIMIT 1`,
-          [req.persona!.sub, domanda.associazioneId],
-        );
-        const ruoloDelegante = abilitazione.rows[0]?.ruolo as string | undefined;
-        if (!ruoloDelegante) {
-          res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione' });
+        const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, domanda.associazioneId, domanda.stagioneId);
+        if (!delegante) {
+          res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
           return;
         }
+        const ruoloDelegante = delegante.ruolo;
         const osservazione = await eseguiInTransazione(pool, async (client) => {
           const o = await presentaOsservazione(client, {
             domandaId,
