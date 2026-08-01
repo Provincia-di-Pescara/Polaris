@@ -379,3 +379,60 @@ test('GET /pubblico/stagioni/:id/domande/esiti', { skip: dsn ? false : 'TEST_DAT
     assert.ok(body.some((e) => e.domandaId === domanda.id && e.stato === 'ammessa'));
   });
 });
+
+test('POST /pubblico/domande/:id/osservazioni', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(() => {
+    chiudi();
+    return pool.end();
+  });
+
+  const persona = await creaPersonaFisicaTest(pool);
+  const fx = await creaFixtureCompleta(pool);
+  await pool.query(
+    `INSERT INTO abilitazioni (persona_fisica_id, associazione_id, stagione_id, titolo, ruolo, stato)
+     VALUES ($1, $2, $3, 'legale_rappresentante', 'rappresentante', 'approvata')`,
+    [persona.id, fx.associazioneId, fx.stagioneId],
+  );
+  const creazione = await fetch(`${base}/pubblico/domande`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+    body: JSON.stringify(await corpoDomandaValido(fx)),
+  });
+  const domanda = (await creazione.json()) as { id: string };
+
+  await t.test('domanda ancora presentata: 409', async () => {
+    const r = await fetch(`${base}/pubblico/domande/${domanda.id}/osservazioni`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+      body: JSON.stringify({ testo: 'troppo presto' }),
+    });
+    assert.equal(r.status, 409);
+  });
+
+  const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+  await fetch(`${base}/backoffice/domande/${domanda.id}/ammetti`, { method: 'PUT', headers: { Authorization: `Bearer ${operatore.token}` } });
+
+  await t.test('dopo ammissione: 201, domanda passa a riesame_richiesto', async () => {
+    const r = await fetch(`${base}/pubblico/domande/${domanda.id}/osservazioni`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+      body: JSON.stringify({ testo: 'non concordo con FR' }),
+    });
+    assert.equal(r.status, 201);
+    const dettaglio = await fetch(`${base}/pubblico/domande/${domanda.id}`, { headers: { Authorization: `Bearer ${persona.token}` } });
+    const body = (await dettaglio.json()) as { stato: string };
+    assert.equal(body.stato, 'riesame_richiesto');
+  });
+
+  await t.test('senza abilitazione su quella domanda: 403', async () => {
+    const altraPersona = await creaPersonaFisicaTest(pool);
+    const r = await fetch(`${base}/pubblico/domande/${domanda.id}/osservazioni`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${altraPersona.token}` },
+      body: JSON.stringify({ testo: 'x' }),
+    });
+    assert.equal(r.status, 403);
+  });
+});

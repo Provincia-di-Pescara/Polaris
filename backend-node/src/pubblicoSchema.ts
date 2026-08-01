@@ -79,3 +79,8 @@ export const schemaCreaDomanda = z
     path: ['richiesteGiornataGara'],
   });
 export type CreaDomandaRequest = z.infer<typeof schemaCreaDomanda>;
+
+export const schemaCreaOsservazione = z.object({
+  testo: z.string().min(1),
+});
+export type CreaOsservazioneRequest = z.infer<typeof schemaCreaOsservazione>;

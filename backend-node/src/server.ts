@@ -55,7 +55,7 @@ import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSov
 import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
 import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico } from './backofficeSchema.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
-import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda } from './pubblicoSchema.ts';
+import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaCreaOsservazione } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
 import { MulterError } from 'multer';
 import { readFile, unlink } from 'node:fs/promises';
@@ -77,6 +77,7 @@ import {
   trovaDomandaConEsitoPerId,
   elencoEsitiPubblicati,
 } from './domande.ts';
+import { presentaOsservazione, trovaOsservazionePerId } from './osservazioni.ts';
 import { trovaPersonaFisicaPerCf, creaPersonaFisicaShell } from './repository/personeFisiche.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
@@ -1889,6 +1890,68 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       try {
         res.status(200).json(await elencoEsitiPubblicati(pool, stagioneId));
       } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Pubblico: presentazione osservazione (art. B.11) ---
+
+  app.post(
+    '/pubblico/domande/:id/osservazioni',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const domandaId = typeof req.params.id === 'string' ? req.params.id : '';
+      const parsed = schemaCreaOsservazione.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const domanda = await trovaDomandaPerId(pool, domandaId);
+        if (!domanda) {
+          res.status(404).json({ errore: 'domanda non trovata' });
+          return;
+        }
+        const abilitazione = await pool.query(
+          `SELECT ruolo FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2 AND stato = 'approvata' LIMIT 1`,
+          [req.persona!.sub, domanda.associazioneId],
+        );
+        const ruoloDelegante = abilitazione.rows[0]?.ruolo as string | undefined;
+        if (!ruoloDelegante) {
+          res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione' });
+          return;
+        }
+        const osservazione = await eseguiInTransazione(pool, async (client) => {
+          const o = await presentaOsservazione(client, {
+            domandaId,
+            personaFisicaId: req.persona!.sub,
+            testo: parsed.data.testo,
+          });
+          await registraOperazione(client, {
+            attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: domanda.associazioneId, ruolo: ruoloDelegante },
+            azione: 'presenta_osservazione',
+            entitaTipo: 'osservazioni_istruttoria',
+            entitaId: o.id,
+            dettaglio: o as unknown as Record<string, unknown>,
+          });
+          return o;
+        });
+        res.status(201).json(osservazione);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
         if (erroreRiferimento) {
           res.status(400).json({ errore: erroreRiferimento.message });
