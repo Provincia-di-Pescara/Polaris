@@ -1700,5 +1700,59 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     },
   );
 
+  app.get(
+    '/pubblico/associazioni/:associazioneId/domande',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const associazioneId = typeof req.params.associazioneId === 'string' ? req.params.associazioneId : '';
+      const stagioneId = typeof req.query.stagioneId === 'string' ? req.query.stagioneId : undefined;
+      try {
+        const abilitazione = await pool.query(
+          `SELECT 1 FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2 AND stato IN ('in_attesa', 'approvata') LIMIT 1`,
+          [req.persona!.sub, associazioneId],
+        );
+        if (abilitazione.rows.length === 0) {
+          res.status(403).json({ errore: 'nessuna abilitazione propria su questa associazione' });
+          return;
+        }
+        res.status(200).json(await listaDomandePerAssociazione(pool, associazioneId, stagioneId));
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get('/pubblico/domande/:id', richiedeAutenticazionePubblico, async (req: RequestAutenticataPubblico, res) => {
+    const id = typeof req.params.id === 'string' ? req.params.id : '';
+    try {
+      const domanda = await trovaDomandaPerId(pool, id);
+      if (!domanda) {
+        res.status(404).json({ errore: 'domanda non trovata' });
+        return;
+      }
+      const abilitazione = await pool.query(
+        `SELECT 1 FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2 AND stato IN ('in_attesa', 'approvata') LIMIT 1`,
+        [req.persona!.sub, domanda.associazioneId],
+      );
+      if (abilitazione.rows.length === 0) {
+        res.status(403).json({ errore: 'nessuna abilitazione propria su questa associazione' });
+        return;
+      }
+      res.status(200).json(domanda);
+    } catch (err) {
+      const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+      if (erroreRiferimento) {
+        res.status(400).json({ errore: erroreRiferimento.message });
+        return;
+      }
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   return app;
 }

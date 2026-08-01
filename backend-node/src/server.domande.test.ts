@@ -186,3 +186,63 @@ test('POST /pubblico/domande', { skip: dsn ? false : 'TEST_DATABASE_URL non impo
     assert.equal(r.status, 400);
   });
 });
+
+test('GET /pubblico/associazioni/:id/domande e GET /pubblico/domande/:id', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(() => {
+    chiudi();
+    return pool.end();
+  });
+
+  const persona = await creaPersonaFisicaTest(pool);
+  const altraPersona = await creaPersonaFisicaTest(pool);
+  const fx = await creaFixtureCompleta(pool);
+  await pool.query(
+    `INSERT INTO abilitazioni (persona_fisica_id, associazione_id, stagione_id, titolo, ruolo, stato)
+     VALUES ($1, $2, $3, 'legale_rappresentante', 'rappresentante', 'approvata')`,
+    [persona.id, fx.associazioneId, fx.stagioneId],
+  );
+  const creazione = await fetch(`${base}/pubblico/domande`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+    body: JSON.stringify(await corpoDomandaValido(fx)),
+  });
+  const domanda = (await creazione.json()) as { id: string };
+
+  await t.test('lista propria: 200', async () => {
+    const r = await fetch(`${base}/pubblico/associazioni/${fx.associazioneId}/domande`, {
+      headers: { Authorization: `Bearer ${persona.token}` },
+    });
+    assert.equal(r.status, 200);
+    const body = (await r.json()) as unknown[];
+    assert.equal(body.length, 1);
+  });
+
+  await t.test('lista di associazione altrui: 403', async () => {
+    const r = await fetch(`${base}/pubblico/associazioni/${fx.associazioneId}/domande`, {
+      headers: { Authorization: `Bearer ${altraPersona.token}` },
+    });
+    assert.equal(r.status, 403);
+  });
+
+  await t.test('dettaglio proprio: 200', async () => {
+    const r = await fetch(`${base}/pubblico/domande/${domanda.id}`, { headers: { Authorization: `Bearer ${persona.token}` } });
+    assert.equal(r.status, 200);
+  });
+
+  await t.test('dettaglio di associazione altrui: 403', async () => {
+    const r = await fetch(`${base}/pubblico/domande/${domanda.id}`, { headers: { Authorization: `Bearer ${altraPersona.token}` } });
+    assert.equal(r.status, 403);
+  });
+
+  await t.test('dettaglio inesistente: 404', async () => {
+    const r = await fetch(`${base}/pubblico/domande/${randomUUID()}`, { headers: { Authorization: `Bearer ${persona.token}` } });
+    assert.equal(r.status, 404);
+  });
+
+  await t.test('dettaglio id malformato: 400', async () => {
+    const r = await fetch(`${base}/pubblico/domande/non-un-uuid`, { headers: { Authorization: `Bearer ${persona.token}` } });
+    assert.equal(r.status, 400);
+  });
+});
