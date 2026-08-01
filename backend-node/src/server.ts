@@ -1717,10 +1717,18 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       const associazioneId = typeof req.params.associazioneId === 'string' ? req.params.associazioneId : '';
       const stagioneId = typeof req.query.stagioneId === 'string' ? req.query.stagioneId : undefined;
       try {
-        const abilitazione = await pool.query(
-          `SELECT 1 FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2 AND stato IN ('in_attesa', 'approvata') LIMIT 1`,
-          [req.persona!.sub, associazioneId],
-        );
+        // Se stagioneId è passato dal client, scopiamo anche la verifica di abilitazione a
+        // quella stagione (I2): altrimenti la richiesta è cross-stagione per definizione,
+        // e verifichiamo solo che esista un'abilitazione su QUALCHE stagione.
+        const abilitazione = stagioneId
+          ? await pool.query(
+              `SELECT 1 FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2 AND stagione_id = $3 AND stato IN ('in_attesa', 'approvata') LIMIT 1`,
+              [req.persona!.sub, associazioneId, stagioneId],
+            )
+          : await pool.query(
+              `SELECT 1 FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2 AND stato IN ('in_attesa', 'approvata') LIMIT 1`,
+              [req.persona!.sub, associazioneId],
+            );
         if (abilitazione.rows.length === 0) {
           res.status(403).json({ errore: 'nessuna abilitazione propria su questa associazione' });
           return;
@@ -1745,12 +1753,15 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         res.status(404).json({ errore: 'domanda non trovata' });
         return;
       }
+      // La domanda ha sempre una stagione precisa: la verifica di abilitazione DEVE essere
+      // scoped a quella stagione (I2), non basta un'abilitazione su un'altra stagione della
+      // stessa associazione.
       const abilitazione = await pool.query(
-        `SELECT 1 FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2 AND stato IN ('in_attesa', 'approvata') LIMIT 1`,
-        [req.persona!.sub, domanda.associazioneId],
+        `SELECT 1 FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2 AND stagione_id = $3 AND stato IN ('in_attesa', 'approvata') LIMIT 1`,
+        [req.persona!.sub, domanda.associazioneId, domanda.stagioneId],
       );
       if (abilitazione.rows.length === 0) {
-        res.status(403).json({ errore: 'nessuna abilitazione propria su questa associazione' });
+        res.status(403).json({ errore: 'nessuna abilitazione propria su questa associazione per questa stagione' });
         return;
       }
       res.status(200).json(domanda);

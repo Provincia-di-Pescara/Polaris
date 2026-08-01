@@ -259,6 +259,23 @@ test('GET /pubblico/associazioni/:id/domande e GET /pubblico/domande/:id', { ski
     const r = await fetch(`${base}/pubblico/domande/non-un-uuid`, { headers: { Authorization: `Bearer ${persona.token}` } });
     assert.equal(r.status, 400);
   });
+
+  // I2: la persona ha un'abilitazione approvata sulla stessa associazione ma su una
+  // stagione DIVERSA da quella della domanda — non deve poter vedere il dettaglio.
+  await t.test('dettaglio: abilitazione approvata su altra stagione della stessa associazione: 403', async () => {
+    const personaAltraStagione = await creaPersonaFisicaTest(pool);
+    const altraStagione = await pool.query<{ id: string }>(
+      `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2027-09-01', '2028-06-30') RETURNING id`,
+      [`stagione-domanda-i2-${randomUUID()}`],
+    );
+    await pool.query(
+      `INSERT INTO abilitazioni (persona_fisica_id, associazione_id, stagione_id, titolo, ruolo, stato)
+       VALUES ($1, $2, $3, 'legale_rappresentante', 'rappresentante', 'approvata')`,
+      [personaAltraStagione.id, fx.associazioneId, altraStagione.rows[0]!.id],
+    );
+    const r = await fetch(`${base}/pubblico/domande/${domanda.id}`, { headers: { Authorization: `Bearer ${personaAltraStagione.token}` } });
+    assert.equal(r.status, 403);
+  });
 });
 
 test('PUT /backoffice/domande/:id/{ammetti,escludi}, GET /backoffice/domande', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
