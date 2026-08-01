@@ -2,13 +2,21 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { creaDomanda, trovaDomandaPerId, listaDomandePerAssociazione } from './domande.ts';
+import {
+  creaDomanda,
+  trovaDomandaPerId,
+  listaDomandePerAssociazione,
+  ammettiDomanda,
+  escludiDomanda,
+  listaDomandeBackoffice,
+  trovaDomandaConEsitoPerId,
+} from './domande.ts';
 import { creaDisciplina } from './discipline.ts';
 import { creaIstituzione } from './istituzioni.ts';
 import { creaImpianto } from './impianti.ts';
 import { creaSpazio } from './spazi.ts';
 import { creaSlot } from './slot.ts';
-import { ErroreValoreDuplicato } from './erroriDominio.ts';
+import { ErroreValoreDuplicato, ErroreNonTrovato, ErroreStatoNonValidoPerTransizione } from './erroriDominio.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 
@@ -111,4 +119,45 @@ test('creaDomanda + trovaDomandaPerId + listaDomandePerAssociazione', { skip: ds
       ),
     ErroreValoreDuplicato,
   );
+});
+
+test('ammettiDomanda + escludiDomanda + listaDomandeBackoffice + trovaDomandaConEsitoPerId', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const domanda1 = await creaDomanda(
+    pool,
+    {
+      associazioneId: fx.associazioneId,
+      stagioneId: fx.stagioneId,
+      disciplineCodici: [fx.disciplina.codice],
+      numeroTesserati: 0,
+      numeroAtletiPartecipanti: 0,
+      numeroSquadre: 0,
+      numeroSquadreFederaliStagionePrecedente: 0,
+      attivitaGiovanile: false,
+      attivitaAgonistica: false,
+      attivitaParalimpicaInclusiva: false,
+      fabbisognoMinimoMinuti: '30.000',
+      fabbisognoOttimaleMinuti: '30.000',
+      preferenze: [fx.slot1Id],
+      blocchiAllenamento: [],
+      richiedeGiornataGara: false,
+      richiesteGiornataGara: [],
+    },
+    fx.personaId,
+  );
+
+  const ammessa = await ammettiDomanda(pool, domanda1.id);
+  assert.equal(ammessa.stato, 'ammessa');
+
+  await assert.rejects(() => ammettiDomanda(pool, domanda1.id), ErroreStatoNonValidoPerTransizione);
+  await assert.rejects(() => ammettiDomanda(pool, randomUUID()), ErroreNonTrovato);
+
+  const lista = await listaDomandeBackoffice(pool, fx.stagioneId);
+  assert.ok(lista.some((d) => d.id === domanda1.id));
+
+  const conEsito = await trovaDomandaConEsitoPerId(pool, domanda1.id);
+  assert.equal(conEsito?.fabbisognoRiconosciuto, null);
+  assert.equal(conEsito?.coefficienti, null);
 });

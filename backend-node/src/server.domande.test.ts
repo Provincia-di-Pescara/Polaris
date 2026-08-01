@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { creaApp } from './server.ts';
 import { generaAccessTokenPubblico } from './auth/jwtPubblico.ts';
+import { generaAccessToken } from './auth/jwt.ts';
+import { hashPassword } from './auth/password.ts';
 import { creaDisciplina } from './discipline.ts';
 import { creaIstituzione } from './istituzioni.ts';
 import { creaImpianto } from './impianti.ts';
@@ -51,6 +53,18 @@ async function creaFixtureCompleta(pool: Pool) {
   );
   const associazioneId = associazione.rows[0]!.id;
   return { disciplinaCodice: disciplina.codice, stagioneId, slotId: slot.id, associazioneId };
+}
+
+async function creaUtenteBackofficeTest(pool: Pool, ruolo: 'admin' | 'operatore'): Promise<{ id: string; token: string }> {
+  const email = `domande-test-${randomUUID()}@test.local`;
+  const hash = await hashPassword('password-test-123456');
+  const r = await pool.query<{ id: string }>(
+    `INSERT INTO utenti_backoffice (email, password_hash, nome, cognome, ruolo, stato)
+     VALUES ($1, $2, 'Test', 'Domande', $3, 'attivo') RETURNING id`,
+    [email, hash, ruolo],
+  );
+  const id = r.rows[0]!.id;
+  return { id, token: generaAccessToken({ sub: id, email, ruolo }) };
 }
 
 async function corpoDomandaValido(fx: Awaited<ReturnType<typeof creaFixtureCompleta>>) {
@@ -244,5 +258,76 @@ test('GET /pubblico/associazioni/:id/domande e GET /pubblico/domande/:id', { ski
   await t.test('dettaglio id malformato: 400', async () => {
     const r = await fetch(`${base}/pubblico/domande/non-un-uuid`, { headers: { Authorization: `Bearer ${persona.token}` } });
     assert.equal(r.status, 400);
+  });
+});
+
+test('PUT /backoffice/domande/:id/{ammetti,escludi}, GET /backoffice/domande', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(() => {
+    chiudi();
+    return pool.end();
+  });
+
+  const persona = await creaPersonaFisicaTest(pool);
+  const fx = await creaFixtureCompleta(pool);
+  await pool.query(
+    `INSERT INTO abilitazioni (persona_fisica_id, associazione_id, stagione_id, titolo, ruolo, stato)
+     VALUES ($1, $2, $3, 'legale_rappresentante', 'rappresentante', 'approvata')`,
+    [persona.id, fx.associazioneId, fx.stagioneId],
+  );
+  const creazione = await fetch(`${base}/pubblico/domande`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+    body: JSON.stringify(await corpoDomandaValido(fx)),
+  });
+  const domanda = (await creazione.json()) as { id: string };
+
+  const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+
+  await t.test('pubblico non può ammettere: 401', async () => {
+    const r = await fetch(`${base}/backoffice/domande/${domanda.id}/ammetti`, { method: 'PUT' });
+    assert.equal(r.status, 401);
+  });
+
+  await t.test('operatore ammette: 200', async () => {
+    const r = await fetch(`${base}/backoffice/domande/${domanda.id}/ammetti`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${operatore.token}` },
+    });
+    assert.equal(r.status, 200);
+    const body = (await r.json()) as { stato: string };
+    assert.equal(body.stato, 'ammessa');
+  });
+
+  await t.test('doppia ammissione: 409', async () => {
+    const r = await fetch(`${base}/backoffice/domande/${domanda.id}/ammetti`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${operatore.token}` },
+    });
+    assert.equal(r.status, 409);
+  });
+
+  await t.test('escludi su domanda già ammessa: 409', async () => {
+    const r = await fetch(`${base}/backoffice/domande/${domanda.id}/escludi`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+      body: JSON.stringify({ motivazione: 'test' }),
+    });
+    assert.equal(r.status, 409);
+  });
+
+  await t.test('lista backoffice: 200, contiene la domanda', async () => {
+    const r = await fetch(`${base}/backoffice/domande?stagioneId=${fx.stagioneId}`, { headers: { Authorization: `Bearer ${operatore.token}` } });
+    assert.equal(r.status, 200);
+    const body = (await r.json()) as { id: string }[];
+    assert.ok(body.some((d) => d.id === domanda.id));
+  });
+
+  await t.test('dettaglio backoffice: 200, fabbisognoRiconosciuto null', async () => {
+    const r = await fetch(`${base}/backoffice/domande/${domanda.id}`, { headers: { Authorization: `Bearer ${operatore.token}` } });
+    assert.equal(r.status, 200);
+    const body = (await r.json()) as { fabbisognoRiconosciuto: unknown };
+    assert.equal(body.fabbisognoRiconosciuto, null);
   });
 });

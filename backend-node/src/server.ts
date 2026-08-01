@@ -46,7 +46,7 @@ import {
   aPubblico,
 } from './repository/utentiBackoffice.ts';
 import { revocaSessioniUtente } from './repository/sessioni.ts';
-import { ErroreValoreDuplicato, ErroreNonTrovato, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
+import { ErroreValoreDuplicato, ErroreNonTrovato, ErroreStatoNonValidoPerTransizione, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
 import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './discipline.ts';
 import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstituzione } from './istituzioni.ts';
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
@@ -67,7 +67,15 @@ import {
   respingiAbilitazione,
   revocaAbilitazioneConCascata,
 } from './abilitazioni.ts';
-import { creaDomanda, trovaDomandaPerId, listaDomandePerAssociazione } from './domande.ts';
+import {
+  creaDomanda,
+  trovaDomandaPerId,
+  listaDomandePerAssociazione,
+  ammettiDomanda,
+  escludiDomanda,
+  listaDomandeBackoffice,
+  trovaDomandaConEsitoPerId,
+} from './domande.ts';
 import { trovaPersonaFisicaPerCf, creaPersonaFisicaShell } from './repository/personeFisiche.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
@@ -1741,6 +1749,117 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       );
       if (abilitazione.rows.length === 0) {
         res.status(403).json({ errore: 'nessuna abilitazione propria su questa associazione' });
+        return;
+      }
+      res.status(200).json(domanda);
+    } catch (err) {
+      const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+      if (erroreRiferimento) {
+        res.status(400).json({ errore: erroreRiferimento.message });
+        return;
+      }
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // --- Backoffice: verifica ammissibilità domanda (art. B.7) ---
+
+  app.put(
+    '/backoffice/domande/:id/ammetti',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        const domanda = await eseguiInTransazione(pool, async (client) => {
+          const d = await ammettiDomanda(client, id);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'ammetti_domanda',
+            entitaTipo: 'domande',
+            entitaId: d.id,
+            dettaglio: { stato: d.stato },
+          });
+          return d;
+        });
+        res.status(200).json(domanda);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.put(
+    '/backoffice/domande/:id/escludi',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      const parsed = schemaRespingiDelega.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const domanda = await eseguiInTransazione(pool, async (client) => {
+          const d = await escludiDomanda(client, id, parsed.data.motivazione);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'escludi_domanda',
+            entitaTipo: 'domande',
+            entitaId: d.id,
+            dettaglio: { stato: d.stato, motivazioneEsclusione: d.motivazioneEsclusione },
+          });
+          return d;
+        });
+        res.status(200).json(domanda);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get('/backoffice/domande', richiedeAutenticazione, richiedeRuolo('admin', 'operatore'), async (req, res) => {
+    try {
+      const stagioneId = typeof req.query.stagioneId === 'string' ? req.query.stagioneId : undefined;
+      res.status(200).json(await listaDomandeBackoffice(pool, stagioneId));
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/backoffice/domande/:id', richiedeAutenticazione, richiedeRuolo('admin', 'operatore'), async (req, res) => {
+    const id = typeof req.params.id === 'string' ? req.params.id : '';
+    try {
+      const domanda = await trovaDomandaConEsitoPerId(pool, id);
+      if (!domanda) {
+        res.status(404).json({ errore: 'domanda non trovata' });
         return;
       }
       res.status(200).json(domanda);

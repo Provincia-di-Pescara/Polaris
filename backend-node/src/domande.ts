@@ -1,6 +1,6 @@
 import { DatabaseError } from 'pg';
 import type { Db } from './db.ts';
-import { ErroreValoreDuplicato, ErroreNonTrovato } from './erroriDominio.ts';
+import { ErroreValoreDuplicato, ErroreNonTrovato, ErroreStatoNonValidoPerTransizione } from './erroriDominio.ts';
 
 export type StatoDomanda = 'presentata' | 'ammessa' | 'esclusa' | 'riesame_richiesto' | 'riesame_deciso';
 
@@ -305,4 +305,92 @@ export async function listaDomandePerAssociazione(
     risultato.push(assembla(riga, correlati));
   }
   return risultato;
+}
+
+export async function ammettiDomanda(db: Db, id: string): Promise<Domanda> {
+  const check = await db.query<{ stato: StatoDomanda }>(`SELECT stato FROM domande WHERE id = $1`, [id]);
+  const riga = check.rows[0];
+  if (!riga) {
+    throw new ErroreNonTrovato('domanda non trovata');
+  }
+  if (riga.stato !== 'presentata') {
+    throw new ErroreStatoNonValidoPerTransizione('la domanda non è in stato presentata');
+  }
+  await db.query(`UPDATE domande SET stato = 'ammessa' WHERE id = $1`, [id]);
+  return (await trovaDomandaPerId(db, id))!;
+}
+
+export async function escludiDomanda(db: Db, id: string, motivazione: string): Promise<Domanda> {
+  const check = await db.query<{ stato: StatoDomanda }>(`SELECT stato FROM domande WHERE id = $1`, [id]);
+  const riga = check.rows[0];
+  if (!riga) {
+    throw new ErroreNonTrovato('domanda non trovata');
+  }
+  if (riga.stato !== 'presentata') {
+    throw new ErroreStatoNonValidoPerTransizione('la domanda non è in stato presentata');
+  }
+  await db.query(`UPDATE domande SET stato = 'esclusa', motivazione_esclusione = $2 WHERE id = $1`, [id, motivazione]);
+  return (await trovaDomandaPerId(db, id))!;
+}
+
+export async function listaDomandeBackoffice(db: Db, stagioneId?: string): Promise<Domanda[]> {
+  const r = stagioneId
+    ? await db.query<RigaDomanda>(`SELECT ${COLONNE_SELECT_DOMANDA} FROM domande WHERE stagione_id = $1 ORDER BY presentata_il DESC`, [stagioneId])
+    : await db.query<RigaDomanda>(`SELECT ${COLONNE_SELECT_DOMANDA} FROM domande ORDER BY presentata_il DESC`);
+  const risultato: Domanda[] = [];
+  for (const riga of r.rows) {
+    const correlati = await caricaCorrelati(db, riga.id);
+    risultato.push(assembla(riga, correlati));
+  }
+  return risultato;
+}
+
+export interface EsitoIstruttoria {
+  frCalcolatoMinuti: string;
+  fdMinuti: string;
+  frFinaleMinuti: string;
+}
+
+export interface EsitoCoefficienti {
+  crs: string;
+  caa: string;
+  csd: string;
+  cp: string;
+}
+
+export interface DomandaConEsito extends Domanda {
+  fabbisognoRiconosciuto: EsitoIstruttoria | null;
+  coefficienti: EsitoCoefficienti | null;
+}
+
+export async function trovaDomandaConEsitoPerId(db: Db, id: string): Promise<DomandaConEsito | null> {
+  const base = await trovaDomandaPerId(db, id);
+  if (!base) {
+    return null;
+  }
+  const r = await db.query<{
+    fr_calcolato_minuti: string | null;
+    fd_minuti: string | null;
+    fr_finale_minuti: string | null;
+    crs: string | null;
+    caa: string | null;
+    csd: string | null;
+    cp: string | null;
+  }>(
+    `SELECT fr.fr_calcolato_minuti::text, fr.fd_minuti::text, fr.fr_finale_minuti::text,
+            c.crs::text, c.caa::text, c.csd::text, c.cp::text
+     FROM domande d
+     LEFT JOIN fabbisogni_riconosciuti fr ON fr.domanda_id = d.id
+     LEFT JOIN coefficienti_associazione c ON c.domanda_id = d.id
+     WHERE d.id = $1`,
+    [id],
+  );
+  const riga = r.rows[0];
+  const fabbisognoRiconosciuto =
+    riga?.fr_calcolato_minuti != null
+      ? { frCalcolatoMinuti: riga.fr_calcolato_minuti, fdMinuti: riga.fd_minuti!, frFinaleMinuti: riga.fr_finale_minuti! }
+      : null;
+  const coefficienti =
+    riga?.crs != null ? { crs: riga.crs, caa: riga.caa!, csd: riga.csd!, cp: riga.cp! } : null;
+  return { ...base, fabbisognoRiconosciuto, coefficienti };
 }

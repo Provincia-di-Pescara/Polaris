@@ -28,3 +28,10 @@ export function comeErroreRiferimentoNonValido(err: unknown): ErroreRiferimentoN
   }
   return null;
 }
+
+// Guardia di transizione di stato: un'operazione che richiede la macchina a stati in un
+// punto preciso (es. ammetti/escludi solo da 'presentata', decisione osservazione solo da
+// 'in_esame') la trova altrove. Sempre 409 — la richiesta è sintatticamente valida ma non
+// applicabile allo stato corrente della risorsa, stesso motivo di ErroreValoreDuplicato ma
+// senza vincolo UNIQUE coinvolto.
+export class ErroreStatoNonValidoPerTransizione extends Error {}
