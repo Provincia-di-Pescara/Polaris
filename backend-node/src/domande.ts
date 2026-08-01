@@ -394,3 +394,49 @@ export async function trovaDomandaConEsitoPerId(db: Db, id: string): Promise<Dom
     riga?.crs != null ? { crs: riga.crs, caa: riga.caa!, csd: riga.csd!, cp: riga.cp! } : null;
   return { ...base, fabbisognoRiconosciuto, coefficienti };
 }
+
+export interface EsitoPubblicato {
+  domandaId: string;
+  associazioneId: string;
+  stato: StatoDomanda;
+  motivazioneEsclusione: string | null;
+  fabbisognoRiconosciuto: EsitoIstruttoria | null;
+  coefficienti: EsitoCoefficienti | null;
+}
+
+export async function elencoEsitiPubblicati(db: Db, stagioneId: string): Promise<EsitoPubblicato[]> {
+  const r = await db.query<{
+    id: string;
+    associazione_id: string;
+    stato: StatoDomanda;
+    motivazione_esclusione: string | null;
+    fr_calcolato_minuti: string | null;
+    fd_minuti: string | null;
+    fr_finale_minuti: string | null;
+    crs: string | null;
+    caa: string | null;
+    csd: string | null;
+    cp: string | null;
+  }>(
+    `SELECT d.id, d.associazione_id, d.stato, d.motivazione_esclusione,
+            fr.fr_calcolato_minuti::text, fr.fd_minuti::text, fr.fr_finale_minuti::text,
+            c.crs::text, c.caa::text, c.csd::text, c.cp::text
+     FROM domande d
+     LEFT JOIN fabbisogni_riconosciuti fr ON fr.domanda_id = d.id
+     LEFT JOIN coefficienti_associazione c ON c.domanda_id = d.id
+     WHERE d.stagione_id = $1 AND d.stato <> 'presentata'
+     ORDER BY d.presentata_il`,
+    [stagioneId],
+  );
+  return r.rows.map((riga) => ({
+    domandaId: riga.id,
+    associazioneId: riga.associazione_id,
+    stato: riga.stato,
+    motivazioneEsclusione: riga.motivazione_esclusione,
+    fabbisognoRiconosciuto:
+      riga.fr_calcolato_minuti != null
+        ? { frCalcolatoMinuti: riga.fr_calcolato_minuti, fdMinuti: riga.fd_minuti!, frFinaleMinuti: riga.fr_finale_minuti! }
+        : null,
+    coefficienti: riga.crs != null ? { crs: riga.crs, caa: riga.caa!, csd: riga.csd!, cp: riga.cp! } : null,
+  }));
+}

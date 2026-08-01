@@ -10,6 +10,7 @@ import {
   escludiDomanda,
   listaDomandeBackoffice,
   trovaDomandaConEsitoPerId,
+  elencoEsitiPubblicati,
 } from './domande.ts';
 import { creaDisciplina } from './discipline.ts';
 import { creaIstituzione } from './istituzioni.ts';
@@ -160,4 +161,38 @@ test('ammettiDomanda + escludiDomanda + listaDomandeBackoffice + trovaDomandaCon
   const conEsito = await trovaDomandaConEsitoPerId(pool, domanda1.id);
   assert.equal(conEsito?.fabbisognoRiconosciuto, null);
   assert.equal(conEsito?.coefficienti, null);
+});
+
+test('elencoEsitiPubblicati esclude le domande ancora presentata', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const dati = {
+    associazioneId: fx.associazioneId,
+    stagioneId: fx.stagioneId,
+    disciplineCodici: [fx.disciplina.codice],
+    numeroTesserati: 0,
+    numeroAtletiPartecipanti: 0,
+    numeroSquadre: 0,
+    numeroSquadreFederaliStagionePrecedente: 0,
+    attivitaGiovanile: false,
+    attivitaAgonistica: false,
+    attivitaParalimpicaInclusiva: false,
+    fabbisognoMinimoMinuti: '30.000',
+    fabbisognoOttimaleMinuti: '30.000',
+    preferenze: [fx.slot1Id],
+    blocchiAllenamento: [],
+    richiedeGiornataGara: false,
+    richiesteGiornataGara: [],
+  };
+  const domanda = await creaDomanda(pool, dati, fx.personaId);
+
+  const primaAmmissione = await elencoEsitiPubblicati(pool, fx.stagioneId);
+  assert.equal(primaAmmissione.length, 0);
+
+  await ammettiDomanda(pool, domanda.id);
+  const dopoAmmissione = await elencoEsitiPubblicati(pool, fx.stagioneId);
+  assert.equal(dopoAmmissione.length, 1);
+  assert.equal(dopoAmmissione[0]?.stato, 'ammessa');
+  assert.equal(dopoAmmissione[0]?.fabbisognoRiconosciuto, null);
 });

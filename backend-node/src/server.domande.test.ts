@@ -336,3 +336,46 @@ test('PUT /backoffice/domande/:id/{ammetti,escludi}, GET /backoffice/domande', {
     assert.equal(body.fabbisognoRiconosciuto, null);
   });
 });
+
+test('GET /pubblico/stagioni/:id/domande/esiti', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(() => {
+    chiudi();
+    return pool.end();
+  });
+
+  const persona = await creaPersonaFisicaTest(pool);
+  const fx = await creaFixtureCompleta(pool);
+  await pool.query(
+    `INSERT INTO abilitazioni (persona_fisica_id, associazione_id, stagione_id, titolo, ruolo, stato)
+     VALUES ($1, $2, $3, 'legale_rappresentante', 'rappresentante', 'approvata')`,
+    [persona.id, fx.associazioneId, fx.stagioneId],
+  );
+  const creazione = await fetch(`${base}/pubblico/domande`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+    body: JSON.stringify(await corpoDomandaValido(fx)),
+  });
+  const domanda = (await creazione.json()) as { id: string };
+
+  await t.test('senza token: 401', async () => {
+    const r = await fetch(`${base}/pubblico/stagioni/${fx.stagioneId}/domande/esiti`);
+    assert.equal(r.status, 401);
+  });
+
+  await t.test('prima della decisione: lista vuota', async () => {
+    const r = await fetch(`${base}/pubblico/stagioni/${fx.stagioneId}/domande/esiti`, { headers: { Authorization: `Bearer ${persona.token}` } });
+    assert.equal(r.status, 200);
+    assert.deepEqual(await r.json(), []);
+  });
+
+  const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+  await fetch(`${base}/backoffice/domande/${domanda.id}/ammetti`, { method: 'PUT', headers: { Authorization: `Bearer ${operatore.token}` } });
+
+  await t.test('dopo ammissione: presente, esito ammessa', async () => {
+    const r = await fetch(`${base}/pubblico/stagioni/${fx.stagioneId}/domande/esiti`, { headers: { Authorization: `Bearer ${persona.token}` } });
+    const body = (await r.json()) as { domandaId: string; stato: string }[];
+    assert.ok(body.some((e) => e.domandaId === domanda.id && e.stato === 'ammessa'));
+  });
+});

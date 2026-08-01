@@ -75,6 +75,7 @@ import {
   escludiDomanda,
   listaDomandeBackoffice,
   trovaDomandaConEsitoPerId,
+  elencoEsitiPubblicati,
 } from './domande.ts';
 import { trovaPersonaFisicaPerCf, creaPersonaFisicaShell } from './repository/personeFisiche.ts';
 
@@ -1877,6 +1878,26 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
     }
   });
+
+  // --- Pubblico: pubblicazione esiti istruttoria (art. B.10) ---
+
+  app.get(
+    '/pubblico/stagioni/:stagioneId/domande/esiti',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const stagioneId = typeof req.params.stagioneId === 'string' ? req.params.stagioneId : '';
+      try {
+        res.status(200).json(await elencoEsitiPubblicati(pool, stagioneId));
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
 
   return app;
 }
