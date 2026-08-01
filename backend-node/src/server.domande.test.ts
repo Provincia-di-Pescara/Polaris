@@ -324,6 +324,11 @@ test('PUT /backoffice/domande/:id/{ammetti,escludi}, GET /backoffice/domande', {
     assert.ok(body.some((d) => d.id === domanda.id));
   });
 
+  await t.test('lista backoffice con stagioneId malformato: 400, non 500', async () => {
+    const r = await fetch(`${base}/backoffice/domande?stagioneId=non-un-uuid`, { headers: { Authorization: `Bearer ${operatore.token}` } });
+    assert.equal(r.status, 400);
+  });
+
   await t.test('dettaglio backoffice: 200, fabbisognoRiconosciuto null', async () => {
     const r = await fetch(`${base}/backoffice/domande/${domanda.id}`, { headers: { Authorization: `Bearer ${operatore.token}` } });
     assert.equal(r.status, 200);

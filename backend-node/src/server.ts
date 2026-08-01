@@ -1850,6 +1850,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       const stagioneId = typeof req.query.stagioneId === 'string' ? req.query.stagioneId : undefined;
       res.status(200).json(await listaDomandeBackoffice(pool, stagioneId));
     } catch (err) {
+      const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+      if (erroreRiferimento) {
+        res.status(400).json({ errore: erroreRiferimento.message });
+        return;
+      }
       res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
     }
   });
