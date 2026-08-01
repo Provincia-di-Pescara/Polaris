@@ -52,8 +52,8 @@ import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstit
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
-import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni } from './repository/parametrico.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice } from './backofficeSchema.ts';
+import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico } from './backofficeSchema.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
 import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
@@ -1618,6 +1618,42 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
     }
   });
+
+  app.post(
+    '/backoffice/parametrico',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaCreaVersioneParametrico.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const versione = await eseguiInTransazione(pool, async (client) => {
+          const v = await creaVersione(client, parsed.data, req.utente!.sub);
+          const { csdScaglioni, ...dettaglioSenzaScaglioni } = v;
+          void csdScaglioni;
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'crea_versione_parametrico',
+            entitaTipo: 'parametrico_versioni',
+            entitaId: v.id,
+            dettaglio: dettaglioSenzaScaglioni as unknown as Record<string, unknown>,
+          });
+          return v;
+        });
+        res.status(201).json(versione);
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
 
   return app;
 }

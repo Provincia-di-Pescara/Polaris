@@ -122,3 +122,97 @@ test(
     });
   },
 );
+
+test(
+  'POST /backoffice/parametrico: crea nuova versione, audit log, validazione',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const { pool, distruggi } = await creaDatabaseDedicato(dsn!);
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return distruggi();
+    });
+
+    const admin = await creaUtenteTest(pool, 'admin');
+    const operatore = await creaUtenteTest(pool, 'operatore');
+
+    const DATI_VALIDI = {
+      note: 'nuova versione via HTTP',
+      moltiplicatoreMinutiPerPunto: '60.000',
+      pesoFasciaPregiata: '1.250',
+      minutiSettimanaliMax: '600.000',
+      slotMaxStessoImpianto: 4,
+      fascePregiateMax: 2,
+      giornateGaraMax: 1,
+      incrementoSquadreNeutro: 0,
+      caaNeutro: '1.000',
+      csdNeutro: '1.000',
+      tolleranzaIsfPct: '0.0050',
+      sogliaMancatiUtilizziDiffida: 2,
+      sogliaMancatiUtilizziDecadenza: 3,
+      sogliaScostamentoDichiaratoPct: '0.2000',
+      sogliaIsfCompensazione: '0.2000',
+      retentionLogOperazioniGiorni: 30,
+      quotaNuoveAssociazioniPct: '0.0000',
+      csdScaglioni: [{ rapportoFdFrMin: '0.000', rapportoFdFrMax: null, coefficiente: '1.000' }],
+    };
+
+    await t.test('operatore: 403', async () => {
+      const r = await fetch(`${base}/backoffice/parametrico`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify(DATI_VALIDI),
+      });
+      assert.equal(r.status, 403);
+    });
+
+    await t.test('admin, campo mancante: 400', async () => {
+      const { pesoFasciaPregiata, ...senzaCampo } = DATI_VALIDI;
+      void pesoFasciaPregiata;
+      const r = await fetch(`${base}/backoffice/parametrico`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify(senzaCampo),
+      });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('admin, scaglione con rapportoFdFrMax <= min: 400', async () => {
+      const r = await fetch(`${base}/backoffice/parametrico`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ ...DATI_VALIDI, csdScaglioni: [{ rapportoFdFrMin: '1.000', rapportoFdFrMax: '0.500', coefficiente: '1.000' }] }),
+      });
+      assert.equal(r.status, 400);
+    });
+
+    let nuovaVersioneId = '';
+
+    await t.test('admin, dati validi: 201, nuova versione persistita, audit log scritto', async () => {
+      const r = await fetch(`${base}/backoffice/parametrico`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify(DATI_VALIDI),
+      });
+      assert.equal(r.status, 201);
+      const body = (await r.json()) as { id: string; note: string; pubblicataDa: string };
+      assert.equal(body.note, 'nuova versione via HTTP');
+      assert.equal(body.pubblicataDa, admin.id);
+      nuovaVersioneId = body.id;
+
+      const log = await pool.query(
+        `SELECT azione, entita_id FROM log_operazioni WHERE utente_backoffice_id = $1 AND azione = 'crea_versione_parametrico'`,
+        [admin.id],
+      );
+      assert.equal(log.rows.length, 1);
+      assert.equal(log.rows[0]?.entita_id, nuovaVersioneId);
+    });
+
+    await t.test('GET attivo ora ritorna la versione appena creata via HTTP', async () => {
+      const r = await fetch(`${base}/backoffice/parametrico`, { headers: { Authorization: `Bearer ${admin.token}` } });
+      const body = (await r.json()) as { id: string };
+      assert.equal(body.id, nuovaVersioneId);
+    });
+  },
+);
