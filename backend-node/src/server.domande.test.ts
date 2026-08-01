@@ -458,3 +458,67 @@ test('POST /pubblico/domande/:id/osservazioni', { skip: dsn ? false : 'TEST_DATA
     assert.equal(r.status, 403);
   });
 });
+
+test('PUT /backoffice/osservazioni/:id/{accogli,respingi}', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(() => {
+    chiudi();
+    return pool.end();
+  });
+
+  const persona = await creaPersonaFisicaTest(pool);
+  const fx = await creaFixtureCompleta(pool);
+  await pool.query(
+    `INSERT INTO abilitazioni (persona_fisica_id, associazione_id, stagione_id, titolo, ruolo, stato)
+     VALUES ($1, $2, $3, 'legale_rappresentante', 'rappresentante', 'approvata')`,
+    [persona.id, fx.associazioneId, fx.stagioneId],
+  );
+  const creazione = await fetch(`${base}/pubblico/domande`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+    body: JSON.stringify(await corpoDomandaValido(fx)),
+  });
+  const domanda = (await creazione.json()) as { id: string };
+  const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+  await fetch(`${base}/backoffice/domande/${domanda.id}/ammetti`, { method: 'PUT', headers: { Authorization: `Bearer ${operatore.token}` } });
+  const osservazioneRes = await fetch(`${base}/pubblico/domande/${domanda.id}/osservazioni`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+    body: JSON.stringify({ testo: 'non concordo' }),
+  });
+  const osservazione = (await osservazioneRes.json()) as { id: string };
+
+  await t.test('pubblico non può decidere: 401', async () => {
+    const r = await fetch(`${base}/backoffice/osservazioni/${osservazione.id}/accogli`, { method: 'PUT' });
+    assert.equal(r.status, 401);
+  });
+
+  await t.test('respingi senza motivazione: 400', async () => {
+    const r = await fetch(`${base}/backoffice/osservazioni/${osservazione.id}/respingi`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+      body: JSON.stringify({}),
+    });
+    assert.equal(r.status, 400);
+  });
+
+  await t.test('accogli: 200, domanda consolidata a riesame_deciso', async () => {
+    const r = await fetch(`${base}/backoffice/osservazioni/${osservazione.id}/accogli`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${operatore.token}` },
+    });
+    assert.equal(r.status, 200);
+    const dettaglio = await fetch(`${base}/backoffice/domande/${domanda.id}`, { headers: { Authorization: `Bearer ${operatore.token}` } });
+    const body = (await dettaglio.json()) as { stato: string };
+    assert.equal(body.stato, 'riesame_deciso');
+  });
+
+  await t.test('doppia decisione: 409', async () => {
+    const r = await fetch(`${base}/backoffice/osservazioni/${osservazione.id}/accogli`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${operatore.token}` },
+    });
+    assert.equal(r.status, 409);
+  });
+});

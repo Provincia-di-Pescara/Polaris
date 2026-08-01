@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { presentaOsservazione, trovaOsservazionePerId } from './osservazioni.ts';
+import { presentaOsservazione, trovaOsservazionePerId, accogliOsservazione, respingiOsservazione } from './osservazioni.ts';
 import { creaDomanda, ammettiDomanda } from './domande.ts';
 import { creaDisciplina } from './discipline.ts';
 import { creaIstituzione } from './istituzioni.ts';
@@ -58,6 +58,18 @@ async function creaDomandaFixture(pool: Pool) {
   return { domanda, personaId: persona.rows[0]!.id };
 }
 
+// osservazioni_istruttoria.decisa_da ha FK verso utenti_backoffice: un randomUUID() nudo
+// viola il vincolo 23503, serve una riga reale (stesso gotcha già documentato in CLAUDE.md
+// per abilitazioni_decisa_da_fk).
+async function creaUtenteBackofficeTest(pool: Pool): Promise<string> {
+  const r = await pool.query<{ id: string }>(
+    `INSERT INTO utenti_backoffice (email, password_hash, nome, cognome, ruolo, stato)
+     VALUES ($1, 'scrypt:1:1:1:00:00', 'Test', 'Osservazioni', 'operatore', 'attivo') RETURNING id`,
+    [`osservazioni-test-${randomUUID()}@test.local`],
+  );
+  return r.rows[0]!.id;
+}
+
 test('presentaOsservazione', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
   const pool = new Pool({ connectionString: dsn });
   t.after(() => pool.end());
@@ -85,4 +97,31 @@ test('presentaOsservazione', { skip: dsn ? false : 'TEST_DATABASE_URL non impost
     () => presentaOsservazione(pool, { domandaId: randomUUID(), personaFisicaId: personaId, testo: 'x' }),
     ErroreNonTrovato,
   );
+});
+
+test('accogliOsservazione + respingiOsservazione consolidano lo stato domanda', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { domanda, personaId } = await creaDomandaFixture(pool);
+  await ammettiDomanda(pool, domanda.id);
+
+  const oss1 = await presentaOsservazione(pool, { domandaId: domanda.id, personaFisicaId: personaId, testo: 'prima' });
+  const oss2 = await presentaOsservazione(pool, { domandaId: domanda.id, personaFisicaId: personaId, testo: 'seconda' });
+
+  const decisore = await creaUtenteBackofficeTest(pool);
+
+  const accolta = await accogliOsservazione(pool, oss1.id, decisore);
+  assert.equal(accolta.stato, 'accolta');
+
+  let statoDomanda = await pool.query<{ stato: string }>(`SELECT stato FROM domande WHERE id = $1`, [domanda.id]);
+  assert.equal(statoDomanda.rows[0]?.stato, 'riesame_richiesto');
+
+  const respinta = await respingiOsservazione(pool, oss2.id, decisore, 'non fondata');
+  assert.equal(respinta.stato, 'respinta');
+  assert.equal(respinta.decisioneMotivazione, 'non fondata');
+
+  statoDomanda = await pool.query<{ stato: string }>(`SELECT stato FROM domande WHERE id = $1`, [domanda.id]);
+  assert.equal(statoDomanda.rows[0]?.stato, 'riesame_deciso');
+
+  await assert.rejects(() => accogliOsservazione(pool, oss1.id, decisore), ErroreStatoNonValidoPerTransizione);
 });

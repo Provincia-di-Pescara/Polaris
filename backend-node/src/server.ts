@@ -77,7 +77,7 @@ import {
   trovaDomandaConEsitoPerId,
   elencoEsitiPubblicati,
 } from './domande.ts';
-import { presentaOsservazione, trovaOsservazionePerId } from './osservazioni.ts';
+import { presentaOsservazione, trovaOsservazionePerId, accogliOsservazione, respingiOsservazione } from './osservazioni.ts';
 import { trovaPersonaFisicaPerCf, creaPersonaFisicaShell } from './repository/personeFisiche.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
@@ -1940,6 +1940,89 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           return o;
         });
         res.status(201).json(osservazione);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Backoffice: decisione osservazione (art. B.11) ---
+
+  app.put(
+    '/backoffice/osservazioni/:id/accogli',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        const osservazione = await eseguiInTransazione(pool, async (client) => {
+          const o = await accogliOsservazione(client, id, req.utente!.sub);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'accogli_osservazione',
+            entitaTipo: 'osservazioni_istruttoria',
+            entitaId: o.id,
+            dettaglio: { stato: o.stato },
+          });
+          return o;
+        });
+        res.status(200).json(osservazione);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.put(
+    '/backoffice/osservazioni/:id/respingi',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      const parsed = schemaRespingiDelega.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const osservazione = await eseguiInTransazione(pool, async (client) => {
+          const o = await respingiOsservazione(client, id, req.utente!.sub, parsed.data.motivazione);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'respingi_osservazione',
+            entitaTipo: 'osservazioni_istruttoria',
+            entitaId: o.id,
+            dettaglio: { stato: o.stato, decisioneMotivazione: o.decisioneMotivazione },
+          });
+          return o;
+        });
+        res.status(200).json(osservazione);
       } catch (err) {
         if (err instanceof ErroreNonTrovato) {
           res.status(404).json({ errore: err.message });
