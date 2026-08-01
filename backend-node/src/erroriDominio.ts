@@ -18,9 +18,12 @@ export class ErroreRiferimentoNonValido extends Error {}
 // Codici Postgres verificati contro Postgres 18 (non assunti, vedi CLAUDE.md):
 // 22P02 = invalid_text_representation (qui: un id nel path/body che Postgres non riesce a
 // castare a uuid), 23503 = foreign_key_violation (id sintatticamente valido ma che non
-// referenzia nessuna riga esistente).
+// referenzia nessuna riga esistente), 22003 = numeric_field_overflow (un valore numerico
+// eccede la precisione/scala della colonna NUMERIC — es. moltiplicatoreMinutiPerPunto con
+// più cifre di quante ne ammetta NUMERIC(6,3); trattato come richiesta malformata del
+// client, non come 500, coerente con gli altri due codici già mappati qui).
 export function comeErroreRiferimentoNonValido(err: unknown): ErroreRiferimentoNonValido | null {
-  if (err instanceof DatabaseError && (err.code === '22P02' || err.code === '23503')) {
+  if (err instanceof DatabaseError && (err.code === '22P02' || err.code === '23503' || err.code === '22003')) {
     return new ErroreRiferimentoNonValido('riferimento non valido o identificativo malformato');
   }
   return null;

@@ -153,7 +153,30 @@ export const schemaImpostazioniOidc = z.object({
 });
 export type ImpostazioniOidcRequest = z.infer<typeof schemaImpostazioniOidc>;
 
-const REGEX_DECIMALE_PARAMETRICO = /^\d+(\.\d{1,4})?$/;
+// NUMERIC(6,3): max 3 cifre intere, max 3 decimali (6 cifre totali). Usata per i campi che
+// NON sono rapporti 0..1 (quelli hanno REGEX_RAPPORTO_01 sotto, già entro il limite) e la
+// cui colonna DB è NUMERIC(6,3) — vedi db/migrations/000001_init.up.sql: pesoFasciaPregiata,
+// caaNeutro, csdNeutro, e i campi di schemaCsdScaglione. Finding 4b: prima di questo fix
+// accettava lunghezze arbitrarie (es. '99999999'), che Postgres rifiuta con 22003
+// (numeric_field_overflow) — mappato a 400 in erroriDominio.ts come difesa di secondo
+// livello, ma il vincolo va comunque applicato qui per rifiutare prima di toccare il DB.
+const REGEX_DECIMALE_PARAMETRICO = /^\d{1,3}(\.\d{1,3})?$/;
+
+// moltiplicatoreMinutiPerPunto e minutiSettimanaliMax sono NUMERIC(10,3) in DB (non
+// NUMERIC(6,3) come gli altri campi decimali sopra — verificato in
+// db/migrations/000001_init.up.sql, righe moltiplicatore_minuti_per_punto/
+// minuti_settimanali_max), quindi ammettono fino a 7 cifre intere. Usare la regex a 3
+// cifre anche qui avrebbe rifiutato valori legittimi entro la precisione reale della
+// colonna — il vincolo di formato deve rispecchiare lo schema DB effettivo, non
+// un'assunzione uniforme su tutti i campi NUMERIC.
+const REGEX_DECIMALE_PARAMETRICO_ESTESO = /^\d{1,7}(\.\d{1,3})?$/;
+
+// Rapporti/percentuali in forma decimale (0.0000-1.0000, NUMERIC(6,4)): '0.5%' si scrive
+// '0.0050', non '0.5' o '50'. Finding 2: la regex generica precedente accettava fino a
+// 99.9999, un admin che intende "20%" scrivendo '20.0000' pubblicava un valore che rompe
+// il round-robin per l'intera stagione (target quota irraggiungibile). Accetta '0', '0.xxxx'
+// (1-4 decimali), '1', '1.0000' (1-4 decimali) — mai sopra 1.
+const REGEX_RAPPORTO_01 = /^(0(\.\d{1,4})?|1(\.0{1,4})?)$/;
 
 export const schemaCsdScaglione = z
   .object({
@@ -166,24 +189,89 @@ export const schemaCsdScaglione = z
     path: ['rapportoFdFrMax'],
   });
 
-export const schemaCreaVersioneParametrico = z.object({
-  note: z.string().min(1).optional(),
-  moltiplicatoreMinutiPerPunto: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
-  pesoFasciaPregiata: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
-  minutiSettimanaliMax: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
-  slotMaxStessoImpianto: z.number().int().nonnegative(),
-  fascePregiateMax: z.number().int().nonnegative(),
-  giornateGaraMax: z.number().int().nonnegative(),
-  incrementoSquadreNeutro: z.number().int().nonnegative(),
-  caaNeutro: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
-  csdNeutro: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
-  tolleranzaIsfPct: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
-  sogliaMancatiUtilizziDiffida: z.number().int().nonnegative(),
-  sogliaMancatiUtilizziDecadenza: z.number().int().nonnegative(),
-  sogliaScostamentoDichiaratoPct: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
-  sogliaIsfCompensazione: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
-  retentionLogOperazioniGiorni: z.number().int().nonnegative(),
-  quotaNuoveAssociazioniPct: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
-  csdScaglioni: z.array(schemaCsdScaglione),
-});
+export const schemaCreaVersioneParametrico = z
+  .object({
+    note: z.string().min(1).optional(),
+    moltiplicatoreMinutiPerPunto: z.string().regex(REGEX_DECIMALE_PARAMETRICO_ESTESO),
+    pesoFasciaPregiata: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
+    minutiSettimanaliMax: z.string().regex(REGEX_DECIMALE_PARAMETRICO_ESTESO),
+    slotMaxStessoImpianto: z.number().int().nonnegative(),
+    fascePregiateMax: z.number().int().nonnegative(),
+    giornateGaraMax: z.number().int().nonnegative(),
+    incrementoSquadreNeutro: z.number().int().nonnegative(),
+    // Coefficienti neutri: mai zero per definizione (moltiplicano altri valori nel calcolo,
+    // uno zero azzererebbe qualunque grandezza che li usa). Regex sopra già impone il
+    // formato NUMERIC(6,3); il vincolo "> 0" è un requisito semantico distinto (non di
+    // formato), per questo espresso come .refine() separato invece di complicare la regex
+    // con un negative-lookahead — più leggibile e il messaggio d'errore è più chiaro.
+    caaNeutro: z.string().regex(REGEX_DECIMALE_PARAMETRICO).refine((v) => Number(v) > 0, {
+      message: 'caaNeutro deve essere maggiore di zero',
+    }),
+    csdNeutro: z.string().regex(REGEX_DECIMALE_PARAMETRICO).refine((v) => Number(v) > 0, {
+      message: 'csdNeutro deve essere maggiore di zero',
+    }),
+    tolleranzaIsfPct: z.string().regex(REGEX_RAPPORTO_01),
+    sogliaMancatiUtilizziDiffida: z.number().int().nonnegative(),
+    sogliaMancatiUtilizziDecadenza: z.number().int().nonnegative(),
+    sogliaScostamentoDichiaratoPct: z.string().regex(REGEX_RAPPORTO_01),
+    sogliaIsfCompensazione: z.string().regex(REGEX_RAPPORTO_01),
+    // Finding 1: floor di 1 giorno minimo — art. B.39 richiede comunque una retention
+    // minima, mai zero. Zero cancellava l'intero audit log al giro successivo dello
+    // scheduler di housekeeping (il predicato diventa sempre vero).
+    retentionLogOperazioniGiorni: z.number().int().min(1),
+    quotaNuoveAssociazioniPct: z.string().regex(REGEX_RAPPORTO_01),
+    csdScaglioni: z.array(schemaCsdScaglione),
+  })
+  // Finding 2 (parte 2): la diffida deve arrivare prima della decadenza, non dopo/uguale.
+  .refine((d) => d.sogliaMancatiUtilizziDiffida < d.sogliaMancatiUtilizziDecadenza, {
+    message: 'sogliaMancatiUtilizziDiffida deve essere minore di sogliaMancatiUtilizziDecadenza',
+    path: ['sogliaMancatiUtilizziDecadenza'],
+  })
+  // Finding 3: csdScaglioni deve coprire l'intero dominio [0, +inf) senza buchi né
+  // sovrapposizioni. Il motore Go (calc/csd.go::LookupCSD) fallisce esplicitamente se
+  // nessuno scaglione copre un rapporto FD/FR richiesto (array vuoto/con buchi), e prende
+  // silenziosamente il primo match per ordine se gli scaglioni si sovrappongono (il
+  // secondo scaglione coprente diventa codice morto, nessun errore visibile). L'array in
+  // input dal client potrebbe non arrivare ordinato: si ordina una copia locale per
+  // rapportoFdFrMin numerico prima di applicare i controlli, senza assumere l'ordine del
+  // body.
+  .superRefine((d, ctx) => {
+    const scaglioni = [...d.csdScaglioni].sort((a, b) => Number(a.rapportoFdFrMin) - Number(b.rapportoFdFrMin));
+    if (scaglioni.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'csdScaglioni non può essere vuoto: nessuno scaglione copre alcun rapporto FD/FR',
+        path: ['csdScaglioni'],
+      });
+      return;
+    }
+    const primo = scaglioni[0]!;
+    if (Number(primo.rapportoFdFrMin) !== 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'il primo scaglione di csdScaglioni deve avere rapportoFdFrMin = 0 (copertura deve iniziare da zero)',
+        path: ['csdScaglioni'],
+      });
+    }
+    for (let i = 1; i < scaglioni.length; i++) {
+      const precedente = scaglioni[i - 1]!;
+      const corrente = scaglioni[i]!;
+      const maxPrecedente = precedente.rapportoFdFrMax === null ? null : Number(precedente.rapportoFdFrMax);
+      if (maxPrecedente === null || maxPrecedente !== Number(corrente.rapportoFdFrMin)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `csdScaglioni ha un buco o una sovrapposizione tra gli scaglioni con rapportoFdFrMin=${precedente.rapportoFdFrMin} e rapportoFdFrMin=${corrente.rapportoFdFrMin}: il rapportoFdFrMax del primo deve coincidere col rapportoFdFrMin del secondo`,
+          path: ['csdScaglioni'],
+        });
+      }
+    }
+    const ultimo = scaglioni[scaglioni.length - 1]!;
+    if (ultimo.rapportoFdFrMax !== null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "l'ultimo scaglione di csdScaglioni deve avere rapportoFdFrMax = null (copertura fino a infinito)",
+        path: ['csdScaglioni'],
+      });
+    }
+  });
 export type CreaVersioneParametricoRequest = z.infer<typeof schemaCreaVersioneParametrico>;

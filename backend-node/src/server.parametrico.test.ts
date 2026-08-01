@@ -216,3 +216,121 @@ test(
     });
   },
 );
+
+// Regressione final-review whole-branch (2026-07-31): 4 finding Important, ciascuno
+// verificato bloccato (400) da qui in avanti, dove prima passava (201) e rompeva
+// silenziosamente il sistema (audit log azzerato, round-robin irraggiungibile,
+// istruttoria rotta da CSD non coprente, 500 grezzo su overflow numerico).
+test(
+  'POST /backoffice/parametrico: finding di final review bloccati (400)',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const { pool, distruggi } = await creaDatabaseDedicato(dsn!);
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return distruggi();
+    });
+
+    const admin = await creaUtenteTest(pool, 'admin');
+
+    const DATI_VALIDI = {
+      note: 'base valida per i test di regressione',
+      moltiplicatoreMinutiPerPunto: '60.000',
+      pesoFasciaPregiata: '1.250',
+      minutiSettimanaliMax: '600.000',
+      slotMaxStessoImpianto: 4,
+      fascePregiateMax: 2,
+      giornateGaraMax: 1,
+      incrementoSquadreNeutro: 0,
+      caaNeutro: '1.000',
+      csdNeutro: '1.000',
+      tolleranzaIsfPct: '0.0050',
+      sogliaMancatiUtilizziDiffida: 2,
+      sogliaMancatiUtilizziDecadenza: 3,
+      sogliaScostamentoDichiaratoPct: '0.2000',
+      sogliaIsfCompensazione: '0.2000',
+      retentionLogOperazioniGiorni: 30,
+      quotaNuoveAssociazioniPct: '0.0000',
+      csdScaglioni: [{ rapportoFdFrMin: '0.000', rapportoFdFrMax: null, coefficiente: '1.000' }],
+    };
+
+    async function posta(body: unknown): Promise<Response> {
+      return fetch(`${base}/backoffice/parametrico`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify(body),
+      });
+    }
+
+    await t.test('sanity: dati validi ancora 201 (baseline non regredita)', async () => {
+      const r = await posta(DATI_VALIDI);
+      assert.equal(r.status, 201);
+    });
+
+    await t.test('Finding 1: retentionLogOperazioniGiorni: 0 -> 400 (azzererebbe log_operazioni)', async () => {
+      const r = await posta({ ...DATI_VALIDI, retentionLogOperazioniGiorni: 0 });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('Finding 2: quotaNuoveAssociazioniPct: "20.0000" -> 400 (20% scritto come 20 invece di 0.20)', async () => {
+      const r = await posta({ ...DATI_VALIDI, quotaNuoveAssociazioniPct: '20.0000' });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('Finding 2: sogliaMancatiUtilizziDiffida >= Decadenza -> 400', async () => {
+      const r = await posta({ ...DATI_VALIDI, sogliaMancatiUtilizziDiffida: 3, sogliaMancatiUtilizziDecadenza: 3 });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('Finding 2: caaNeutro "0.000" -> 400 (coefficiente neutro non può essere zero)', async () => {
+      const r = await posta({ ...DATI_VALIDI, caaNeutro: '0.000' });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('Finding 3: csdScaglioni vuoto -> 400', async () => {
+      const r = await posta({ ...DATI_VALIDI, csdScaglioni: [] });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('Finding 3: csdScaglioni con buco tra 1.000 e 1.500 -> 400', async () => {
+      const r = await posta({
+        ...DATI_VALIDI,
+        csdScaglioni: [
+          { rapportoFdFrMin: '0.000', rapportoFdFrMax: '1.000', coefficiente: '1.000' },
+          { rapportoFdFrMin: '1.500', rapportoFdFrMax: null, coefficiente: '0.850' },
+        ],
+      });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('Finding 3: csdScaglioni sovrapposti ([0,2) e [1,null)) -> 400', async () => {
+      const r = await posta({
+        ...DATI_VALIDI,
+        csdScaglioni: [
+          { rapportoFdFrMin: '0.000', rapportoFdFrMax: '2.000', coefficiente: '1.000' },
+          { rapportoFdFrMin: '1.000', rapportoFdFrMax: null, coefficiente: '0.850' },
+        ],
+      });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('Finding 3: csdScaglioni validi e contigui -> 201', async () => {
+      const r = await posta({
+        ...DATI_VALIDI,
+        note: 'scaglioni contigui validi',
+        csdScaglioni: [
+          { rapportoFdFrMin: '0.000', rapportoFdFrMax: '1.000', coefficiente: '1.000' },
+          { rapportoFdFrMin: '1.000', rapportoFdFrMax: '2.000', coefficiente: '0.900' },
+          { rapportoFdFrMin: '2.000', rapportoFdFrMax: null, coefficiente: '0.850' },
+        ],
+      });
+      assert.equal(r.status, 201);
+    });
+
+    await t.test('Finding 4: moltiplicatoreMinutiPerPunto "99999999" -> 400, non 500 (overflow numeric)', async () => {
+      const r = await posta({ ...DATI_VALIDI, moltiplicatoreMinutiPerPunto: '99999999' });
+      assert.equal(r.status, 400);
+    });
+  },
+);
