@@ -152,3 +152,38 @@ export const schemaImpostazioniOidc = z.object({
   clientSecret: z.string().min(1).optional(),
 });
 export type ImpostazioniOidcRequest = z.infer<typeof schemaImpostazioniOidc>;
+
+const REGEX_DECIMALE_PARAMETRICO = /^\d+(\.\d{1,4})?$/;
+
+export const schemaCsdScaglione = z
+  .object({
+    rapportoFdFrMin: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
+    rapportoFdFrMax: z.string().regex(REGEX_DECIMALE_PARAMETRICO).nullable(),
+    coefficiente: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
+  })
+  .refine((s) => s.rapportoFdFrMax === null || Number(s.rapportoFdFrMax) > Number(s.rapportoFdFrMin), {
+    message: 'rapportoFdFrMax deve essere maggiore di rapportoFdFrMin',
+    path: ['rapportoFdFrMax'],
+  });
+
+export const schemaCreaVersioneParametrico = z.object({
+  note: z.string().min(1).optional(),
+  moltiplicatoreMinutiPerPunto: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
+  pesoFasciaPregiata: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
+  minutiSettimanaliMax: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
+  slotMaxStessoImpianto: z.number().int().nonnegative(),
+  fascePregiateMax: z.number().int().nonnegative(),
+  giornateGaraMax: z.number().int().nonnegative(),
+  incrementoSquadreNeutro: z.number().int().nonnegative(),
+  caaNeutro: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
+  csdNeutro: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
+  tolleranzaIsfPct: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
+  sogliaMancatiUtilizziDiffida: z.number().int().nonnegative(),
+  sogliaMancatiUtilizziDecadenza: z.number().int().nonnegative(),
+  sogliaScostamentoDichiaratoPct: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
+  sogliaIsfCompensazione: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
+  retentionLogOperazioniGiorni: z.number().int().nonnegative(),
+  quotaNuoveAssociazioniPct: z.string().regex(REGEX_DECIMALE_PARAMETRICO),
+  csdScaglioni: z.array(schemaCsdScaglione),
+});
+export type CreaVersioneParametricoRequest = z.infer<typeof schemaCreaVersioneParametrico>;
