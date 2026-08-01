@@ -55,7 +55,7 @@ import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSov
 import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
 import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico } from './backofficeSchema.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
-import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega } from './pubblicoSchema.ts';
+import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
 import { MulterError } from 'multer';
 import { readFile, unlink } from 'node:fs/promises';
@@ -67,6 +67,7 @@ import {
   respingiAbilitazione,
   revocaAbilitazioneConCascata,
 } from './abilitazioni.ts';
+import { creaDomanda, trovaDomandaPerId, listaDomandePerAssociazione } from './domande.ts';
 import { trovaPersonaFisicaPerCf, creaPersonaFisicaShell } from './repository/personeFisiche.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
@@ -1645,6 +1646,50 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         });
         res.status(201).json(versione);
       } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Pubblico: presentazione domanda (Allegato B art. B.5-B.6) ---
+
+  app.post(
+    '/pubblico/domande',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const parsed = schemaCreaDomanda.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, parsed.data.associazioneId, parsed.data.stagioneId);
+      if (!delegante) {
+        res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
+        return;
+      }
+      try {
+        const domanda = await eseguiInTransazione(pool, async (client) => {
+          const d = await creaDomanda(client, parsed.data, req.persona!.sub);
+          await registraOperazione(client, {
+            attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: parsed.data.associazioneId, ruolo: delegante.ruolo },
+            azione: 'crea_domanda',
+            entitaTipo: 'domande',
+            entitaId: d.id,
+            dettaglio: d as unknown as Record<string, unknown>,
+          });
+          return d;
+        });
+        res.status(201).json(domanda);
+      } catch (err) {
+        if (err instanceof ErroreValoreDuplicato) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
         if (erroreRiferimento) {
           res.status(400).json({ errore: erroreRiferimento.message });
