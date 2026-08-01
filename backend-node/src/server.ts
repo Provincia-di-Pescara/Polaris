@@ -52,6 +52,7 @@ import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstit
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
+import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni } from './repository/parametrico.ts';
 import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice } from './backofficeSchema.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
 import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega } from './pubblicoSchema.ts';
@@ -1572,6 +1573,46 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     } catch (err) {
       if (err instanceof ErroreTokenInvitoNonValido) {
         res.status(400).json({ errore: err.message });
+        return;
+      }
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/backoffice/parametrico', richiedeAutenticazione, richiedeRuolo('admin'), async (_req, res) => {
+    try {
+      const versione = await leggiVersioneAttiva(pool);
+      if (!versione) {
+        res.status(404).json({ errore: 'nessuna versione parametrica trovata' });
+        return;
+      }
+      res.status(200).json(versione);
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/backoffice/parametrico/versioni', richiedeAutenticazione, richiedeRuolo('admin'), async (_req, res) => {
+    try {
+      res.status(200).json(await listaVersioni(pool));
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/backoffice/parametrico/versioni/:id', richiedeAutenticazione, richiedeRuolo('admin'), async (req, res) => {
+    try {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      const versione = await leggiVersionePerId(pool, id);
+      if (!versione) {
+        res.status(404).json({ errore: 'versione non trovata' });
+        return;
+      }
+      res.status(200).json(versione);
+    } catch (err) {
+      const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+      if (erroreRiferimento) {
+        res.status(400).json({ errore: erroreRiferimento.message });
         return;
       }
       res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
