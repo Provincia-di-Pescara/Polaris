@@ -33,7 +33,12 @@ import { costruisciUrlAutorizzazione, ErroreOidcNonConfigurato, ErroreScambioCod
 import { leggiConfigOidcPubblica, scriviConfigOidc, ErroreClientSecretMancante } from './oidc/config.ts';
 import { richiedeRuolo } from './auth/middleware.ts';
 import { registraOperazione } from './repository/logOperazioni.ts';
-import { creaClientMotore, type ClientMotore } from './engine/client.ts';
+import {
+  creaClientMotore,
+  type ClientMotore,
+  ErroreMotoreIrraggiungibile,
+  ErroreMotoreDominio,
+} from './engine/client.ts';
 import {
   creaUtenteInvitato,
   listaUtenti,
@@ -47,7 +52,7 @@ import {
   aPubblico,
 } from './repository/utentiBackoffice.ts';
 import { revocaSessioniUtente } from './repository/sessioni.ts';
-import { ErroreValoreDuplicato, ErroreNonTrovato, ErroreStatoNonValidoPerTransizione, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
+import { ErroreValoreDuplicato, ErroreNonTrovato, ErroreStatoNonValidoPerTransizione, ErroreOrdineFasiNonRispettato, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
 import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './discipline.ts';
 import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstituzione } from './istituzioni.ts';
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
@@ -1669,6 +1674,138 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           return;
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Coda verso il motore Go (art. B.7/B.12/B.17 — orchestrazione, nessuna logica
+  // di calcolo qui, solo trasporto + guardrail di concorrenza/ordine fasi) ---
+
+  async function verificaIstruttoriaEseguita(client: PoolClient, stagioneId: string): Promise<boolean> {
+    const r = await client.query<{ exists: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1 FROM fabbisogni_riconosciuti fr
+         JOIN domande d ON d.id = fr.domanda_id
+         WHERE d.stagione_id = $1
+       ) AS exists`,
+      [stagioneId],
+    );
+    return r.rows[0]!.exists;
+  }
+
+  function gestisciEsecuzioneMotore(err: unknown, res: Response): void {
+    if (err instanceof ErroreOrdineFasiNonRispettato) {
+      res.status(409).json({ errore: err.message });
+      return;
+    }
+    if (err instanceof ErroreMotoreIrraggiungibile) {
+      res.status(502).json({ errore: 'motore non raggiungibile' });
+      return;
+    }
+    if (err instanceof ErroreMotoreDominio) {
+      res.status(500).json({ errore: err.message });
+      return;
+    }
+    const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+    if (erroreRiferimento) {
+      res.status(400).json({ errore: erroreRiferimento.message });
+      return;
+    }
+    res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+  }
+
+  app.post(
+    '/backoffice/stagioni/:id/istruttoria',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      if (!clientMotore) {
+        res.status(500).json({ errore: 'motore non configurato' });
+        return;
+      }
+      try {
+        const risultato = await eseguiInTransazione(pool, async (client) => {
+          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [stagioneId]);
+          const r = await clientMotore.eseguiIstruttoria(stagioneId);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'esegui_istruttoria',
+            entitaTipo: 'stagioni_sportive',
+            entitaId: stagioneId,
+            dettaglio: r as unknown as Record<string, unknown>,
+          });
+          return r;
+        });
+        res.status(200).json(risultato);
+      } catch (err) {
+        gestisciEsecuzioneMotore(err, res);
+      }
+    },
+  );
+
+  app.post(
+    '/backoffice/stagioni/:id/blocchi-gara',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      if (!clientMotore) {
+        res.status(500).json({ errore: 'motore non configurato' });
+        return;
+      }
+      try {
+        const risultato = await eseguiInTransazione(pool, async (client) => {
+          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [stagioneId]);
+          if (!(await verificaIstruttoriaEseguita(client, stagioneId))) {
+            throw new ErroreOrdineFasiNonRispettato('istruttoria non ancora eseguita per questa stagione');
+          }
+          const r = await clientMotore.eseguiBlocchiGara(stagioneId);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'esegui_blocchi_gara',
+            entitaTipo: 'stagioni_sportive',
+            entitaId: stagioneId,
+            dettaglio: r as unknown as Record<string, unknown>,
+          });
+          return r;
+        });
+        res.status(200).json(risultato);
+      } catch (err) {
+        gestisciEsecuzioneMotore(err, res);
+      }
+    },
+  );
+
+  app.post(
+    '/backoffice/stagioni/:id/prima-assegnazione',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      if (!clientMotore) {
+        res.status(500).json({ errore: 'motore non configurato' });
+        return;
+      }
+      try {
+        const risultato = await eseguiInTransazione(pool, async (client) => {
+          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [stagioneId]);
+          if (!(await verificaIstruttoriaEseguita(client, stagioneId))) {
+            throw new ErroreOrdineFasiNonRispettato('istruttoria non ancora eseguita per questa stagione');
+          }
+          const r = await clientMotore.eseguiPrimaAssegnazione(stagioneId);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'esegui_prima_assegnazione',
+            entitaTipo: 'stagioni_sportive',
+            entitaId: stagioneId,
+            dettaglio: r as unknown as Record<string, unknown>,
+          });
+          return r;
+        });
+        res.status(200).json(risultato);
+      } catch (err) {
+        gestisciEsecuzioneMotore(err, res);
       }
     },
   );
