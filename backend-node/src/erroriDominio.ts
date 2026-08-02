@@ -48,3 +48,10 @@ export class ErroreStatoNonValidoPerTransizione extends Error {}
 // verificato lato Node prima di innescare la chiamata, guardando se esistono già righe di
 // fabbisogni_riconosciuti per la stagione.
 export class ErroreOrdineFasiNonRispettato extends Error {}
+
+// pg_try_advisory_xact_lock sulla stagione (coda verso il motore Go) ha fallito: un'altra
+// esecuzione (istruttoria/blocchi-gara/prima-assegnazione) è già in corso per la stessa
+// stagione. Fallisce SUBITO (non-bloccante), a differenza del vecchio
+// pg_advisory_xact_lock — una connessione del pool non resta impegnata per l'intera durata
+// (fino a ENGINE_TIMEOUT_MS) di una richiesta accodata dietro un'altra.
+export class ErroreElaborazioneInCorso extends Error {}

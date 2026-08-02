@@ -3,6 +3,7 @@ import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
 import { timingSafeEqual } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
+import type { Db } from './db.ts';
 import { listaStagioni, creaStagione } from './stagioni.ts';
 import { eseguiLogin, eseguiLogout, eseguiRefresh } from './auth/login.ts';
 import { eseguiCallbackOidc, eseguiLogoutPubblico, eseguiRefreshPubblico } from './auth/loginPubblico.ts';
@@ -52,7 +53,7 @@ import {
   aPubblico,
 } from './repository/utentiBackoffice.ts';
 import { revocaSessioniUtente } from './repository/sessioni.ts';
-import { ErroreValoreDuplicato, ErroreNonTrovato, ErroreStatoNonValidoPerTransizione, ErroreOrdineFasiNonRispettato, ErroreRiferimentoNonValido, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
+import { ErroreValoreDuplicato, ErroreNonTrovato, ErroreStatoNonValidoPerTransizione, ErroreOrdineFasiNonRispettato, ErroreElaborazioneInCorso, ErroreRiferimentoNonValido, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
 import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './discipline.ts';
 import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstituzione } from './istituzioni.ts';
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
@@ -172,6 +173,22 @@ const limitatoreLogin = rateLimit({
 // rate limit sul solo /auth/oidc/start scoraggia comunque un flood di righe in
 // oidc_stato_pkce da un singolo IP.
 const limitatoreOidcStart = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Coda verso il motore Go (istruttoria/blocchi-gara/prima-assegnazione): ciascuna
+// esecuzione tiene occupata una connessione pool per potenzialmente diversi minuti
+// (ENGINE_TIMEOUT_MS). Il lock non-bloccante (Finding 2, vedi sotto) fa già fallire
+// velocemente i tentativi concorrenti sulla STESSA stagione; questo limiter è una difesa
+// aggiuntiva contro un flood da un singolo IP su stagioni diverse. Le tre route condividono
+// UN SOLO limiter (bucket unico per IP, non per route/stagione, stesso pattern semplice di
+// limitatoreLogin) — limit più alto di limitatoreLogin (10) perché qui un singolo IP admin
+// che lavora su più stagioni nella stessa finestra è un caso operativo legittimo, non solo
+// un sospetto di abuso.
+const limitatoreEsecuzioneMotore = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 30,
   standardHeaders: true,
@@ -1706,12 +1723,47 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     return r.rows[0]!.exists;
   }
 
+  // Finding 1 (review finale "coda motore Go"): nessuna delle 4 route verificava mai che
+  // la stagione esistesse davvero. Un UUID sintatticamente valido ma inesistente arrivava
+  // fino al motore Go (che risponde comunque, filtrando su uno stagione_id senza righe) o
+  // veniva scambiato per "istruttoria non eseguita" (409 invece di 404). Un'unica funzione
+  // condivisa — accetta sia PoolClient (dentro le transazioni delle 3 POST) sia Pool (per
+  // la GET storico, sola lettura) tramite l'interfaccia minima Db.
+  async function verificaStagioneEsiste(db: Db, stagioneId: string): Promise<void> {
+    const r = await db.query<{ exists: boolean }>('SELECT EXISTS(SELECT 1 FROM stagioni_sportive WHERE id = $1) AS exists', [
+      stagioneId,
+    ]);
+    if (!r.rows[0]!.exists) {
+      throw new ErroreNonTrovato('stagione non trovata');
+    }
+  }
+
   function gestisciEsecuzioneMotore(err: unknown, res: Response): void {
+    if (err instanceof ErroreNonTrovato) {
+      res.status(404).json({ errore: err.message });
+      return;
+    }
+    if (err instanceof ErroreElaborazioneInCorso) {
+      res.status(409).json({ errore: err.message });
+      return;
+    }
     if (err instanceof ErroreOrdineFasiNonRispettato) {
       res.status(409).json({ errore: err.message });
       return;
     }
     if (err instanceof ErroreMotoreIrraggiungibile) {
+      // Finding 5 (review finale "coda motore Go"): il ROLLBACK della transazione (innescato
+      // da questo errore) rilascia SUBITO il lock advisory, ma non sappiamo se il motore Go
+      // stia ancora effettivamente eseguendo lato suo (il nostro timeout è solo lato client,
+      // vedi engine/client.ts). Un retry immediato dell'admin dopo un 502 può quindi avviare
+      // una SECONDA esecuzione concorrente sulla stessa stagione. Non c'è ancora un fix
+      // strutturale disponibile: richiederebbe che il motore Go segnali "sto ancora
+      // eseguendo" o che marchi l'elaborazione come conclusa/fallita anche su timeout lato
+      // client, entrambi fuori scope qui. L'unica rete di sicurezza reale è
+      // assegnazioni_slot_attiva_uq lato DB (rigetta la seconda scrittura in conflitto), ma
+      // arriverebbe come errore Postgres grezzo mappato a 500, non un 409 leggibile.
+      // Consiglio operativo: prima di ritentare dopo un 502, controllare
+      // GET .../elaborazioni per lo stato dell'esecuzione precedente.
       res.status(502).json({ errore: 'motore non raggiungibile' });
       return;
     }
@@ -1729,6 +1781,7 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
 
   app.post(
     '/backoffice/stagioni/:id/istruttoria',
+    limitatoreEsecuzioneMotore,
     richiedeAutenticazione,
     richiedeRuolo('admin'),
     async (req: RequestAutenticata, res) => {
@@ -1740,7 +1793,20 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       try {
         validaStagioneIdUuid(stagioneId);
         const risultato = await eseguiInTransazione(pool, async (client) => {
-          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [stagioneId]);
+          // Finding 2 (review finale "coda motore Go"): pg_try_advisory_xact_lock, non
+          // pg_advisory_xact_lock — non-bloccante. La versione bloccante teneva occupata
+          // una connessione del pool (max:10, vedi db.ts) per l'intera attesa+esecuzione
+          // (fino a ENGINE_TIMEOUT_MS, default 300000ms) di una richiesta accodata dietro
+          // un'altra sulla stessa stagione, rischiando di affamare OGNI altra route
+          // dell'app (login incluso) sotto un flood o anche solo due click ravvicinati
+          // dell'admin.
+          const lock = await client.query<{ pg_try_advisory_xact_lock: boolean }>('SELECT pg_try_advisory_xact_lock(hashtext($1))', [
+            stagioneId,
+          ]);
+          if (!lock.rows[0]!.pg_try_advisory_xact_lock) {
+            throw new ErroreElaborazioneInCorso('elaborazione già in corso per questa stagione');
+          }
+          await verificaStagioneEsiste(client, stagioneId);
           const r = await clientMotore.eseguiIstruttoria(stagioneId);
           await registraOperazione(client, {
             attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
@@ -1760,6 +1826,7 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
 
   app.post(
     '/backoffice/stagioni/:id/blocchi-gara',
+    limitatoreEsecuzioneMotore,
     richiedeAutenticazione,
     richiedeRuolo('admin'),
     async (req: RequestAutenticata, res) => {
@@ -1771,7 +1838,13 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       try {
         validaStagioneIdUuid(stagioneId);
         const risultato = await eseguiInTransazione(pool, async (client) => {
-          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [stagioneId]);
+          const lock = await client.query<{ pg_try_advisory_xact_lock: boolean }>('SELECT pg_try_advisory_xact_lock(hashtext($1))', [
+            stagioneId,
+          ]);
+          if (!lock.rows[0]!.pg_try_advisory_xact_lock) {
+            throw new ErroreElaborazioneInCorso('elaborazione già in corso per questa stagione');
+          }
+          await verificaStagioneEsiste(client, stagioneId);
           if (!(await verificaIstruttoriaEseguita(client, stagioneId))) {
             throw new ErroreOrdineFasiNonRispettato('istruttoria non ancora eseguita per questa stagione');
           }
@@ -1794,6 +1867,7 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
 
   app.post(
     '/backoffice/stagioni/:id/prima-assegnazione',
+    limitatoreEsecuzioneMotore,
     richiedeAutenticazione,
     richiedeRuolo('admin'),
     async (req: RequestAutenticata, res) => {
@@ -1805,7 +1879,13 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       try {
         validaStagioneIdUuid(stagioneId);
         const risultato = await eseguiInTransazione(pool, async (client) => {
-          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [stagioneId]);
+          const lock = await client.query<{ pg_try_advisory_xact_lock: boolean }>('SELECT pg_try_advisory_xact_lock(hashtext($1))', [
+            stagioneId,
+          ]);
+          if (!lock.rows[0]!.pg_try_advisory_xact_lock) {
+            throw new ErroreElaborazioneInCorso('elaborazione già in corso per questa stagione');
+          }
+          await verificaStagioneEsiste(client, stagioneId);
           if (!(await verificaIstruttoriaEseguita(client, stagioneId))) {
             throw new ErroreOrdineFasiNonRispettato('istruttoria non ancora eseguita per questa stagione');
           }
@@ -1834,6 +1914,7 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
       try {
         validaStagioneIdUuid(stagioneId);
+        await verificaStagioneEsiste(pool, stagioneId);
         const r = await pool.query(
           `SELECT id, stagione_id, tipo, parametrico_versione_id, iniziata_il, conclusa_il,
                   stato, numero_round_eseguiti, log_dettaglio
@@ -1856,6 +1937,10 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           })),
         );
       } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
         if (erroreRiferimento) {
           res.status(400).json({ errore: erroreRiferimento.message });

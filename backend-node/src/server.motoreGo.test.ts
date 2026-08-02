@@ -151,6 +151,63 @@ if (!dsn) {
         headers: { authorization: `Bearer ${token}` },
       });
       assert.equal(res.status, 409);
+
+      // Finding 3 (review finale "coda motore Go"): un'esecuzione che fallisce PRIMA di
+      // chiamare il motore (qui: guardia sull'ordine delle fasi) non deve lasciare traccia
+      // in log_operazioni — la transazione fa ROLLBACK, l'INSERT dell'audit log non è mai
+      // stato eseguito (non era stato ancora raggiunto).
+      const log = await pool.query(
+        `SELECT count(*)::int AS n FROM log_operazioni WHERE entita_tipo = 'stagioni_sportive' AND entita_id = $1 AND azione = 'esegui_blocchi_gara'`,
+        [stagioneId],
+      );
+      assert.equal(log.rows[0]!.n, 0);
+    } finally {
+      server.close();
+    }
+  });
+
+  // Finding 1 (review finale "coda motore Go"): una stagione UUID-valida ma inesistente
+  // deve dare 404, non un 200/409/502/500 come prima del fix.
+  test('POST .../istruttoria: 404 su stagione inesistente, motore mai chiamato', async () => {
+    const stagioneInesistente = randomUUID();
+    const { token } = await creaAdminDiTest();
+    const app = avviaApp({
+      clientMotore: clientMotoreFittizio({
+        eseguiIstruttoria: async () => {
+          throw new Error('eseguiIstruttoria NON deve essere chiamato per una stagione inesistente');
+        },
+      }),
+    });
+    const server = app.listen(0);
+    try {
+      const porta = (server.address() as { port: number }).port;
+      const res = await fetch(`http://127.0.0.1:${porta}/backoffice/stagioni/${stagioneInesistente}/istruttoria`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      assert.equal(res.status, 404);
+
+      const log = await pool.query(
+        `SELECT count(*)::int AS n FROM log_operazioni WHERE entita_tipo = 'stagioni_sportive' AND entita_id = $1`,
+        [stagioneInesistente],
+      );
+      assert.equal(log.rows[0]!.n, 0);
+    } finally {
+      server.close();
+    }
+  });
+
+  test('GET .../elaborazioni: 404 su stagione inesistente', async () => {
+    const stagioneInesistente = randomUUID();
+    const { token } = await creaAdminDiTest();
+    const app = avviaApp({ clientMotore: clientMotoreFittizio({}) });
+    const server = app.listen(0);
+    try {
+      const porta = (server.address() as { port: number }).port;
+      const res = await fetch(`http://127.0.0.1:${porta}/backoffice/stagioni/${stagioneInesistente}/elaborazioni`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      assert.equal(res.status, 404);
     } finally {
       server.close();
     }
@@ -203,6 +260,14 @@ if (!dsn) {
         headers: { authorization: `Bearer ${token}` },
       });
       assert.equal(res.status, 502);
+
+      // Finding 3: il motore ha fallito PRIMA del registraOperazione (fuori transazione
+      // riuscita) — ROLLBACK, nessuna riga di audit per questa esecuzione.
+      const log = await pool.query(
+        `SELECT count(*)::int AS n FROM log_operazioni WHERE entita_tipo = 'stagioni_sportive' AND entita_id = $1 AND azione = 'esegui_blocchi_gara'`,
+        [stagioneId],
+      );
+      assert.equal(log.rows[0]!.n, 0);
     } finally {
       server.close();
     }
@@ -228,6 +293,13 @@ if (!dsn) {
       assert.equal(res.status, 500);
       const body = (await res.json()) as { errore: string };
       assert.equal(body.errore, 'stagione priva di domande ammesse');
+
+      // Finding 3: stesso motivo del test 502 sopra.
+      const log = await pool.query(
+        `SELECT count(*)::int AS n FROM log_operazioni WHERE entita_tipo = 'stagioni_sportive' AND entita_id = $1 AND azione = 'esegui_istruttoria'`,
+        [stagioneId],
+      );
+      assert.equal(log.rows[0]!.n, 0);
     } finally {
       server.close();
     }
@@ -358,6 +430,63 @@ if (!dsn) {
         headers: { authorization: `Bearer ${token}` },
       });
       assert.equal(res.status, 400);
+    } finally {
+      server.close();
+    }
+  });
+
+  // Finding 4 (review finale "coda motore Go"): due esecuzioni concorrenti sulla STESSA
+  // stagione devono serializzarsi tramite il lock non-bloccante (Finding 2) — la seconda
+  // che arriva mentre la prima tiene ancora il lock advisory deve ricevere 409 "in corso"
+  // immediatamente, non accodarsi. Il client motore fittizio ritarda la risposta della
+  // PRIMA chiamata (tramite un flag condiviso: la prima invocazione attende un segnale,
+  // dando tempo alla seconda richiesta HTTP di arrivare ed essere respinta dal lock prima
+  // che la prima transazione faccia COMMIT). Stile Promise.all su due richieste in corsa,
+  // come repository/utentiBackoffice.test.ts (righe ~284) e osservazioni.test.ts (riga
+  // ~177), qui applicato a HTTP end-to-end invece che a due chiamate dirette a repository.
+  test('POST .../istruttoria: due esecuzioni concorrenti sulla stessa stagione si serializzano (409 sulla seconda)', async () => {
+    const stagioneId = await creaStagioneDiTest();
+    const { token } = await creaAdminDiTest();
+
+    let chiamateInCorso = 0;
+    const app = avviaApp({
+      clientMotore: clientMotoreFittizio({
+        eseguiIstruttoria: async () => {
+          chiamateInCorso += 1;
+          // Ritarda la risposta abbastanza da lasciare la transazione (e quindi il lock
+          // advisory) aperta mentre la seconda richiesta HTTP viene inviata e valutata.
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          return { domandeCalcolate: chiamateInCorso };
+        },
+      }),
+    });
+    const server = app.listen(0);
+    try {
+      const porta = (server.address() as { port: number }).port;
+      const url = `http://127.0.0.1:${porta}/backoffice/stagioni/${stagioneId}/istruttoria`;
+
+      const primaRichiesta = fetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}` } });
+      // Piccolo ritardo per garantire che la prima richiesta abbia già preso il lock
+      // (BEGIN + pg_try_advisory_xact_lock) prima che parta la seconda.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const secondaRichiesta = fetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}` } });
+
+      const [resPrima, resSeconda] = await Promise.all([primaRichiesta, secondaRichiesta]);
+      const stati = [resPrima.status, resSeconda.status].sort();
+      assert.deepEqual(stati, [200, 409]);
+
+      const corpoSeconda = resSeconda.status === 409 ? await resSeconda.json() : await resPrima.json();
+      if (resSeconda.status === 409) {
+        assert.match((corpoSeconda as { errore: string }).errore, /in corso/);
+      }
+
+      // Solo l'esecuzione andata a buon fine ha scritto l'audit log: mai due righe per
+      // due esecuzioni "concorrenti" quando una delle due è stata respinta dal lock.
+      const log = await pool.query(
+        `SELECT count(*)::int AS n FROM log_operazioni WHERE entita_tipo = 'stagioni_sportive' AND entita_id = $1 AND azione = 'esegui_istruttoria'`,
+        [stagioneId],
+      );
+      assert.equal(log.rows[0]!.n, 1);
     } finally {
       server.close();
     }
