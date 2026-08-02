@@ -462,16 +462,25 @@ test('POST /pubblico/domande/:id/osservazioni', { skip: dsn ? false : 'TEST_DATA
   const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
   await fetch(`${base}/backoffice/domande/${domanda.id}/ammetti`, { method: 'PUT', headers: { Authorization: `Bearer ${operatore.token}` } });
 
-  await t.test('dopo ammissione: 201, domanda passa a riesame_richiesto, audit log su domande (I6)', async () => {
+  await t.test('dopo ammissione: 201, domanda.stato invariato (ammessa), riesameStato passa a richiesto, audit log su domande (I6)', async () => {
     const r = await fetch(`${base}/pubblico/domande/${domanda.id}/osservazioni`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
       body: JSON.stringify({ testo: 'non concordo con FR' }),
     });
     assert.equal(r.status, 201);
+    // C1: la risposta HTTP dell'osservazione non porta domandaTransitata/nuovoRiesameStato
+    // (canale interno verso la route, N3) — solo i campi legittimi di Osservazione.
+    const corpoOsservazione = (await r.json()) as Record<string, unknown>;
+    assert.equal('domandaTransitata' in corpoOsservazione, false);
+    assert.equal('nuovoRiesameStato' in corpoOsservazione, false);
+
     const dettaglio = await fetch(`${base}/pubblico/domande/${domanda.id}`, { headers: { Authorization: `Bearer ${persona.token}` } });
-    const body = (await dettaglio.json()) as { stato: string };
-    assert.equal(body.stato, 'riesame_richiesto');
+    const body = (await dettaglio.json()) as { stato: string; riesameStato: string };
+    // Il motore Go legge domande.stato con uguaglianza esatta: deve restare 'ammessa'
+    // (C1) — il riesame vive solo su riesameStato.
+    assert.equal(body.stato, 'ammessa');
+    assert.equal(body.riesameStato, 'richiesto');
 
     const logDomanda = await pool.query(
       `SELECT azione FROM log_operazioni WHERE entita_tipo = 'domande' AND entita_id = $1 AND azione = 'osservazione_richiede_riesame'`,
@@ -561,15 +570,20 @@ test('PUT /backoffice/osservazioni/:id/{accogli,respingi}', { skip: dsn ? false 
     assert.equal(r.status, 400);
   });
 
-  await t.test('accogli: 200, domanda consolidata a riesame_deciso, audit log su domande (I6)', async () => {
+  await t.test('accogli: 200, domanda.stato invariato (ammessa), riesameStato consolidato a deciso, audit log su domande (I6)', async () => {
     const r = await fetch(`${base}/backoffice/osservazioni/${osservazione.id}/accogli`, {
       method: 'PUT',
       headers: { Authorization: `Bearer ${operatore.token}` },
     });
     assert.equal(r.status, 200);
+    const corpoOsservazione = (await r.json()) as Record<string, unknown>;
+    assert.equal('domandaTransitata' in corpoOsservazione, false);
+    assert.equal('nuovoRiesameStato' in corpoOsservazione, false);
+
     const dettaglio = await fetch(`${base}/backoffice/domande/${domanda.id}`, { headers: { Authorization: `Bearer ${operatore.token}` } });
-    const body = (await dettaglio.json()) as { stato: string };
-    assert.equal(body.stato, 'riesame_deciso');
+    const body = (await dettaglio.json()) as { stato: string; riesameStato: string };
+    assert.equal(body.stato, 'ammessa');
+    assert.equal(body.riesameStato, 'deciso');
 
     const logDomanda = await pool.query(
       `SELECT azione FROM log_operazioni WHERE entita_tipo = 'domande' AND entita_id = $1 AND azione = 'consolida_riesame_domanda'`,

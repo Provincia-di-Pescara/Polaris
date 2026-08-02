@@ -1948,22 +1948,25 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
             entitaId: o.id,
             dettaglio: o as unknown as Record<string, unknown>,
           });
-          // I6: traccia anche la transizione di stato della domanda (a differenza di
-          // ammetti_domanda/escludi_domanda, non era mai registrata contro l'entità
+          // I6: traccia anche la transizione di riesame_stato della domanda (a differenza
+          // di ammetti_domanda/escludi_domanda, non era mai registrata contro l'entità
           // 'domande') — solo quando avviene davvero (non su una seconda osservazione su
-          // una domanda già 'riesame_richiesto').
+          // una domanda già a riesame_stato='richiesto').
           if (o.domandaTransitata) {
             await registraOperazione(client, {
               attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: domanda.associazioneId, ruolo: ruoloDelegante },
               azione: 'osservazione_richiede_riesame',
               entitaTipo: 'domande',
               entitaId: domandaId,
-              dettaglio: { stato: o.nuovoStatoDomanda },
+              dettaglio: { riesameStato: o.nuovoRiesameStato },
             });
           }
           return o;
         });
-        res.status(201).json(osservazione);
+        // domandaTransitata/nuovoRiesameStato sono canale interno verso questa route
+        // (I6/audit), non parte del contratto HTTP pubblico di un'osservazione (N3).
+        const { domandaTransitata: _dt, nuovoRiesameStato: _nrs, ...osservazionePubblica } = osservazione;
+        res.status(201).json(osservazionePubblica);
       } catch (err) {
         if (err instanceof ErroreNonTrovato) {
           res.status(404).json({ errore: err.message });
@@ -2009,12 +2012,13 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
               azione: 'consolida_riesame_domanda',
               entitaTipo: 'domande',
               entitaId: o.domandaId,
-              dettaglio: { stato: o.nuovoStatoDomanda },
+              dettaglio: { riesameStato: o.nuovoRiesameStato },
             });
           }
           return o;
         });
-        res.status(200).json(osservazione);
+        const { domandaTransitata: _dt, nuovoRiesameStato: _nrs, ...osservazionePubblica } = osservazione;
+        res.status(200).json(osservazionePubblica);
       } catch (err) {
         if (err instanceof ErroreNonTrovato) {
           res.status(404).json({ errore: err.message });
@@ -2061,12 +2065,13 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
               azione: 'consolida_riesame_domanda',
               entitaTipo: 'domande',
               entitaId: o.domandaId,
-              dettaglio: { stato: o.nuovoStatoDomanda },
+              dettaglio: { riesameStato: o.nuovoRiesameStato },
             });
           }
           return o;
         });
-        res.status(200).json(osservazione);
+        const { domandaTransitata: _dt, nuovoRiesameStato: _nrs, ...osservazionePubblica } = osservazione;
+        res.status(200).json(osservazionePubblica);
       } catch (err) {
         if (err instanceof ErroreNonTrovato) {
           res.status(404).json({ errore: err.message });

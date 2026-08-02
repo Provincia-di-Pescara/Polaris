@@ -1,6 +1,6 @@
 import type { Db } from './db.ts';
 import { ErroreNonTrovato, ErroreStatoNonValidoPerTransizione } from './erroriDominio.ts';
-import type { StatoDomanda } from './domande.ts';
+import type { StatoDomanda, RiesameStato } from './domande.ts';
 
 export interface Osservazione {
   id: string;
@@ -15,13 +15,15 @@ export interface Osservazione {
 }
 
 // Ritorno esteso delle funzioni di transizione: oltre all'osservazione, segnala se la
-// domanda collegata è EFFETTIVAMENTE transitata di stato in questa chiamata (non solo se
-// lo stato attuale coincide con quello atteso) — serve a server.ts (I6) per decidere se
-// scrivere un secondo registraOperazione contro l'entità 'domande', solo quando la
-// transizione avviene davvero.
+// domanda collegata è EFFETTIVAMENTE transitata di riesame_stato in questa chiamata (non
+// solo se lo stato attuale coincide con quello atteso) — serve a server.ts (I6) per
+// decidere se scrivere un secondo registraOperazione contro l'entità 'domande', solo
+// quando la transizione avviene davvero. Nota (C1): questo è sempre riesame_stato, MAI
+// domande.stato — quel campo resta riservato all'esito istruttoria e non è mai toccato
+// da questo flusso.
 export interface EsitoTransizioneOsservazione extends Osservazione {
   domandaTransitata: boolean;
-  nuovoStatoDomanda: StatoDomanda | null;
+  nuovoRiesameStato: RiesameStato | null;
 }
 
 interface RigaOsservazione {
@@ -54,9 +56,11 @@ function daRiga(r: RigaOsservazione): Osservazione {
 }
 
 // Un'osservazione ha senso solo dopo che la domanda ha un esito pubblicato (art. B.10/B.11):
-// 'presentata' (istruttoria non ancora fatta) e 'riesame_deciso' (osservazione già decisa,
-// il ciclo si chiude) restano fuori.
-const STATI_DOMANDA_OSSERVABILI: StatoDomanda[] = ['ammessa', 'esclusa', 'riesame_richiesto'];
+// 'presentata' (istruttoria non ancora fatta) resta fuori. domande.stato non porta più gli
+// stati del riesame (C1) — una domanda 'ammessa'/'esclusa' è sempre osservabile,
+// indipendentemente da quante osservazioni precedenti esistano già; l'idempotenza del
+// ciclo di riesame si gestisce ora su riesame_stato, non più qui.
+const STATI_DOMANDA_OSSERVABILI: StatoDomanda[] = ['ammessa', 'esclusa'];
 
 // Lock del ciclo di vita del riesame di UNA domanda (I4): presentare/decidere osservazioni
 // per la stessa domanda si serializza su questo lock, auto-rilasciato a COMMIT/ROLLBACK
@@ -64,7 +68,7 @@ const STATI_DOMANDA_OSSERVABILI: StatoDomanda[] = ['ammessa', 'esclusa', 'riesam
 // repository/utentiBackoffice.ts. Senza questo lock, due decisioni concorrenti su
 // osservazioni diverse della stessa domanda possono entrambe vedere l'altra come ancora
 // 'in_esame' sotto READ COMMITTED (nessuna delle due ha ancora committato) e nessuna
-// consolida: la domanda resta bloccata per sempre in 'riesame_richiesto'.
+// consolida: riesame_stato resta bloccato per sempre a 'richiesto'.
 async function lockDomanda(db: Db, domandaId: string): Promise<void> {
   await db.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [domandaId]);
 }
@@ -86,7 +90,10 @@ export async function presentaOsservazione(
   dati: { domandaId: string; personaFisicaId: string; testo: string },
 ): Promise<EsitoTransizioneOsservazione> {
   await lockDomanda(db, dati.domandaId);
-  const check = await db.query<{ stato: StatoDomanda }>(`SELECT stato FROM domande WHERE id = $1`, [dati.domandaId]);
+  const check = await db.query<{ stato: StatoDomanda; riesame_stato: RiesameStato }>(
+    `SELECT stato, riesame_stato FROM domande WHERE id = $1`,
+    [dati.domandaId],
+  );
   const domanda = check.rows[0];
   if (!domanda) {
     throw new ErroreNonTrovato('domanda non trovata');
@@ -100,14 +107,14 @@ export async function presentaOsservazione(
      RETURNING ${COLONNE_SELECT_OSSERVAZIONE}`,
     [dati.domandaId, dati.personaFisicaId, dati.testo],
   );
-  const domandaTransitata = domanda.stato !== 'riesame_richiesto';
+  const domandaTransitata = domanda.riesame_stato !== 'richiesto';
   if (domandaTransitata) {
-    await db.query(`UPDATE domande SET stato = 'riesame_richiesto' WHERE id = $1`, [dati.domandaId]);
+    await db.query(`UPDATE domande SET riesame_stato = 'richiesto' WHERE id = $1 AND riesame_stato <> 'richiesto'`, [dati.domandaId]);
   }
   return {
     ...daRiga(r.rows[0]!),
     domandaTransitata,
-    nuovoStatoDomanda: domandaTransitata ? 'riesame_richiesto' : null,
+    nuovoRiesameStato: domandaTransitata ? 'richiesto' : null,
   };
 }
 
@@ -117,16 +124,20 @@ export async function trovaOsservazionePerId(db: Db, id: string): Promise<Osserv
 }
 
 // Se non restano più osservazioni 'in_esame' per la domanda, il riesame è completo:
-// la domanda passa da 'riesame_richiesto' a 'riesame_deciso' (art. B.11). Ritorna true se
-// la transizione è avvenuta davvero in questa chiamata (I6). Va sempre chiamata con il
-// lock di lockDomanda già acquisito dal chiamante nella stessa transazione (I4).
+// riesame_stato passa da 'richiesto' a 'deciso' (art. B.11). domande.stato non viene mai
+// toccato (C1). Ritorna true se la transizione è avvenuta davvero in questa chiamata (I6).
+// Va sempre chiamata con il lock di lockDomanda già acquisito dal chiamante nella stessa
+// transazione (I4).
 async function consolidaSeCompletata(db: Db, domandaId: string): Promise<boolean> {
   const rimaste = await db.query<{ count: string }>(
     `SELECT count(*)::text FROM osservazioni_istruttoria WHERE domanda_id = $1 AND stato = 'in_esame'`,
     [domandaId],
   );
   if (rimaste.rows[0]?.count === '0') {
-    const r = await db.query(`UPDATE domande SET stato = 'riesame_deciso' WHERE id = $1 AND stato = 'riesame_richiesto' RETURNING id`, [domandaId]);
+    const r = await db.query(
+      `UPDATE domande SET riesame_stato = 'deciso' WHERE id = $1 AND riesame_stato = 'richiesto' RETURNING id`,
+      [domandaId],
+    );
     return (r.rowCount ?? 0) > 0;
   }
   return false;
@@ -162,7 +173,7 @@ async function transizionaOsservazione(
   return {
     ...osservazione,
     domandaTransitata,
-    nuovoStatoDomanda: domandaTransitata ? 'riesame_deciso' : null,
+    nuovoRiesameStato: domandaTransitata ? 'deciso' : null,
   };
 }
 

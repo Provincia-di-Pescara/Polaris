@@ -84,8 +84,14 @@ test('presentaOsservazione', { skip: dsn ? false : 'TEST_DATABASE_URL non impost
   const osservazione = await presentaOsservazione(pool, { domandaId: domanda.id, personaFisicaId: personaId, testo: 'non concordo con FR' });
   assert.equal(osservazione.stato, 'in_esame');
 
-  const domandaAggiornata = await pool.query<{ stato: string }>(`SELECT stato FROM domande WHERE id = $1`, [domanda.id]);
-  assert.equal(domandaAggiornata.rows[0]?.stato, 'riesame_richiesto');
+  // C1: domande.stato resta invariato (il motore Go lo legge con uguaglianza esatta),
+  // solo riesame_stato transita.
+  const domandaAggiornata = await pool.query<{ stato: string; riesame_stato: string }>(
+    `SELECT stato, riesame_stato FROM domande WHERE id = $1`,
+    [domanda.id],
+  );
+  assert.equal(domandaAggiornata.rows[0]?.stato, 'ammessa');
+  assert.equal(domandaAggiornata.rows[0]?.riesame_stato, 'richiesto');
 
   const seconda = await presentaOsservazione(pool, { domandaId: domanda.id, personaFisicaId: personaId, testo: 'seconda osservazione' });
   assert.equal(seconda.stato, 'in_esame');
@@ -113,21 +119,29 @@ test('accogliOsservazione + respingiOsservazione consolidano lo stato domanda', 
   const accolta = await accogliOsservazione(pool, oss1.id, decisore);
   assert.equal(accolta.stato, 'accolta');
 
-  let statoDomanda = await pool.query<{ stato: string }>(`SELECT stato FROM domande WHERE id = $1`, [domanda.id]);
-  assert.equal(statoDomanda.rows[0]?.stato, 'riesame_richiesto');
+  let statoDomanda = await pool.query<{ stato: string; riesame_stato: string }>(
+    `SELECT stato, riesame_stato FROM domande WHERE id = $1`,
+    [domanda.id],
+  );
+  assert.equal(statoDomanda.rows[0]?.stato, 'ammessa');
+  assert.equal(statoDomanda.rows[0]?.riesame_stato, 'richiesto');
 
   const respinta = await respingiOsservazione(pool, oss2.id, decisore, 'non fondata');
   assert.equal(respinta.stato, 'respinta');
   assert.equal(respinta.decisioneMotivazione, 'non fondata');
 
-  statoDomanda = await pool.query<{ stato: string }>(`SELECT stato FROM domande WHERE id = $1`, [domanda.id]);
-  assert.equal(statoDomanda.rows[0]?.stato, 'riesame_deciso');
+  statoDomanda = await pool.query<{ stato: string; riesame_stato: string }>(
+    `SELECT stato, riesame_stato FROM domande WHERE id = $1`,
+    [domanda.id],
+  );
+  assert.equal(statoDomanda.rows[0]?.stato, 'ammessa');
+  assert.equal(statoDomanda.rows[0]?.riesame_stato, 'deciso');
 
   await assert.rejects(() => accogliOsservazione(pool, oss1.id, decisore), ErroreStatoNonValidoPerTransizione);
 });
 
 // I4: due decisioni concorrenti su osservazioni DIVERSE della stessa domanda non devono
-// lasciare la domanda bloccata in 'riesame_richiesto' per sempre. Senza il lock
+// lasciare riesame_stato bloccato a 'richiesto' per sempre. Senza il lock
 // pg_advisory_xact_lock in osservazioni.ts, sotto READ COMMITTED entrambe le transazioni
 // possono vedere l'altra osservazione come ancora 'in_esame' (nessuna delle due ha ancora
 // committato) e nessuna consolida.
@@ -166,6 +180,40 @@ test('accogliOsservazione + respingiOsservazione concorrenti sulla stessa domand
     decidiInTransazionePropria((client) => respingiOsservazione(client, oss2.id, decisore, 'non fondata')),
   ]);
 
-  const statoDomanda = await pool.query<{ stato: string }>(`SELECT stato FROM domande WHERE id = $1`, [domanda.id]);
-  assert.equal(statoDomanda.rows[0]?.stato, 'riesame_deciso');
+  const statoDomanda = await pool.query<{ stato: string; riesame_stato: string }>(
+    `SELECT stato, riesame_stato FROM domande WHERE id = $1`,
+    [domanda.id],
+  );
+  assert.equal(statoDomanda.rows[0]?.stato, 'ammessa');
+  assert.equal(statoDomanda.rows[0]?.riesame_stato, 'deciso');
+});
+
+// C1 (review finale whole-branch, Critical): riproduce esattamente il bug originale.
+// Il motore Go (engine-go/internal/postgres/istruttoria.go, gara.go, assegnazione.go)
+// filtra le domande da elaborare con `WHERE stato = 'ammessa'` (uguaglianza esatta). Prima
+// di questo fix, presentare un'osservazione sovrascriveva domande.stato a
+// 'riesame_richiesto' e la domanda spariva silenziosamente da quella query — nessun
+// errore, nessun log. Questo test simula esattamente la query del motore Go prima e dopo
+// la presentazione di un'osservazione: deve continuare a vedere la domanda come ammessa.
+test('C1: un\'osservazione su una domanda ammessa non la fa sparire dalla query del motore Go (WHERE stato = \'ammessa\')', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { domanda, personaId } = await creaDomandaFixture(pool);
+  await ammettiDomanda(pool, domanda.id);
+
+  const queryMotoreGo = () =>
+    pool.query<{ count: string }>(`SELECT count(*)::text AS count FROM domande WHERE id = $1 AND stato = 'ammessa'`, [domanda.id]);
+
+  const primaDellOsservazione = await queryMotoreGo();
+  assert.equal(primaDellOsservazione.rows[0]?.count, '1');
+
+  await presentaOsservazione(pool, { domandaId: domanda.id, personaFisicaId: personaId, testo: 'non concordo con FR' });
+
+  const dopoLOsservazione = await queryMotoreGo();
+  assert.equal(dopoLOsservazione.rows[0]?.count, '1', 'la domanda deve restare visibile al motore Go anche con un riesame in corso');
+
+  // riesame_stato (asse separato, mai letto dal motore Go) è invece transitato.
+  const riga = await pool.query<{ stato: string; riesame_stato: string }>(`SELECT stato, riesame_stato FROM domande WHERE id = $1`, [domanda.id]);
+  assert.equal(riga.rows[0]?.stato, 'ammessa');
+  assert.equal(riga.rows[0]?.riesame_stato, 'richiesto');
 });

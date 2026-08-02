@@ -7,7 +7,14 @@ import {
   ErroreRiferimentoNonValido,
 } from './erroriDominio.ts';
 
-export type StatoDomanda = 'presentata' | 'ammessa' | 'esclusa' | 'riesame_richiesto' | 'riesame_deciso';
+export type StatoDomanda = 'presentata' | 'ammessa' | 'esclusa';
+
+// Asse SEPARATO dallo stato istruttoria (C1, review finale whole-branch): il motore Go
+// legge domande.stato con uguaglianza esatta (WHERE stato = 'ammessa') — sovraccaricarlo
+// con gli stati del riesame (art. B.11) faceva sparire silenziosamente le domande
+// contestate da istruttoria/round-robin. riesame_stato vive sulla stessa riga ma non è
+// mai letto/scritto dal motore Go.
+export type RiesameStato = 'nessuno' | 'richiesto' | 'deciso';
 
 export interface Preferenza {
   slotId: string;
@@ -49,6 +56,7 @@ export interface Domanda {
   fabbisognoOttimaleMinuti: string;
   richiedeGiornataGara: boolean;
   stato: StatoDomanda;
+  riesameStato: RiesameStato;
   motivazioneEsclusione: string | null;
   discipline: string[];
   preferenze: Preferenza[];
@@ -76,6 +84,7 @@ interface RigaDomanda {
   fabbisogno_ottimale_minuti: string;
   richiede_giornata_gara: boolean;
   stato: StatoDomanda;
+  riesame_stato: RiesameStato;
   motivazione_esclusione: string | null;
 }
 
@@ -87,7 +96,7 @@ const COLONNE_SELECT_DOMANDA = `id, numero_protocollo, associazione_id, stagione
   numero_squadre, numero_squadre_federali_stagione_precedente, attivita_giovanile,
   attivita_agonistica, attivita_paralimpica_inclusiva, classe_attivita_codice, livello_campionato,
   fabbisogno_minimo_minuti::text, fabbisogno_ottimale_minuti::text, richiede_giornata_gara,
-  stato, motivazione_esclusione`;
+  stato, riesame_stato, motivazione_esclusione`;
 
 interface Correlati {
   discipline: string[];
@@ -167,6 +176,7 @@ function assembla(r: RigaDomanda, correlati: Correlati): Domanda {
     fabbisognoOttimaleMinuti: r.fabbisogno_ottimale_minuti,
     richiedeGiornataGara: r.richiede_giornata_gara,
     stato: r.stato,
+    riesameStato: r.riesame_stato,
     motivazioneEsclusione: r.motivazione_esclusione,
     discipline: correlati.discipline,
     preferenze: correlati.preferenze,
