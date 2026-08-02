@@ -462,7 +462,7 @@ test('POST /pubblico/domande/:id/osservazioni', { skip: dsn ? false : 'TEST_DATA
   const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
   await fetch(`${base}/backoffice/domande/${domanda.id}/ammetti`, { method: 'PUT', headers: { Authorization: `Bearer ${operatore.token}` } });
 
-  await t.test('dopo ammissione: 201, domanda passa a riesame_richiesto', async () => {
+  await t.test('dopo ammissione: 201, domanda passa a riesame_richiesto, audit log su domande (I6)', async () => {
     const r = await fetch(`${base}/pubblico/domande/${domanda.id}/osservazioni`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
@@ -472,6 +472,16 @@ test('POST /pubblico/domande/:id/osservazioni', { skip: dsn ? false : 'TEST_DATA
     const dettaglio = await fetch(`${base}/pubblico/domande/${domanda.id}`, { headers: { Authorization: `Bearer ${persona.token}` } });
     const body = (await dettaglio.json()) as { stato: string };
     assert.equal(body.stato, 'riesame_richiesto');
+
+    const logDomanda = await pool.query(
+      `SELECT azione FROM log_operazioni WHERE entita_tipo = 'domande' AND entita_id = $1 AND azione = 'osservazione_richiede_riesame'`,
+      [domanda.id],
+    );
+    assert.equal(logDomanda.rows.length, 1);
+    const logOsservazione = await pool.query(
+      `SELECT azione FROM log_operazioni WHERE entita_tipo = 'osservazioni_istruttoria' AND azione = 'presenta_osservazione'`,
+    );
+    assert.ok(logOsservazione.rows.length >= 1);
   });
 
   await t.test('senza abilitazione su quella domanda: 403', async () => {
@@ -551,7 +561,7 @@ test('PUT /backoffice/osservazioni/:id/{accogli,respingi}', { skip: dsn ? false 
     assert.equal(r.status, 400);
   });
 
-  await t.test('accogli: 200, domanda consolidata a riesame_deciso', async () => {
+  await t.test('accogli: 200, domanda consolidata a riesame_deciso, audit log su domande (I6)', async () => {
     const r = await fetch(`${base}/backoffice/osservazioni/${osservazione.id}/accogli`, {
       method: 'PUT',
       headers: { Authorization: `Bearer ${operatore.token}` },
@@ -560,6 +570,12 @@ test('PUT /backoffice/osservazioni/:id/{accogli,respingi}', { skip: dsn ? false 
     const dettaglio = await fetch(`${base}/backoffice/domande/${domanda.id}`, { headers: { Authorization: `Bearer ${operatore.token}` } });
     const body = (await dettaglio.json()) as { stato: string };
     assert.equal(body.stato, 'riesame_deciso');
+
+    const logDomanda = await pool.query(
+      `SELECT azione FROM log_operazioni WHERE entita_tipo = 'domande' AND entita_id = $1 AND azione = 'consolida_riesame_domanda'`,
+      [domanda.id],
+    );
+    assert.equal(logDomanda.rows.length, 1);
   });
 
   await t.test('doppia decisione: 409', async () => {

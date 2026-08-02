@@ -1948,6 +1948,19 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
             entitaId: o.id,
             dettaglio: o as unknown as Record<string, unknown>,
           });
+          // I6: traccia anche la transizione di stato della domanda (a differenza di
+          // ammetti_domanda/escludi_domanda, non era mai registrata contro l'entità
+          // 'domande') — solo quando avviene davvero (non su una seconda osservazione su
+          // una domanda già 'riesame_richiesto').
+          if (o.domandaTransitata) {
+            await registraOperazione(client, {
+              attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: domanda.associazioneId, ruolo: ruoloDelegante },
+              azione: 'osservazione_richiede_riesame',
+              entitaTipo: 'domande',
+              entitaId: domandaId,
+              dettaglio: { stato: o.nuovoStatoDomanda },
+            });
+          }
           return o;
         });
         res.status(201).json(osservazione);
@@ -1988,6 +2001,17 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
             entitaId: o.id,
             dettaglio: { stato: o.stato },
           });
+          // I6: traccia la transizione della domanda solo se il riesame si è davvero
+          // consolidato in questa chiamata (restano altre osservazioni in_esame altrimenti).
+          if (o.domandaTransitata) {
+            await registraOperazione(client, {
+              attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+              azione: 'consolida_riesame_domanda',
+              entitaTipo: 'domande',
+              entitaId: o.domandaId,
+              dettaglio: { stato: o.nuovoStatoDomanda },
+            });
+          }
           return o;
         });
         res.status(200).json(osservazione);
@@ -2031,6 +2055,15 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
             entitaId: o.id,
             dettaglio: { stato: o.stato, decisioneMotivazione: o.decisioneMotivazione },
           });
+          if (o.domandaTransitata) {
+            await registraOperazione(client, {
+              attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+              azione: 'consolida_riesame_domanda',
+              entitaTipo: 'domande',
+              entitaId: o.domandaId,
+              dettaglio: { stato: o.nuovoStatoDomanda },
+            });
+          }
           return o;
         });
         res.status(200).json(osservazione);
