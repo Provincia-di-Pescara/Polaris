@@ -307,29 +307,37 @@ export async function listaDomandePerAssociazione(
   return risultato;
 }
 
+// Guardia di stato dentro la WHERE dell'UPDATE (stesso pattern di
+// abilitazioni.ts::approvaAbilitazione): niente TOCTOU tra un SELECT di controllo e
+// l'UPDATE. Se rowCount è 0, un SELECT separato (fuori dal percorso "successo") distingue
+// 404 (id inesistente) da 409 (stato non applicabile).
 export async function ammettiDomanda(db: Db, id: string): Promise<Domanda> {
-  const check = await db.query<{ stato: StatoDomanda }>(`SELECT stato FROM domande WHERE id = $1`, [id]);
-  const riga = check.rows[0];
-  if (!riga) {
-    throw new ErroreNonTrovato('domanda non trovata');
-  }
-  if (riga.stato !== 'presentata') {
+  const r = await db.query<{ id: string }>(
+    `UPDATE domande SET stato = 'ammessa' WHERE id = $1 AND stato = 'presentata' RETURNING id`,
+    [id],
+  );
+  if (r.rowCount === 0) {
+    const check = await db.query(`SELECT 1 FROM domande WHERE id = $1`, [id]);
+    if (check.rowCount === 0) {
+      throw new ErroreNonTrovato('domanda non trovata');
+    }
     throw new ErroreStatoNonValidoPerTransizione('la domanda non è in stato presentata');
   }
-  await db.query(`UPDATE domande SET stato = 'ammessa' WHERE id = $1`, [id]);
   return (await trovaDomandaPerId(db, id))!;
 }
 
 export async function escludiDomanda(db: Db, id: string, motivazione: string): Promise<Domanda> {
-  const check = await db.query<{ stato: StatoDomanda }>(`SELECT stato FROM domande WHERE id = $1`, [id]);
-  const riga = check.rows[0];
-  if (!riga) {
-    throw new ErroreNonTrovato('domanda non trovata');
-  }
-  if (riga.stato !== 'presentata') {
+  const r = await db.query<{ id: string }>(
+    `UPDATE domande SET stato = 'esclusa', motivazione_esclusione = $2 WHERE id = $1 AND stato = 'presentata' RETURNING id`,
+    [id, motivazione],
+  );
+  if (r.rowCount === 0) {
+    const check = await db.query(`SELECT 1 FROM domande WHERE id = $1`, [id]);
+    if (check.rowCount === 0) {
+      throw new ErroreNonTrovato('domanda non trovata');
+    }
     throw new ErroreStatoNonValidoPerTransizione('la domanda non è in stato presentata');
   }
-  await db.query(`UPDATE domande SET stato = 'esclusa', motivazione_esclusione = $2 WHERE id = $1`, [id, motivazione]);
   return (await trovaDomandaPerId(db, id))!;
 }
 
