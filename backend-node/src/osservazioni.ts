@@ -101,6 +101,9 @@ export async function presentaOsservazione(
   if (!STATI_DOMANDA_OSSERVABILI.includes(domanda.stato)) {
     throw new ErroreStatoNonValidoPerTransizione('la domanda non ha ancora un esito pubblicato');
   }
+  if (domanda.riesame_stato === 'deciso') {
+    throw new ErroreStatoNonValidoPerTransizione('il riesame di questa domanda è già stato deciso, non più contestabile');
+  }
   const r = await db.query<RigaOsservazione>(
     `INSERT INTO osservazioni_istruttoria (domanda_id, presentata_da_persona_fisica_id, testo)
      VALUES ($1, $2, $3)

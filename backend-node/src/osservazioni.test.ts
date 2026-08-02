@@ -140,6 +140,38 @@ test('accogliOsservazione + respingiOsservazione consolidano lo stato domanda', 
   await assert.rejects(() => accogliOsservazione(pool, oss1.id, decisore), ErroreStatoNonValidoPerTransizione);
 });
 
+// Fix follow-up C1 (2026-08-01): il riesame non deve essere riapribile dopo
+// riesame_stato='deciso' (art. B.11, "non ulteriormente contestabili"). Prima di questo fix
+// STATI_DOMANDA_OSSERVABILI non controllava riesame_stato e una nuova osservazione lo
+// riportava a 'richiesto' all'infinito.
+test('presentaOsservazione rifiuta una nuova osservazione se riesame_stato è già deciso', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { domanda, personaId } = await creaDomandaFixture(pool);
+  await ammettiDomanda(pool, domanda.id);
+
+  const oss1 = await presentaOsservazione(pool, { domandaId: domanda.id, personaFisicaId: personaId, testo: 'unica osservazione' });
+  const decisore = await creaUtenteBackofficeTest(pool);
+  await accogliOsservazione(pool, oss1.id, decisore);
+
+  const statoPreConsolidamento = await pool.query<{ riesame_stato: string }>(
+    `SELECT riesame_stato FROM domande WHERE id = $1`,
+    [domanda.id],
+  );
+  assert.equal(statoPreConsolidamento.rows[0]?.riesame_stato, 'deciso');
+
+  await assert.rejects(
+    () => presentaOsservazione(pool, { domandaId: domanda.id, personaFisicaId: personaId, testo: 'tentativo di riaprire' }),
+    ErroreStatoNonValidoPerTransizione,
+  );
+
+  const statoDopoTentativo = await pool.query<{ riesame_stato: string }>(
+    `SELECT riesame_stato FROM domande WHERE id = $1`,
+    [domanda.id],
+  );
+  assert.equal(statoDopoTentativo.rows[0]?.riesame_stato, 'deciso', 'riesame_stato non deve tornare a richiesto');
+});
+
 // I4: due decisioni concorrenti su osservazioni DIVERSE della stessa domanda non devono
 // lasciare riesame_stato bloccato a 'richiesto' per sempre. Senza il lock
 // pg_advisory_xact_lock in osservazioni.ts, sotto READ COMMITTED entrambe le transazioni
