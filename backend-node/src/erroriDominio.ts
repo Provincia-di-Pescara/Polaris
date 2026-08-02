@@ -42,3 +42,9 @@ export function comeErroreRiferimentoNonValido(err: unknown): ErroreRiferimentoN
 // applicabile allo stato corrente della risorsa, stesso motivo di ErroreValoreDuplicato ma
 // senza vincolo UNIQUE coinvolto.
 export class ErroreStatoNonValidoPerTransizione extends Error {}
+
+// L'ordine delle fasi procedurali (istruttoria prima di blocchi-gara/prima-assegnazione,
+// art. B.7 → B.12/B.17) non è imposto dal motore Go (nessuno stato "fase corrente" lì) —
+// verificato lato Node prima di innescare la chiamata, guardando se esistono già righe di
+// fabbisogni_riconosciuti per la stagione.
+export class ErroreOrdineFasiNonRispettato extends Error {}

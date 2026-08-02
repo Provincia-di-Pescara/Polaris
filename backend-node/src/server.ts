@@ -33,6 +33,7 @@ import { costruisciUrlAutorizzazione, ErroreOidcNonConfigurato, ErroreScambioCod
 import { leggiConfigOidcPubblica, scriviConfigOidc, ErroreClientSecretMancante } from './oidc/config.ts';
 import { richiedeRuolo } from './auth/middleware.ts';
 import { registraOperazione } from './repository/logOperazioni.ts';
+import { creaClientMotore, type ClientMotore } from './engine/client.ts';
 import {
   creaUtenteInvitato,
   listaUtenti,
@@ -177,6 +178,7 @@ const limitatoreOidcStart = rateLimit({
 export interface DipendenzeApp {
   inviaEmail?: (email: Email) => Promise<void>;
   backofficeBaseUrl?: string;
+  clientMotore?: ClientMotore;
 }
 
 function inviaEmailDaEnv(): ((email: Email) => Promise<void>) | null {
@@ -190,6 +192,11 @@ function inviaEmailDaEnv(): ((email: Email) => Promise<void>) | null {
 export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
   const inviaEmailFn = dipendenze.inviaEmail ?? inviaEmailDaEnv();
   const backofficeBaseUrl = dipendenze.backofficeBaseUrl ?? process.env.BACKOFFICE_BASE_URL ?? null;
+  const clientMotore: ClientMotore | null =
+    dipendenze.clientMotore ??
+    (process.env.ENGINE_URL
+      ? creaClientMotore(process.env.ENGINE_URL, Number(process.env.ENGINE_TIMEOUT_MS ?? 300000))
+      : null);
 
   const app = express();
   app.use(express.json());
