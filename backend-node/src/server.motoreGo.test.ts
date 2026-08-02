@@ -248,4 +248,41 @@ if (!dsn) {
       server.close();
     }
   });
+
+  // Regressione del finding Important (review Task 3): stagioneId malformato deve essere
+  // rifiutato PRIMA di chiamare il motore Go, su tutte e tre le route — non solo su
+  // istruttoria (dove nessuna query DB intermedia lo avrebbe intercettato). Il client
+  // fittizio qui lancia se invocato: se la fix regredisse, il test fallirebbe con l'errore
+  // del fittizio propagato (o comunque non con 400), non silenziosamente.
+  function clientMotoreCheAssertaSeInvocato(): ClientMotore {
+    return {
+      eseguiIstruttoria: async () => {
+        throw new Error('eseguiIstruttoria NON deve essere chiamato con uno stagioneId malformato');
+      },
+      eseguiBlocchiGara: async () => {
+        throw new Error('eseguiBlocchiGara NON deve essere chiamato con uno stagioneId malformato');
+      },
+      eseguiPrimaAssegnazione: async () => {
+        throw new Error('eseguiPrimaAssegnazione NON deve essere chiamato con uno stagioneId malformato');
+      },
+    };
+  }
+
+  for (const rotta of ['istruttoria', 'blocchi-gara', 'prima-assegnazione'] as const) {
+    test(`POST .../${rotta}: 400 su stagioneId malformato, il motore non viene MAI chiamato`, async () => {
+      const { token } = await creaAdminDiTest();
+      const app = avviaApp({ clientMotore: clientMotoreCheAssertaSeInvocato() });
+      const server = app.listen(0);
+      try {
+        const porta = (server.address() as { port: number }).port;
+        const res = await fetch(`http://127.0.0.1:${porta}/backoffice/stagioni/non-un-uuid/${rotta}`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}` },
+        });
+        assert.equal(res.status, 400);
+      } finally {
+        server.close();
+      }
+    });
+  }
 }

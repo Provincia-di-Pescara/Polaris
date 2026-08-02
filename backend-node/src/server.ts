@@ -52,7 +52,7 @@ import {
   aPubblico,
 } from './repository/utentiBackoffice.ts';
 import { revocaSessioniUtente } from './repository/sessioni.ts';
-import { ErroreValoreDuplicato, ErroreNonTrovato, ErroreStatoNonValidoPerTransizione, ErroreOrdineFasiNonRispettato, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
+import { ErroreValoreDuplicato, ErroreNonTrovato, ErroreStatoNonValidoPerTransizione, ErroreOrdineFasiNonRispettato, ErroreRiferimentoNonValido, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
 import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './discipline.ts';
 import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstituzione } from './istituzioni.ts';
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
@@ -1681,6 +1681,19 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
   // --- Coda verso il motore Go (art. B.7/B.12/B.17 — orchestrazione, nessuna logica
   // di calcolo qui, solo trasporto + guardrail di concorrenza/ordine fasi) ---
 
+  // Validazione esplicita PRIMA di aprire la transazione/chiamare il motore: senza questa
+  // guardia un stagioneId malformato su /istruttoria arriverebbe a invocare il motore Go
+  // reale (nessuna query DB intermedia lo intercetta, a differenza di blocchi-gara/
+  // prima-assegnazione che passano comunque da verificaIstruttoriaEseguita), col rischio
+  // di un ErroreMotoreDominio mappato a 500 invece del 400 richiesto per un id malformato.
+  const REGEX_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  function validaStagioneIdUuid(stagioneId: string): void {
+    if (!REGEX_UUID.test(stagioneId)) {
+      throw new ErroreRiferimentoNonValido('stagioneId malformato');
+    }
+  }
+
   async function verificaIstruttoriaEseguita(client: PoolClient, stagioneId: string): Promise<boolean> {
     const r = await client.query<{ exists: boolean }>(
       `SELECT EXISTS(
@@ -1725,6 +1738,7 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         return;
       }
       try {
+        validaStagioneIdUuid(stagioneId);
         const risultato = await eseguiInTransazione(pool, async (client) => {
           await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [stagioneId]);
           const r = await clientMotore.eseguiIstruttoria(stagioneId);
@@ -1755,6 +1769,7 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         return;
       }
       try {
+        validaStagioneIdUuid(stagioneId);
         const risultato = await eseguiInTransazione(pool, async (client) => {
           await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [stagioneId]);
           if (!(await verificaIstruttoriaEseguita(client, stagioneId))) {
@@ -1788,6 +1803,7 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         return;
       }
       try {
+        validaStagioneIdUuid(stagioneId);
         const risultato = await eseguiInTransazione(pool, async (client) => {
           await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [stagioneId]);
           if (!(await verificaIstruttoriaEseguita(client, stagioneId))) {
