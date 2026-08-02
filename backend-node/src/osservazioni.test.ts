@@ -125,3 +125,47 @@ test('accogliOsservazione + respingiOsservazione consolidano lo stato domanda', 
 
   await assert.rejects(() => accogliOsservazione(pool, oss1.id, decisore), ErroreStatoNonValidoPerTransizione);
 });
+
+// I4: due decisioni concorrenti su osservazioni DIVERSE della stessa domanda non devono
+// lasciare la domanda bloccata in 'riesame_richiesto' per sempre. Senza il lock
+// pg_advisory_xact_lock in osservazioni.ts, sotto READ COMMITTED entrambe le transazioni
+// possono vedere l'altra osservazione come ancora 'in_esame' (nessuna delle due ha ancora
+// committato) e nessuna consolida.
+test('accogliOsservazione + respingiOsservazione concorrenti sulla stessa domanda consolidano sempre', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn, max: 5 });
+  t.after(() => pool.end());
+  const { domanda, personaId } = await creaDomandaFixture(pool);
+  await ammettiDomanda(pool, domanda.id);
+
+  const oss1 = await presentaOsservazione(pool, { domandaId: domanda.id, personaFisicaId: personaId, testo: 'prima' });
+  const oss2 = await presentaOsservazione(pool, { domandaId: domanda.id, personaFisicaId: personaId, testo: 'seconda' });
+
+  const decisore = await creaUtenteBackofficeTest(pool);
+
+  // Ogni "transazione" (begin+lavoro+commit) deve completarsi in modo indipendente: se si
+  // aspettasse che ENTRAMBE le chiamate a accogli/respingi ritornino prima di fare il COMMIT
+  // di ciascuna, si introdurrebbe un deadlock artificiale del test stesso (la seconda resta
+  // bloccata sul lock advisory finché la prima non committa, ma la prima non committa finché
+  // la seconda non ritorna) — non è il comportamento che I4 vuole verificare.
+  async function decidiInTransazionePropria(lavoro: (client: import('pg').PoolClient) => Promise<unknown>) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await lavoro(client);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  await Promise.all([
+    decidiInTransazionePropria((client) => accogliOsservazione(client, oss1.id, decisore)),
+    decidiInTransazionePropria((client) => respingiOsservazione(client, oss2.id, decisore, 'non fondata')),
+  ]);
+
+  const statoDomanda = await pool.query<{ stato: string }>(`SELECT stato FROM domande WHERE id = $1`, [domanda.id]);
+  assert.equal(statoDomanda.rows[0]?.stato, 'riesame_deciso');
+});
