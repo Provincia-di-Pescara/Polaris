@@ -1826,6 +1826,46 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     },
   );
 
+  app.get(
+    '/backoffice/stagioni/:id/elaborazioni',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req, res) => {
+      const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        validaStagioneIdUuid(stagioneId);
+        const r = await pool.query(
+          `SELECT id, stagione_id, tipo, parametrico_versione_id, iniziata_il, conclusa_il,
+                  stato, numero_round_eseguiti, log_dettaglio
+           FROM elaborazioni
+           WHERE stagione_id = $1
+           ORDER BY iniziata_il DESC`,
+          [stagioneId],
+        );
+        res.status(200).json(
+          r.rows.map((row) => ({
+            id: row.id,
+            stagioneId: row.stagione_id,
+            tipo: row.tipo,
+            parametricoVersioneId: row.parametrico_versione_id,
+            iniziataIl: (row.iniziata_il as Date).toISOString(),
+            conclusaIl: row.conclusa_il ? (row.conclusa_il as Date).toISOString() : null,
+            stato: row.stato,
+            numeroRoundEseguiti: row.numero_round_eseguiti,
+            logDettaglio: row.log_dettaglio,
+          })),
+        );
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
   // --- Pubblico: presentazione domanda (Allegato B art. B.5-B.6) ---
 
   app.post(

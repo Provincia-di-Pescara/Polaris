@@ -285,4 +285,81 @@ if (!dsn) {
       }
     });
   }
+
+  test('GET .../elaborazioni: lista vuota per una stagione senza elaborazioni', async () => {
+    const stagioneId = await creaStagioneDiTest();
+    const { token } = await creaAdminDiTest();
+    const app = avviaApp({ clientMotore: clientMotoreFittizio({}) });
+    const server = app.listen(0);
+    try {
+      const porta = (server.address() as { port: number }).port;
+      const res = await fetch(`http://127.0.0.1:${porta}/backoffice/stagioni/${stagioneId}/elaborazioni`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as unknown[];
+      assert.deepEqual(body, []);
+    } finally {
+      server.close();
+    }
+  });
+
+  test('GET .../elaborazioni: righe ordinate per data decrescente, accessibile a operatore', async () => {
+    const stagioneId = await creaStagioneDiTest();
+    const { token: tokenAdmin } = await creaAdminDiTest();
+    const { token: tokenOperatore } = await creaOperatoreDiTest();
+
+    const versioneParam = await pool.query<{ id: string }>(
+      `SELECT id FROM parametrico_versioni ORDER BY valida_dal DESC LIMIT 1`,
+    );
+    const parametricoVersioneId = versioneParam.rows[0]!.id;
+
+    await pool.query(
+      `INSERT INTO elaborazioni (stagione_id, tipo, parametrico_versione_id, stato, numero_round_eseguiti)
+       VALUES ($1, 'prima_assegnazione', $2, 'completata', 3)`,
+      [stagioneId, parametricoVersioneId],
+    );
+    await pool.query(
+      `INSERT INTO elaborazioni (stagione_id, tipo, parametrico_versione_id, stato)
+       VALUES ($1, 'blocchi_gara', $2, 'completata')`,
+      [stagioneId, parametricoVersioneId],
+    );
+
+    const app = avviaApp({ clientMotore: clientMotoreFittizio({}) });
+    const server = app.listen(0);
+    try {
+      const porta = (server.address() as { port: number }).port;
+      const res = await fetch(`http://127.0.0.1:${porta}/backoffice/stagioni/${stagioneId}/elaborazioni`, {
+        headers: { authorization: `Bearer ${tokenOperatore}` },
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as Array<{ tipo: string }>;
+      assert.equal(body.length, 2);
+      // iniziata_il DESC: l'ultima INSERT (blocchi_gara) viene prima.
+      assert.equal(body[0]!.tipo, 'blocchi_gara');
+      assert.equal(body[1]!.tipo, 'prima_assegnazione');
+
+      const resAdmin = await fetch(`http://127.0.0.1:${porta}/backoffice/stagioni/${stagioneId}/elaborazioni`, {
+        headers: { authorization: `Bearer ${tokenAdmin}` },
+      });
+      assert.equal(resAdmin.status, 200);
+    } finally {
+      server.close();
+    }
+  });
+
+  test('GET .../elaborazioni: 400 su stagioneId malformato', async () => {
+    const { token } = await creaAdminDiTest();
+    const app = avviaApp({ clientMotore: clientMotoreFittizio({}) });
+    const server = app.listen(0);
+    try {
+      const porta = (server.address() as { port: number }).port;
+      const res = await fetch(`http://127.0.0.1:${porta}/backoffice/stagioni/non-un-uuid/elaborazioni`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      assert.equal(res.status, 400);
+    } finally {
+      server.close();
+    }
+  });
 }
