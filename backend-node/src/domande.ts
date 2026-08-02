@@ -1,6 +1,11 @@
 import { DatabaseError } from 'pg';
 import type { Db } from './db.ts';
-import { ErroreValoreDuplicato, ErroreNonTrovato, ErroreStatoNonValidoPerTransizione } from './erroriDominio.ts';
+import {
+  ErroreValoreDuplicato,
+  ErroreNonTrovato,
+  ErroreStatoNonValidoPerTransizione,
+  ErroreRiferimentoNonValido,
+} from './erroriDominio.ts';
 
 export type StatoDomanda = 'presentata' | 'ammessa' | 'esclusa' | 'riesame_richiesto' | 'riesame_deciso';
 
@@ -199,11 +204,34 @@ export interface DatiCreaDomanda {
   richiesteGiornataGara: DatiRichiestaGiornataGara[];
 }
 
+// I5: gli id slot referenziati in preferenze/blocchiAllenamento sono validati come UUID
+// esistenti solo a livello di FK — non che appartengano alla stagione della domanda. Uno
+// slot di un'altra stagione passerebbe l'INSERT (FK verso slot_settimana_tipo soddisfatta)
+// ma verrebbe silenziosamente ignorato dal motore Go a valle (che lavora per stagione),
+// quindi va rifiutato qui con 400 prima di scrivere qualunque cosa.
+async function validaSlotAppartengonoAStagione(db: Db, stagioneId: string, slotIds: string[]): Promise<void> {
+  const idUnici = [...new Set(slotIds)];
+  if (idUnici.length === 0) {
+    return;
+  }
+  const r = await db.query<{ count: string }>(
+    `SELECT count(*)::text FROM slot_settimana_tipo WHERE id = ANY($1) AND stagione_id = $2`,
+    [idUnici, stagioneId],
+  );
+  if (Number(r.rows[0]?.count ?? '0') !== idUnici.length) {
+    throw new ErroreRiferimentoNonValido('uno o più slot referenziati non appartengono alla stagione della domanda');
+  }
+}
+
 export async function creaDomanda(
   db: Db,
   dati: DatiCreaDomanda,
   presentataDaPersonaFisicaId: string,
 ): Promise<Domanda> {
+  await validaSlotAppartengonoAStagione(db, dati.stagioneId, [
+    ...dati.preferenze,
+    ...dati.blocchiAllenamento.flat(),
+  ]);
   let riga: RigaDomanda;
   try {
     const r = await db.query<RigaDomanda>(

@@ -23,6 +23,13 @@ export class ErroreRiferimentoNonValido extends Error {}
 // più cifre di quante ne ammetta NUMERIC(6,3); trattato come richiesta malformata del
 // client, non come 500, coerente con gli altri due codici già mappati qui).
 export function comeErroreRiferimentoNonValido(err: unknown): ErroreRiferimentoNonValido | null {
+  // Un'istanza già lanciata esplicitamente da una repository (es. validazione applicativa
+  // di uno slot fuori dalla stagione della domanda, non un vincolo DB) passa così com'è —
+  // le route chiamano tutte comeErroreRiferimentoNonValido(err) nel loro catch, un unico
+  // punto di normalizzazione a 400 sia per i codici Postgres sotto sia per questi casi.
+  if (err instanceof ErroreRiferimentoNonValido) {
+    return err;
+  }
   if (err instanceof DatabaseError && (err.code === '22P02' || err.code === '23503' || err.code === '22003')) {
     return new ErroreRiferimentoNonValido('riferimento non valido o identificativo malformato');
   }

@@ -199,6 +199,37 @@ test('POST /pubblico/domande', { skip: dsn ? false : 'TEST_DATABASE_URL non impo
     });
     assert.equal(r.status, 400);
   });
+
+  // I5: uno slot valido (UUID esistente) ma appartenente a UN'ALTRA stagione — la sola
+  // validazione FK lo accetterebbe, il motore Go a valle lo ignorerebbe silenziosamente.
+  await t.test('slot in preferenze appartenente ad altra stagione: 400', async () => {
+    const persona = await creaPersonaFisicaTest(pool);
+    const fx = await creaFixtureCompleta(pool);
+    await pool.query(
+      `INSERT INTO abilitazioni (persona_fisica_id, associazione_id, stagione_id, titolo, ruolo, stato)
+       VALUES ($1, $2, $3, 'legale_rappresentante', 'rappresentante', 'approvata')`,
+      [persona.id, fx.associazioneId, fx.stagioneId],
+    );
+    const altraStagione = await pool.query<{ id: string }>(
+      `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2026-09-01', '2027-06-30') RETURNING id`,
+      [`stagione-domanda-i5-${randomUUID()}`],
+    );
+    const spazioId = (await pool.query<{ spazio_id: string }>(`SELECT spazio_id FROM slot_settimana_tipo WHERE id = $1`, [fx.slotId])).rows[0]!.spazio_id;
+    const slotAltraStagione = await creaSlot(pool, {
+      stagioneId: altraStagione.rows[0]!.id,
+      spazioId,
+      giornoSettimana: 3,
+      orarioInizio: '18:00',
+      orarioFine: '19:00',
+    });
+    const corpo = { ...(await corpoDomandaValido(fx)), preferenze: [slotAltraStagione.id] };
+    const r = await fetch(`${base}/pubblico/domande`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+      body: JSON.stringify(corpo),
+    });
+    assert.equal(r.status, 400);
+  });
 });
 
 test('GET /pubblico/associazioni/:id/domande e GET /pubblico/domande/:id', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
