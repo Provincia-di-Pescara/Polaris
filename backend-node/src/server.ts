@@ -85,6 +85,7 @@ import {
   elencoEsitiPubblicati,
 } from './domande.ts';
 import { presentaOsservazione, trovaOsservazionePerId, accogliOsservazione, respingiOsservazione } from './osservazioni.ts';
+import { pubblicaProposta, trovaPropostaProvvisoria } from './propostaProvvisoria.ts';
 import { trovaPersonaFisicaPerCf, creaPersonaFisicaShell } from './repository/personeFisiche.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
@@ -2175,6 +2176,71 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
     }
   });
+
+  // --- Pubblicazione proposta provvisoria (art. B.23) ---
+
+  app.post(
+    '/backoffice/stagioni/:id/pubblica-proposta',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        await eseguiInTransazione(pool, async (client) => {
+          await pubblicaProposta(client, id);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'pubblica_proposta_provvisoria',
+            entitaTipo: 'stagioni_sportive',
+            entitaId: id,
+            dettaglio: null,
+          });
+        });
+        res.status(200).json({ ok: true });
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/pubblico/stagioni/:id/proposta',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        res.status(200).json(await trovaPropostaProvvisoria(pool, id));
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
 
   // --- Pubblico: pubblicazione esiti istruttoria (art. B.10) ---
 
