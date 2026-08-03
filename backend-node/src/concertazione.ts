@@ -1,6 +1,7 @@
 import type { Db } from './db.ts';
 import { ErroreNonTrovato, ErroreStatoNonValidoPerTransizione, ErroreRiferimentoNonValido } from './erroriDominio.ts';
 import { validaSlotAppartengonoAStagione } from './domande.ts';
+import { leggiVersioneAttiva } from './repository/parametrico.ts';
 
 export type TipoProposta =
   | 'scambio_bilaterale'
@@ -264,4 +265,118 @@ export async function annullaProposta(db: Db, propostaId: string): Promise<Propo
     throw new ErroreStatoNonValidoPerTransizione('la proposta non è più annullabile (già validata/rigettata/annullata)');
   }
   return (await trovaPropostaPerId(db, propostaId))!;
+}
+
+export interface EsitoControllo {
+  ok: boolean;
+  motivo?: string;
+}
+
+// art. B.27 "non comprometta i blocchi gara assegnati" + "non generi sovrapposizioni": lo
+// stato attivo del slot deve corrispondere esattamente a quanto la proposta si aspettava
+// al momento della creazione — se nel frattempo un'altra proposta validata ha già spostato
+// lo slot, questa non è più applicabile. Un blocco_gara non è MAI cedibile qui.
+export async function controlloAssegnazioneAttivaAttesa(db: Db, slotId: string, cedenteAtteso: string | null): Promise<EsitoControllo> {
+  const r = await db.query<{ associazione_id: string; tipo: string }>(
+    `SELECT associazione_id, tipo FROM assegnazioni WHERE slot_id = $1 AND stato IN ('provvisoria', 'validata')`,
+    [slotId],
+  );
+  const attiva = r.rows[0] ?? null;
+  if (cedenteAtteso === null) {
+    return attiva ? { ok: false, motivo: `slot ${slotId} non è più libero` } : { ok: true };
+  }
+  if (!attiva) {
+    return { ok: false, motivo: `slot ${slotId} non ha più un'assegnazione attiva da cedere` };
+  }
+  if (attiva.tipo === 'blocco_gara') {
+    return { ok: false, motivo: `slot ${slotId} è un blocco gara, non cedibile in concertazione` };
+  }
+  if (attiva.associazione_id !== cedenteAtteso) {
+    return { ok: false, motivo: `slot ${slotId} non è più assegnato all'associazione cedente attesa` };
+  }
+  return { ok: true };
+}
+
+// art. B.27 "sia compatibile con la disciplina praticata": il ricevente deve avere una
+// domanda ammessa la cui disciplina compare tra quelle compatibili con lo spazio dello
+// slot. L'omologazione (altro punto B.27) riguarda solo le giornate gara
+// (richieste_giornata_gara.necessita_impianto_omologato) — i blocchi gara sono già esclusi
+// dal controllo sopra, quindi qui non si applica (assunzione documentata nello spec).
+export async function controlloDisciplinaCompatibile(db: Db, slotId: string, riceventeAssociazioneId: string, stagioneId: string): Promise<EsitoControllo> {
+  const r = await db.query(
+    `SELECT 1
+     FROM slot_settimana_tipo s
+     JOIN spazio_disciplina_compatibile sdc ON sdc.spazio_id = s.spazio_id
+     JOIN domanda_discipline dd ON dd.disciplina_codice = sdc.disciplina_codice
+     JOIN domande d ON d.id = dd.domanda_id
+     WHERE s.id = $1 AND d.associazione_id = $2 AND d.stagione_id = $3 AND d.stato = 'ammessa'`,
+    [slotId, riceventeAssociazioneId, stagioneId],
+  );
+  if ((r.rowCount ?? 0) === 0) {
+    return { ok: false, motivo: `nessuna disciplina compatibile tra lo spazio dello slot ${slotId} e la domanda del ricevente` };
+  }
+  return { ok: true };
+}
+
+interface RigaCarico {
+  slot_id: string;
+  impianto_id: string;
+  durata_minuti: number;
+  pregiata: boolean;
+}
+
+// art. B.19 (richiamato da B.27): minuti settimanali max, slot max stesso impianto, fasce
+// pregiate max, verificati sul carico PROIETTATO del ricevente — le assegnazioni attive
+// attuali, meno quelle che la stessa proposta gli fa cedere, più quelle che riceve.
+export async function controlloLimitiConcentrazione(
+  db: Db,
+  stagioneId: string,
+  associazioneId: string,
+  slotIdCeduti: string[],
+  slotIdRicevuti: string[],
+): Promise<EsitoControllo> {
+  const attuali = await db.query<RigaCarico>(
+    `SELECT a.slot_id, sp.impianto_id, s.durata_minuti, s.pregiata
+     FROM assegnazioni a
+     JOIN slot_settimana_tipo s ON s.id = a.slot_id
+     JOIN spazi_sportivi sp ON sp.id = s.spazio_id
+     WHERE a.associazione_id = $1 AND a.stato IN ('provvisoria', 'validata') AND s.stagione_id = $2`,
+    [associazioneId, stagioneId],
+  );
+  const cedutiSet = new Set(slotIdCeduti);
+  const righeDopoCessioni = attuali.rows.filter((r) => !cedutiSet.has(r.slot_id));
+
+  const ricevuti = slotIdRicevuti.length
+    ? await db.query<RigaCarico>(
+        `SELECT s.id AS slot_id, sp.impianto_id, s.durata_minuti, s.pregiata
+         FROM slot_settimana_tipo s JOIN spazi_sportivi sp ON sp.id = s.spazio_id
+         WHERE s.id = ANY($1)`,
+        [slotIdRicevuti],
+      )
+    : { rows: [] as RigaCarico[] };
+
+  const righeFinali = [...righeDopoCessioni, ...ricevuti.rows];
+  const minutiTotali = righeFinali.reduce((tot, r) => tot + r.durata_minuti, 0);
+  const fascePregiateCount = righeFinali.filter((r) => r.pregiata).length;
+  const perImpianto = new Map<string, number>();
+  for (const r of righeFinali) {
+    perImpianto.set(r.impianto_id, (perImpianto.get(r.impianto_id) ?? 0) + 1);
+  }
+
+  const parametrico = await leggiVersioneAttiva(db);
+  if (!parametrico) {
+    return { ok: false, motivo: 'nessuna versione parametrica attiva trovata' };
+  }
+  if (minutiTotali > Number(parametrico.minutiSettimanaliMax)) {
+    return { ok: false, motivo: `il ricevente supererebbe i minuti settimanali massimi (${parametrico.minutiSettimanaliMax})` };
+  }
+  if (fascePregiateCount > parametrico.fascePregiateMax) {
+    return { ok: false, motivo: `il ricevente supererebbe le fasce pregiate massime (${parametrico.fascePregiateMax})` };
+  }
+  for (const [, count] of perImpianto) {
+    if (count > parametrico.slotMaxStessoImpianto) {
+      return { ok: false, motivo: `il ricevente supererebbe gli slot massimi nello stesso impianto (${parametrico.slotMaxStessoImpianto})` };
+    }
+  }
+  return { ok: true };
 }

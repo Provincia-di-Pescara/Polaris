@@ -2,7 +2,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { creaProposta, trovaPropostaPerId, listaPropostePerAssociazione, accettaProposta, annullaProposta } from './concertazione.ts';
+import {
+  creaProposta,
+  trovaPropostaPerId,
+  listaPropostePerAssociazione,
+  accettaProposta,
+  annullaProposta,
+  controlloAssegnazioneAttivaAttesa,
+  controlloDisciplinaCompatibile,
+  controlloLimitiConcentrazione,
+} from './concertazione.ts';
 import { creaDisciplina } from './discipline.ts';
 import { creaIstituzione } from './istituzioni.ts';
 import { creaImpianto } from './impianti.ts';
@@ -177,4 +186,63 @@ test('trovaPropostaPerId ritorna null su id inesistente, listaPropostePerAssocia
   );
   const lista = await listaPropostePerAssociazione(pool, fx.p1.associazioneId, fx.stagioneId);
   assert.equal(lista.length, 1);
+});
+
+test('controlloAssegnazioneAttivaAttesa: ok se il cedente atteso corrisponde', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const esito = await controlloAssegnazioneAttivaAttesa(pool, fx.slotAId, fx.p1.associazioneId);
+  assert.equal(esito.ok, true);
+});
+
+test('controlloAssegnazioneAttivaAttesa: fallisce se il cedente non corrisponde più', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const esito = await controlloAssegnazioneAttivaAttesa(pool, fx.slotAId, fx.p2.associazioneId);
+  assert.equal(esito.ok, false);
+});
+
+test('controlloAssegnazioneAttivaAttesa: fallisce su blocco gara', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  await pool.query(`UPDATE assegnazioni SET tipo = 'blocco_gara' WHERE slot_id = $1`, [fx.slotAId]);
+  const esito = await controlloAssegnazioneAttivaAttesa(pool, fx.slotAId, fx.p1.associazioneId);
+  assert.equal(esito.ok, false);
+  assert.match(esito.motivo ?? '', /blocco gara/);
+});
+
+test('controlloAssegnazioneAttivaAttesa: utilizzo_slot_libero ok solo se slot davvero libero', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  assert.equal((await controlloAssegnazioneAttivaAttesa(pool, fx.slotLiberoId, null)).ok, true);
+  assert.equal((await controlloAssegnazioneAttivaAttesa(pool, fx.slotAId, null)).ok, false);
+});
+
+test('controlloDisciplinaCompatibile: fallisce se il ricevente non ha domanda con disciplina compatibile', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const altra = await creaAssociazionePersona(pool, 'senza-domanda');
+  const esito = await controlloDisciplinaCompatibile(pool, fx.slotAId, altra.associazioneId, fx.stagioneId);
+  assert.equal(esito.ok, false);
+});
+
+test('controlloDisciplinaCompatibile: ok se compatibile', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const esito = await controlloDisciplinaCompatibile(pool, fx.slotAId, fx.p2.associazioneId, fx.stagioneId);
+  assert.equal(esito.ok, true);
+});
+
+test('controlloLimitiConcentrazione: ok entro i limiti di default (600 min settimanali)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const esito = await controlloLimitiConcentrazione(pool, fx.stagioneId, fx.p1.associazioneId, [], [fx.slotBId]);
+  assert.equal(esito.ok, true);
 });
