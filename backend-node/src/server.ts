@@ -2305,16 +2305,25 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     richiedeAutenticazionePubblico,
     async (req: RequestAutenticataPubblico, res) => {
       const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
-      const abilitazioni = await pool.query<{ associazione_id: string }>(
-        `SELECT associazione_id FROM abilitazioni WHERE persona_fisica_id = $1 AND stagione_id = $2 AND stato = 'approvata'`,
-        [req.persona!.sub, stagioneId],
-      );
-      const risultati = [];
-      for (const riga of abilitazioni.rows) {
-        risultati.push(...(await listaPropostePerAssociazione(pool, riga.associazione_id, stagioneId)));
+      try {
+        const abilitazioni = await pool.query<{ associazione_id: string }>(
+          `SELECT associazione_id FROM abilitazioni WHERE persona_fisica_id = $1 AND stagione_id = $2 AND stato = 'approvata'`,
+          [req.persona!.sub, stagioneId],
+        );
+        const risultati = [];
+        for (const riga of abilitazioni.rows) {
+          risultati.push(...(await listaPropostePerAssociazione(pool, riga.associazione_id, stagioneId)));
+        }
+        const senzaDuplicati = [...new Map(risultati.map((p) => [p.id, p])).values()];
+        res.status(200).json(senzaDuplicati);
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
-      const senzaDuplicati = [...new Map(risultati.map((p) => [p.id, p])).values()];
-      res.status(200).json(senzaDuplicati);
     },
   );
 
@@ -2360,17 +2369,17 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
         return;
       }
-      const proposta = await trovaPropostaPerId(pool, id);
-      if (!proposta) {
-        res.status(404).json({ errore: 'proposta non trovata' });
-        return;
-      }
-      const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, parsed.data.associazioneId, proposta.stagioneId);
-      if (!delegante) {
-        res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
-        return;
-      }
       try {
+        const proposta = await trovaPropostaPerId(pool, id);
+        if (!proposta) {
+          res.status(404).json({ errore: 'proposta non trovata' });
+          return;
+        }
+        const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, parsed.data.associazioneId, proposta.stagioneId);
+        if (!delegante) {
+          res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
+          return;
+        }
         const aggiornata = await eseguiInTransazione(pool, async (client) => {
           const p = await accettaProposta(client, id, parsed.data.associazioneId, req.persona!.sub);
           await registraOperazione(client, {
@@ -2392,6 +2401,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(409).json({ errore: err.message });
           return;
         }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },
@@ -2402,16 +2416,16 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     richiedeAutenticazionePubblico,
     async (req: RequestAutenticataPubblico, res) => {
       const id = typeof req.params.id === 'string' ? req.params.id : '';
-      const proposta = await trovaPropostaPerId(pool, id);
-      if (!proposta) {
-        res.status(404).json({ errore: 'proposta non trovata' });
-        return;
-      }
-      if (proposta.proponentePersonaFisicaId !== req.persona!.sub) {
-        res.status(403).json({ errore: 'solo il proponente può annullare la proposta' });
-        return;
-      }
       try {
+        const proposta = await trovaPropostaPerId(pool, id);
+        if (!proposta) {
+          res.status(404).json({ errore: 'proposta non trovata' });
+          return;
+        }
+        if (proposta.proponentePersonaFisicaId !== req.persona!.sub) {
+          res.status(403).json({ errore: 'solo il proponente può annullare la proposta' });
+          return;
+        }
         const aggiornata = await eseguiInTransazione(pool, async (client) => {
           const p = await annullaProposta(client, id);
           await registraOperazione(client, {
@@ -2431,6 +2445,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         }
         if (err instanceof ErroreStatoNonValidoPerTransizione) {
           res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
           return;
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });

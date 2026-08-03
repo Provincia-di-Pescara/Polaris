@@ -149,3 +149,30 @@ test('403 su creazione proposta senza abilitazione attiva', { skip: dsn ? false 
   });
   assert.equal(r.status, 403);
 });
+
+test('400 su id/stagioneId malformato in path param (lista, accetta, annulla)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(chiudi);
+  const adminId = await creaOperatoreAdmin(pool);
+  const fx = await creaFixtureCompleta(pool, adminId);
+
+  const rLista = await fetch(`${base}/pubblico/stagioni/non-un-uuid/concertazione/proposte`, {
+    headers: { Authorization: `Bearer ${fx.p1.token}` },
+  });
+  assert.equal(rLista.status, 400);
+
+  const rAccetta = await fetch(`${base}/pubblico/concertazione/proposte/non-un-uuid/accetta`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${fx.p1.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ associazioneId: fx.p1.associazioneId }),
+  });
+  assert.equal(rAccetta.status, 400);
+
+  const rAnnulla = await fetch(`${base}/pubblico/concertazione/proposte/non-un-uuid/annulla`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${fx.p1.token}` },
+  });
+  assert.equal(rAnnulla.status, 400);
+});
