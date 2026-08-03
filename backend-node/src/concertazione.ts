@@ -363,9 +363,14 @@ export async function controlloLimitiConcentrazione(
     perImpianto.set(r.impianto_id, (perImpianto.get(r.impianto_id) ?? 0) + 1);
   }
 
+  // Nessuna versione parametrica attiva è una misconfigurazione di sistema (non dovrebbe mai
+  // accadere dopo il seed, vedi CLAUDE.md), non un esito di dominio da esporre come 4xx
+  // all'utente: propaga come eccezione, la route la mapperà a 500 come ogni altro errore
+  // imprevisto (coerente con `erroriDominio.ts`, dove {ok:false} è riservato agli esiti di
+  // validazione attesi, mai a un malfunzionamento del backend).
   const parametrico = await leggiVersioneAttiva(db);
   if (!parametrico) {
-    return { ok: false, motivo: 'nessuna versione parametrica attiva trovata' };
+    throw new Error('nessuna versione parametrica attiva trovata: misconfigurazione di sistema');
   }
   if (minutiTotali > Number(parametrico.minutiSettimanaliMax)) {
     return { ok: false, motivo: `il ricevente supererebbe i minuti settimanali massimi (${parametrico.minutiSettimanaliMax})` };
