@@ -84,3 +84,41 @@ export const schemaCreaOsservazione = z.object({
   testo: z.string().min(1),
 });
 export type CreaOsservazioneRequest = z.infer<typeof schemaCreaOsservazione>;
+
+export const schemaCreaProposta = z
+  .object({
+    stagioneId: z.string().uuid(),
+    tipo: z.enum([
+      'scambio_bilaterale',
+      'scambio_multilaterale',
+      'cessione',
+      'utilizzo_slot_libero',
+      'accorpamento',
+      'ampliamento',
+    ]),
+    slot: z
+      .array(
+        z.object({
+          slotId: z.string().uuid(),
+          associazioneCedenteId: z.string().uuid().optional(),
+          associazioneRiceventeId: z.string().uuid(),
+        }),
+      )
+      .min(1),
+  })
+  .refine(
+    (d) =>
+      d.tipo === 'utilizzo_slot_libero'
+        ? d.slot.every((s) => s.associazioneCedenteId === undefined)
+        : d.slot.every((s) => s.associazioneCedenteId !== undefined),
+    {
+      message: "associazioneCedenteId deve essere assente per 'utilizzo_slot_libero', valorizzato per ogni altro tipo",
+      path: ['slot'],
+    },
+  );
+export type CreaPropostaRequest = z.infer<typeof schemaCreaProposta>;
+
+export const schemaAccettaProposta = z.object({
+  associazioneId: z.string().uuid(),
+});
+export type AccettaPropostaRequest = z.infer<typeof schemaAccettaProposta>;

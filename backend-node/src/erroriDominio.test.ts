@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseError } from 'pg';
-import { comeErroreRiferimentoNonValido } from './erroriDominio.ts';
+import { comeErroreRiferimentoNonValido, ErroreConflittoFifoConcertazione } from './erroriDominio.ts';
 
 // Unit test puro (nessun Postgres richiesto): verifica il mapping SQLSTATE->classe di
 // dominio senza dover riprodurre una query reale che fallisca con ciascun codice.
@@ -29,4 +29,10 @@ test('comeErroreRiferimentoNonValido ignora altri codici Postgres', () => {
 
 test('comeErroreRiferimentoNonValido ignora errori non-Postgres', () => {
   assert.equal(comeErroreRiferimentoNonValido(new Error('boh')), null);
+});
+
+test('ErroreConflittoFifoConcertazione è un\'istanza di Error con messaggio', () => {
+  const err = new ErroreConflittoFifoConcertazione('conflitto');
+  assert.ok(err instanceof Error);
+  assert.equal(err.message, 'conflitto');
 });

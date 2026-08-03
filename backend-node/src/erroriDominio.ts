@@ -55,3 +55,11 @@ export class ErroreOrdineFasiNonRispettato extends Error {}
 // pg_advisory_xact_lock — una connessione del pool non resta impegnata per l'intera durata
 // (fino a ENGINE_TIMEOUT_MS) di una richiesta accodata dietro un'altra.
 export class ErroreElaborazioneInCorso extends Error {}
+
+// Guardia FIFO su B.27: l'admin deve validare le proposte in concertazione_proposte in
+// ordine di creata_il quando toccano slot in comune — validare una proposta più recente
+// mentre una più vecchia sullo stesso slot è ancora accettata_da_tutti (non decisa) rompe
+// l'ordine di sistema fissato in CLAUDE.md ("Validazione proposte: serializzata, sempre
+// FIFO"). Errore di richiesta (l'admin deve processare la coda in ordine), non un esito
+// di dominio come il rigetto per incompatibilità (quello resta 200, vedi concertazione.ts).
+export class ErroreConflittoFifoConcertazione extends Error {}
