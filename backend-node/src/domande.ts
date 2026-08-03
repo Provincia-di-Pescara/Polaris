@@ -219,7 +219,7 @@ export interface DatiCreaDomanda {
 // slot di un'altra stagione passerebbe l'INSERT (FK verso slot_settimana_tipo soddisfatta)
 // ma verrebbe silenziosamente ignorato dal motore Go a valle (che lavora per stagione),
 // quindi va rifiutato qui con 400 prima di scrivere qualunque cosa.
-async function validaSlotAppartengonoAStagione(db: Db, stagioneId: string, slotIds: string[]): Promise<void> {
+export async function validaSlotAppartengonoAStagione(db: Db, stagioneId: string, slotIds: string[]): Promise<void> {
   const idUnici = [...new Set(slotIds)];
   if (idUnici.length === 0) {
     return;
