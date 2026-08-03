@@ -2457,6 +2457,109 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     },
   );
 
+  // --- Backoffice: validazione delle proposte di concertazione (art. B.27-B.28) ---
+
+  app.get(
+    '/backoffice/stagioni/:id/concertazione/proposte',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req, res) => {
+      const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      const stato = typeof req.query.stato === 'string' ? (req.query.stato as never) : undefined;
+      try {
+        res.status(200).json(await listaPropostePerStagioneBackoffice(pool, stagioneId, stato));
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.put(
+    '/backoffice/concertazione/proposte/:id/valida',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        const esito = await eseguiInTransazione(pool, async (client) => {
+          const e = await validaProposta(client, id, req.utente!.sub);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'valida_proposta_concertazione',
+            entitaTipo: 'concertazione_proposte',
+            entitaId: id,
+            dettaglio: { esito: e.esito, motivazione: e.motivazione ?? null },
+          });
+          return e;
+        });
+        res.status(200).json(esito);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione || err instanceof ErroreConflittoFifoConcertazione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.put(
+    '/backoffice/concertazione/proposte/:id/rigetta',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      const parsed = schemaRespingiDelega.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const proposta = await eseguiInTransazione(pool, async (client) => {
+          const p = await rigettaProposta(client, id, parsed.data.motivazione);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'rigetta_proposta_concertazione',
+            entitaTipo: 'concertazione_proposte',
+            entitaId: p.id,
+            dettaglio: { stato: p.stato, motivazioneRigetto: p.motivazioneRigetto },
+          });
+          return p;
+        });
+        res.status(200).json(proposta);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
   // --- Pubblico: pubblicazione esiti istruttoria (art. B.10) ---
 
   app.get(
