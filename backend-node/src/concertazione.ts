@@ -1,5 +1,10 @@
 import type { Db } from './db.ts';
-import { ErroreNonTrovato, ErroreStatoNonValidoPerTransizione, ErroreRiferimentoNonValido } from './erroriDominio.ts';
+import {
+  ErroreNonTrovato,
+  ErroreStatoNonValidoPerTransizione,
+  ErroreRiferimentoNonValido,
+  ErroreConflittoFifoConcertazione,
+} from './erroriDominio.ts';
 import { validaSlotAppartengonoAStagione } from './domande.ts';
 import { leggiVersioneAttiva } from './repository/parametrico.ts';
 
@@ -384,4 +389,122 @@ export async function controlloLimitiConcentrazione(
     }
   }
   return { ok: true };
+}
+
+export interface EsitoValidazione {
+  esito: 'validata' | 'rigettata';
+  motivazione?: string;
+  proposta: Proposta;
+}
+
+// art. B.27-B.28. Tutto in un'unica transazione implicita (il chiamante passa `db` che è
+// già dentro eseguiInTransazione lato server.ts): lock FOR UPDATE sulla proposta, guardia
+// FIFO, advisory lock per slot (ordine canonico ASC, evita deadlock tra validazioni
+// concorrenti su slot in comune), controlli strutturali, applicazione o rigetto.
+export async function validaProposta(db: Db, propostaId: string, validataDa: string): Promise<EsitoValidazione> {
+  const lock = await db.query<{ stagione_id: string; stato: StatoProposta; creata_il: Date }>(
+    `SELECT stagione_id, stato, creata_il FROM concertazione_proposte WHERE id = $1 FOR UPDATE`,
+    [propostaId],
+  );
+  const propostaRiga = lock.rows[0];
+  if (!propostaRiga) {
+    throw new ErroreNonTrovato('proposta non trovata');
+  }
+  if (propostaRiga.stato !== 'accettata_da_tutti') {
+    throw new ErroreStatoNonValidoPerTransizione('la proposta non è accettata da tutte le parti');
+  }
+
+  const slotProposta = await db.query<{ slot_id: string; associazione_cedente_id: string | null; associazione_ricevente_id: string }>(
+    `SELECT slot_id, associazione_cedente_id, associazione_ricevente_id FROM concertazione_proposta_slot WHERE proposta_id = $1 ORDER BY slot_id`,
+    [propostaId],
+  );
+  const slotIds = slotProposta.rows.map((r) => r.slot_id);
+
+  const conflitto = await db.query(
+    `SELECT 1 FROM concertazione_proposte p
+     JOIN concertazione_proposta_slot s ON s.proposta_id = p.id
+     WHERE p.id <> $1 AND p.stato = 'accettata_da_tutti' AND p.creata_il < $2 AND s.slot_id = ANY($3)
+     LIMIT 1`,
+    [propostaId, propostaRiga.creata_il, slotIds],
+  );
+  if ((conflitto.rowCount ?? 0) > 0) {
+    throw new ErroreConflittoFifoConcertazione('esiste una proposta precedente da validare prima su questi slot');
+  }
+
+  // Advisory lock per ogni slot coinvolto, ordine canonico ASC (evita deadlock tra
+  // validazioni concorrenti su slot in comune tra proposte diverse).
+  for (const slotId of [...slotIds].sort()) {
+    await db.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [slotId]);
+  }
+
+  for (const riga of slotProposta.rows) {
+    const controlloAttiva = await controlloAssegnazioneAttivaAttesa(db, riga.slot_id, riga.associazione_cedente_id);
+    if (!controlloAttiva.ok) {
+      return await applicaRigetto(db, propostaId, controlloAttiva.motivo!);
+    }
+    const controlloDisciplina = await controlloDisciplinaCompatibile(db, riga.slot_id, riga.associazione_ricevente_id, propostaRiga.stagione_id);
+    if (!controlloDisciplina.ok) {
+      return await applicaRigetto(db, propostaId, controlloDisciplina.motivo!);
+    }
+  }
+
+  const riceventi = [...new Set(slotProposta.rows.map((r) => r.associazione_ricevente_id))];
+  for (const riceventeId of riceventi) {
+    const ceduti = slotProposta.rows.filter((r) => r.associazione_cedente_id === riceventeId).map((r) => r.slot_id);
+    const ricevuti = slotProposta.rows.filter((r) => r.associazione_ricevente_id === riceventeId).map((r) => r.slot_id);
+    const controlloLimiti = await controlloLimitiConcentrazione(db, propostaRiga.stagione_id, riceventeId, ceduti, ricevuti);
+    if (!controlloLimiti.ok) {
+      return await applicaRigetto(db, propostaId, controlloLimiti.motivo!);
+    }
+  }
+
+  for (const riga of slotProposta.rows) {
+    if (riga.associazione_cedente_id) {
+      await db.query(
+        `UPDATE assegnazioni SET stato = 'sostituita', decaduta_il = now(), decaduta_motivazione = $2
+         WHERE slot_id = $1 AND associazione_id = $3 AND stato IN ('provvisoria', 'validata')`,
+        [riga.slot_id, `concertazione: proposta ${propostaId}`, riga.associazione_cedente_id],
+      );
+    }
+    const domandaId = await domandaAmmessaId(db, riga.associazione_ricevente_id, propostaRiga.stagione_id);
+    const durata = await db.query<{ durata_minuti: number }>(`SELECT durata_minuti FROM slot_settimana_tipo WHERE id = $1`, [riga.slot_id]);
+    await db.query(
+      `INSERT INTO assegnazioni (slot_id, domanda_id, associazione_id, tipo, valore_minuti, stato, concertazione_proposta_id)
+       VALUES ($1, $2, $3, 'singola', $4, 'validata', $5)`,
+      [riga.slot_id, domandaId, riga.associazione_ricevente_id, durata.rows[0]!.durata_minuti, propostaId],
+    );
+  }
+
+  await db.query(
+    `UPDATE concertazione_proposte SET stato = 'validata', validata_il = now(), validata_da = $2, versione = versione + 1 WHERE id = $1`,
+    [propostaId, validataDa],
+  );
+  return { esito: 'validata', proposta: (await trovaPropostaPerId(db, propostaId))! };
+}
+
+async function applicaRigetto(db: Db, propostaId: string, motivazione: string): Promise<EsitoValidazione> {
+  await db.query(
+    `UPDATE concertazione_proposte SET stato = 'rigettata', motivazione_rigetto = $2, versione = versione + 1 WHERE id = $1`,
+    [propostaId, motivazione],
+  );
+  return { esito: 'rigettata', motivazione, proposta: (await trovaPropostaPerId(db, propostaId))! };
+}
+
+// art. B.28: rigetto discrezionale manuale, disponibile in alternativa alla validazione
+// automatica (es. per motivi non modellabili nei controlli strutturali di validaProposta).
+export async function rigettaProposta(db: Db, propostaId: string, motivazione: string): Promise<Proposta> {
+  const r = await db.query<{ id: string }>(
+    `UPDATE concertazione_proposte SET stato = 'rigettata', motivazione_rigetto = $2, versione = versione + 1
+     WHERE id = $1 AND stato = 'accettata_da_tutti'
+     RETURNING id`,
+    [propostaId, motivazione],
+  );
+  if ((r.rowCount ?? 0) === 0) {
+    const check = await db.query(`SELECT 1 FROM concertazione_proposte WHERE id = $1`, [propostaId]);
+    if ((check.rowCount ?? 0) === 0) {
+      throw new ErroreNonTrovato('proposta non trovata');
+    }
+    throw new ErroreStatoNonValidoPerTransizione('la proposta non è accettata da tutte le parti');
+  }
+  return (await trovaPropostaPerId(db, propostaId))!;
 }

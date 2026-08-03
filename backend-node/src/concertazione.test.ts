@@ -11,6 +11,8 @@ import {
   controlloAssegnazioneAttivaAttesa,
   controlloDisciplinaCompatibile,
   controlloLimitiConcentrazione,
+  validaProposta,
+  rigettaProposta,
 } from './concertazione.ts';
 import { creaDisciplina } from './discipline.ts';
 import { creaIstituzione } from './istituzioni.ts';
@@ -21,6 +23,22 @@ import { creaDomanda } from './domande.ts';
 import { ErroreRiferimentoNonValido, ErroreStatoNonValidoPerTransizione, ErroreNonTrovato } from './erroriDominio.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
+
+// concertazione_proposte.validata_da referenzia utenti_backoffice (FK reale, vedi
+// db/migrations/000001): a differenza di quanto assunto nel commento originale del brief
+// ("solo per il campo validata_da, nessuna FK di dominio verificata qui" — non vero, la FK
+// esiste davvero), validaProposta richiede un id di operatore esistente, non un randomUUID()
+// qualsiasi (violerebbe concertazione_proposte_validata_da_fkey). Stesso pattern già usato in
+// abilitazioni.test.ts per decisa_da.
+async function creaOperatoreTest(pool: Pool): Promise<string> {
+  const email = `operatore-concertazione-${randomUUID()}@test.local`;
+  const r = await pool.query<{ id: string }>(
+    `INSERT INTO utenti_backoffice (email, password_hash, nome, cognome, ruolo, stato)
+     VALUES ($1, 'scrypt:test:test:test:test:test', 'Test', 'Operatore', 'operatore', 'attivo') RETURNING id`,
+    [email],
+  );
+  return r.rows[0]!.id;
+}
 
 async function creaAssociazionePersona(pool: Pool, label: string) {
   const associazione = await pool.query<{ id: string }>(
@@ -245,4 +263,125 @@ test('controlloLimitiConcentrazione: ok entro i limiti di default (600 min setti
   const fx = await creaFixture(pool);
   const esito = await controlloLimitiConcentrazione(pool, fx.stagioneId, fx.p1.associazioneId, [], [fx.slotBId]);
   assert.equal(esito.ok, true);
+});
+
+async function propostaAccettata(pool: Pool, fx: Awaited<ReturnType<typeof creaFixture>>) {
+  const proposta = await creaProposta(
+    pool,
+    {
+      stagioneId: fx.stagioneId,
+      tipo: 'scambio_bilaterale',
+      slot: [
+        { slotId: fx.slotAId, associazioneCedenteId: fx.p1.associazioneId, associazioneRiceventeId: fx.p2.associazioneId },
+        { slotId: fx.slotBId, associazioneCedenteId: fx.p2.associazioneId, associazioneRiceventeId: fx.p1.associazioneId },
+      ],
+    },
+    fx.p1.personaId,
+    fx.p1.associazioneId,
+  );
+  return accettaProposta(pool, proposta.id, fx.p2.associazioneId, fx.p2.personaId);
+}
+
+test('validaProposta: scambio bilaterale valido applica le assegnazioni e collega concertazione_proposta_id', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const proposta = await propostaAccettata(pool, fx);
+  const admin = await creaOperatoreTest(pool); // validata_da referenzia utenti_backoffice per davvero
+
+  const esito = await validaProposta(pool, proposta.id, admin);
+  assert.equal(esito.esito, 'validata');
+
+  const slotA = await pool.query<{ associazione_id: string; stato: string; concertazione_proposta_id: string | null }>(
+    `SELECT associazione_id, stato, concertazione_proposta_id FROM assegnazioni WHERE slot_id = $1 AND stato = 'validata'`,
+    [fx.slotAId],
+  );
+  assert.equal(slotA.rows[0]?.associazione_id, fx.p2.associazioneId);
+  assert.equal(slotA.rows[0]?.concertazione_proposta_id, proposta.id);
+
+  const slotAVecchia = await pool.query(`SELECT stato FROM assegnazioni WHERE slot_id = $1 AND associazione_id = $2`, [fx.slotAId, fx.p1.associazioneId]);
+  assert.equal(slotAVecchia.rows[0]?.stato, 'sostituita');
+});
+
+test('validaProposta: rigetto automatico se il ricevente non ha disciplina compatibile', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  // p2 cede slotB a un'associazione con domanda ammessa ma disciplina diversa: creiamo una
+  // terza associazione con domanda su una disciplina incompatibile con lo spazio.
+  const disciplinaAltra = await creaDisciplina(pool, { codice: `NUOTO-${randomUUID().slice(0, 8)}`, denominazione: 'Nuoto' });
+  const p3 = await creaAssociazionePersona(pool, 'tre');
+  await creaDomanda(
+    pool,
+    {
+      associazioneId: p3.associazioneId,
+      stagioneId: fx.stagioneId,
+      disciplineCodici: [disciplinaAltra.codice],
+      numeroTesserati: 5,
+      numeroAtletiPartecipanti: 5,
+      numeroSquadre: 1,
+      numeroSquadreFederaliStagionePrecedente: 0,
+      attivitaGiovanile: true,
+      attivitaAgonistica: false,
+      attivitaParalimpicaInclusiva: false,
+      fabbisognoMinimoMinuti: '60.000',
+      fabbisognoOttimaleMinuti: '60.000',
+      preferenze: [fx.slotLiberoId],
+      blocchiAllenamento: [],
+      richiedeGiornataGara: false,
+      richiesteGiornataGara: [],
+    },
+    p3.personaId,
+  );
+  await pool.query(`UPDATE domande SET stato = 'ammessa' WHERE associazione_id = $1`, [p3.associazioneId]);
+
+  const proposta = await creaProposta(
+    pool,
+    { stagioneId: fx.stagioneId, tipo: 'utilizzo_slot_libero', slot: [{ slotId: fx.slotLiberoId, associazioneRiceventeId: p3.associazioneId }] },
+    p3.personaId,
+    p3.associazioneId,
+  );
+  // slotLibero è compatibile solo con la disciplina della fixture (Tennis), non con Nuoto
+  const esito = await validaProposta(pool, proposta.id, randomUUID());
+  assert.equal(esito.esito, 'rigettata');
+  assert.match(esito.motivazione ?? '', /disciplina/);
+});
+
+test('validaProposta: blocca con FIFO se esiste una proposta più vecchia sullo stesso slot non ancora decisa', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+
+  const propostaVecchia = await creaProposta(
+    pool,
+    { stagioneId: fx.stagioneId, tipo: 'cessione', slot: [{ slotId: fx.slotAId, associazioneCedenteId: fx.p1.associazioneId, associazioneRiceventeId: fx.p2.associazioneId }] },
+    fx.p1.personaId,
+    fx.p1.associazioneId,
+  );
+  await accettaProposta(pool, propostaVecchia.id, fx.p2.associazioneId, fx.p2.personaId);
+
+  // una seconda proposta creata DOPO, sullo stesso slotA
+  const propostaNuova = await creaProposta(
+    pool,
+    { stagioneId: fx.stagioneId, tipo: 'cessione', slot: [{ slotId: fx.slotAId, associazioneCedenteId: fx.p1.associazioneId, associazioneRiceventeId: fx.p2.associazioneId }] },
+    fx.p1.personaId,
+    fx.p1.associazioneId,
+  );
+  await accettaProposta(pool, propostaNuova.id, fx.p2.associazioneId, fx.p2.personaId);
+
+  await assert.rejects(() => validaProposta(pool, propostaNuova.id, randomUUID()), /precedente/);
+  // la più vecchia invece deve poter essere validata
+  const admin = await creaOperatoreTest(pool);
+  const esito = await validaProposta(pool, propostaVecchia.id, admin);
+  assert.equal(esito.esito, 'validata');
+});
+
+test('rigettaProposta: rigetto manuale su proposta accettata_da_tutti', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const proposta = await propostaAccettata(pool, fx);
+  const rigettata = await rigettaProposta(pool, proposta.id, 'motivo discrezionale di test');
+  assert.equal(rigettata.stato, 'rigettata');
+  assert.equal(rigettata.motivazioneRigetto, 'motivo discrezionale di test');
 });
