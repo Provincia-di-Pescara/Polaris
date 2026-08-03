@@ -62,7 +62,7 @@ import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSov
 import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
 import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico } from './backofficeSchema.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
-import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaCreaOsservazione } from './pubblicoSchema.ts';
+import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaCreaOsservazione, schemaCreaProposta, schemaAccettaProposta } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
 import { MulterError } from 'multer';
 import { readFile, unlink } from 'node:fs/promises';
@@ -87,6 +87,17 @@ import {
 import { presentaOsservazione, trovaOsservazionePerId, accogliOsservazione, respingiOsservazione } from './osservazioni.ts';
 import { pubblicaProposta, trovaPropostaProvvisoria } from './propostaProvvisoria.ts';
 import { trovaPersonaFisicaPerCf, creaPersonaFisicaShell } from './repository/personeFisiche.ts';
+import {
+  creaProposta,
+  trovaPropostaPerId,
+  listaPropostePerAssociazione,
+  listaPropostePerStagioneBackoffice,
+  accettaProposta,
+  annullaProposta,
+  validaProposta,
+  rigettaProposta,
+} from './concertazione.ts';
+import { ErroreConflittoFifoConcertazione } from './erroriDominio.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
 const COOKIE_PATH_OIDC = '/auth/oidc';
@@ -2235,6 +2246,191 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
         if (erroreRiferimento) {
           res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Proposte di concertazione (art. B.24-B.26) ---
+
+  app.post(
+    '/pubblico/stagioni/:id/concertazione/proposte',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      const parsed = schemaCreaProposta.safeParse({ ...req.body, stagioneId });
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      const stagione = await pool.query<{ stato: string }>(`SELECT stato FROM stagioni_sportive WHERE id = $1`, [stagioneId]);
+      if (stagione.rows[0]?.stato !== 'concertazione') {
+        res.status(409).json({ errore: 'la stagione non è in fase di concertazione' });
+        return;
+      }
+      const associazioneProponente = parsed.data.slot.find((s) => s.associazioneCedenteId)?.associazioneCedenteId ?? parsed.data.slot[0]!.associazioneRiceventeId;
+      const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, associazioneProponente, stagioneId);
+      if (!delegante) {
+        res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
+        return;
+      }
+      try {
+        const proposta = await eseguiInTransazione(pool, async (client) => {
+          const p = await creaProposta(client, parsed.data, req.persona!.sub, associazioneProponente);
+          await registraOperazione(client, {
+            attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: associazioneProponente, ruolo: delegante.ruolo },
+            azione: 'crea_proposta_concertazione',
+            entitaTipo: 'concertazione_proposte',
+            entitaId: p.id,
+            dettaglio: p as unknown as Record<string, unknown>,
+          });
+          return p;
+        });
+        res.status(201).json(proposta);
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/pubblico/stagioni/:id/concertazione/proposte',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      const abilitazioni = await pool.query<{ associazione_id: string }>(
+        `SELECT associazione_id FROM abilitazioni WHERE persona_fisica_id = $1 AND stagione_id = $2 AND stato = 'approvata'`,
+        [req.persona!.sub, stagioneId],
+      );
+      const risultati = [];
+      for (const riga of abilitazioni.rows) {
+        risultati.push(...(await listaPropostePerAssociazione(pool, riga.associazione_id, stagioneId)));
+      }
+      const senzaDuplicati = [...new Map(risultati.map((p) => [p.id, p])).values()];
+      res.status(200).json(senzaDuplicati);
+    },
+  );
+
+  app.get(
+    '/pubblico/concertazione/proposte/:id',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        const proposta = await trovaPropostaPerId(pool, id);
+        if (!proposta) {
+          res.status(404).json({ errore: 'proposta non trovata' });
+          return;
+        }
+        const parteAssociazioni = proposta.parti.map((p) => p.associazioneId);
+        const abilitazione = await pool.query(
+          `SELECT 1 FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = ANY($2) AND stagione_id = $3 AND stato = 'approvata' LIMIT 1`,
+          [req.persona!.sub, parteAssociazioni, proposta.stagioneId],
+        );
+        if ((abilitazione.rowCount ?? 0) === 0) {
+          res.status(403).json({ errore: 'la propria associazione non è parte di questa proposta' });
+          return;
+        }
+        res.status(200).json(proposta);
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.post(
+    '/pubblico/concertazione/proposte/:id/accetta',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      const parsed = schemaAccettaProposta.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      const proposta = await trovaPropostaPerId(pool, id);
+      if (!proposta) {
+        res.status(404).json({ errore: 'proposta non trovata' });
+        return;
+      }
+      const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, parsed.data.associazioneId, proposta.stagioneId);
+      if (!delegante) {
+        res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
+        return;
+      }
+      try {
+        const aggiornata = await eseguiInTransazione(pool, async (client) => {
+          const p = await accettaProposta(client, id, parsed.data.associazioneId, req.persona!.sub);
+          await registraOperazione(client, {
+            attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: parsed.data.associazioneId, ruolo: delegante.ruolo },
+            azione: 'accetta_proposta_concertazione',
+            entitaTipo: 'concertazione_proposte',
+            entitaId: p.id,
+            dettaglio: { stato: p.stato },
+          });
+          return p;
+        });
+        res.status(200).json(aggiornata);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.post(
+    '/pubblico/concertazione/proposte/:id/annulla',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      const proposta = await trovaPropostaPerId(pool, id);
+      if (!proposta) {
+        res.status(404).json({ errore: 'proposta non trovata' });
+        return;
+      }
+      if (proposta.proponentePersonaFisicaId !== req.persona!.sub) {
+        res.status(403).json({ errore: 'solo il proponente può annullare la proposta' });
+        return;
+      }
+      try {
+        const aggiornata = await eseguiInTransazione(pool, async (client) => {
+          const p = await annullaProposta(client, id);
+          await registraOperazione(client, {
+            attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: proposta.proponenteAssociazioneId },
+            azione: 'annulla_proposta_concertazione',
+            entitaTipo: 'concertazione_proposte',
+            entitaId: p.id,
+            dettaglio: { stato: p.stato },
+          });
+          return p;
+        });
+        res.status(200).json(aggiornata);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
           return;
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
