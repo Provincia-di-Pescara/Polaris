@@ -293,6 +293,161 @@ test('controlloLimitiConcentrazione: ok entro i limiti di default (600 min setti
   assert.equal(esito.ok, true);
 });
 
+function minutiAOrario(minuti: number): string {
+  const h = Math.floor(minuti / 60) % 24;
+  const m = minuti % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+async function domandaIdPer(pool: Pool, associazioneId: string, stagioneId: string): Promise<string> {
+  const r = await pool.query<{ id: string }>(`SELECT id FROM domande WHERE associazione_id = $1 AND stagione_id = $2`, [associazioneId, stagioneId]);
+  return r.rows[0]!.id;
+}
+
+async function assegnaSlot(pool: Pool, slotId: string, domandaId: string, associazioneId: string, valoreMinuti: number): Promise<void> {
+  await pool.query(
+    `INSERT INTO assegnazioni (slot_id, domanda_id, associazione_id, tipo, valore_minuti, stato) VALUES ($1, $2, $3, 'singola', $4, 'provvisoria')`,
+    [slotId, domandaId, associazioneId, valoreMinuti],
+  );
+}
+
+test('controlloLimitiConcentrazione: fallisce oltre i minuti settimanali massimi (I4 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const parametrico = (await leggiVersioneAttiva(pool))!;
+  const max = Number(parametrico.minutiSettimanaliMax);
+
+  const spazio = await pool.query<{ spazio_id: string }>(`SELECT spazio_id FROM slot_settimana_tipo WHERE id = $1`, [fx.slotAId]);
+  // durata sufficiente a superare da sola il limite anche sommata ai 60 min già assegnati
+  // su slotA (fx) — non dipende dal valore esatto del default, letto dinamicamente sopra.
+  const slotExtra = await creaSlot(pool, {
+    stagioneId: fx.stagioneId,
+    spazioId: spazio.rows[0]!.spazio_id,
+    giornoSettimana: 5,
+    orarioInizio: '00:00',
+    orarioFine: minutiAOrario(max + 1),
+  });
+
+  const esito = await controlloLimitiConcentrazione(pool, fx.stagioneId, fx.p1.associazioneId, [], [slotExtra.id]);
+  assert.equal(esito.ok, false);
+  assert.match(esito.motivo ?? '', /minuti settimanali/);
+});
+
+test('controlloLimitiConcentrazione: fallisce oltre le fasce pregiate massime (I4 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const parametrico = (await leggiVersioneAttiva(pool))!;
+  const maxPregiate = parametrico.fascePregiateMax;
+
+  const spazio = await pool.query<{ spazio_id: string }>(`SELECT spazio_id FROM slot_settimana_tipo WHERE id = $1`, [fx.slotAId]);
+  const domandaId = await domandaIdPer(pool, fx.p1.associazioneId, fx.stagioneId);
+
+  // porta p1 a maxPregiate fasce pregiate già assegnate
+  for (let i = 0; i < maxPregiate; i++) {
+    const slot = await creaSlot(pool, {
+      stagioneId: fx.stagioneId,
+      spazioId: spazio.rows[0]!.spazio_id,
+      giornoSettimana: 6,
+      orarioInizio: minutiAOrario(i * 60),
+      orarioFine: minutiAOrario(i * 60 + 30),
+      pregiata: true,
+    });
+    await assegnaSlot(pool, slot.id, domandaId, fx.p1.associazioneId, 30);
+  }
+
+  const slotExtraPregiata = await creaSlot(pool, {
+    stagioneId: fx.stagioneId,
+    spazioId: spazio.rows[0]!.spazio_id,
+    giornoSettimana: 7,
+    orarioInizio: '18:00',
+    orarioFine: '18:30',
+    pregiata: true,
+  });
+
+  const esito = await controlloLimitiConcentrazione(pool, fx.stagioneId, fx.p1.associazioneId, [], [slotExtraPregiata.id]);
+  assert.equal(esito.ok, false);
+  assert.match(esito.motivo ?? '', /fasce pregiate/);
+});
+
+test('controlloLimitiConcentrazione: fallisce oltre gli slot massimi nello stesso impianto (I4 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const parametrico = (await leggiVersioneAttiva(pool))!;
+  const maxImpianto = parametrico.slotMaxStessoImpianto;
+
+  const spazio = await pool.query<{ spazio_id: string }>(`SELECT spazio_id FROM slot_settimana_tipo WHERE id = $1`, [fx.slotAId]);
+  const domandaId = await domandaIdPer(pool, fx.p1.associazioneId, fx.stagioneId);
+
+  // fx.slotAId conta già come 1 assegnazione su questo impianto: bastano maxImpianto-1 in più
+  // per portare p1 esattamente al limite.
+  for (let i = 0; i < maxImpianto - 1; i++) {
+    const slot = await creaSlot(pool, {
+      stagioneId: fx.stagioneId,
+      spazioId: spazio.rows[0]!.spazio_id,
+      giornoSettimana: 6,
+      orarioInizio: minutiAOrario(i * 60),
+      orarioFine: minutiAOrario(i * 60 + 30),
+    });
+    await assegnaSlot(pool, slot.id, domandaId, fx.p1.associazioneId, 30);
+  }
+
+  const slotExtraImpianto = await creaSlot(pool, {
+    stagioneId: fx.stagioneId,
+    spazioId: spazio.rows[0]!.spazio_id,
+    giornoSettimana: 7,
+    orarioInizio: '18:00',
+    orarioFine: '18:30',
+  });
+
+  const esito = await controlloLimitiConcentrazione(pool, fx.stagioneId, fx.p1.associazioneId, [], [slotExtraImpianto.id]);
+  assert.equal(esito.ok, false);
+  assert.match(esito.motivo ?? '', /stesso impianto/);
+});
+
+test('controlloLimitiConcentrazione: netting — cessione contestuale evita il superamento (I4 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const parametrico = (await leggiVersioneAttiva(pool))!;
+  const maxImpianto = parametrico.slotMaxStessoImpianto;
+
+  const spazio = await pool.query<{ spazio_id: string }>(`SELECT spazio_id FROM slot_settimana_tipo WHERE id = $1`, [fx.slotAId]);
+  const domandaId = await domandaIdPer(pool, fx.p1.associazioneId, fx.stagioneId);
+
+  // porta p1 esattamente a maxImpianto (fx.slotAId + maxImpianto-1 extra)
+  const slotsExtra = [];
+  for (let i = 0; i < maxImpianto - 1; i++) {
+    const slot = await creaSlot(pool, {
+      stagioneId: fx.stagioneId,
+      spazioId: spazio.rows[0]!.spazio_id,
+      giornoSettimana: 6,
+      orarioInizio: minutiAOrario(i * 60),
+      orarioFine: minutiAOrario(i * 60 + 30),
+    });
+    await assegnaSlot(pool, slot.id, domandaId, fx.p1.associazioneId, 30);
+    slotsExtra.push(slot);
+  }
+
+  const slotRicevuto = await creaSlot(pool, {
+    stagioneId: fx.stagioneId,
+    spazioId: spazio.rows[0]!.spazio_id,
+    giornoSettimana: 7,
+    orarioInizio: '18:00',
+    orarioFine: '18:30',
+  });
+
+  // cede uno dei suoi slot esistenti nello stesso impianto mentre ne riceve uno nuovo: il
+  // conteggio netto resta a maxImpianto, non maxImpianto+1 — deve passare.
+  const esitoSenzaCessione = await controlloLimitiConcentrazione(pool, fx.stagioneId, fx.p1.associazioneId, [], [slotRicevuto.id]);
+  assert.equal(esitoSenzaCessione.ok, false); // controllo di sanità: senza cessione sfora
+
+  const esitoConCessione = await controlloLimitiConcentrazione(pool, fx.stagioneId, fx.p1.associazioneId, [slotsExtra[0]!.id], [slotRicevuto.id]);
+  assert.equal(esitoConCessione.ok, true);
+});
+
 async function propostaAccettata(pool: Pool, fx: Awaited<ReturnType<typeof creaFixture>>) {
   const proposta = await creaProposta(
     pool,
