@@ -282,6 +282,17 @@ export interface EsitoControllo {
 // al momento della creazione — se nel frattempo un'altra proposta validata ha già spostato
 // lo slot, questa non è più applicabile. Un blocco_gara non è MAI cedibile qui.
 export async function controlloAssegnazioneAttivaAttesa(db: Db, slotId: string, cedenteAtteso: string | null): Promise<EsitoControllo> {
+  // Uno slot marcato indisponibile_permanente (manutenzione/decommissionato dall'Ente) non è
+  // mai validamente rivendicabile in concertazione, a prescindere dal tipo di proposta: il
+  // motore Go filtra già questo flag su ogni query, la concertazione era l'unico percorso
+  // rimasto che poteva produrre un'assegnazione validata su un simile slot (art. B.19/B.27).
+  const slotStato = await db.query<{ indisponibile_permanente: boolean }>(
+    `SELECT indisponibile_permanente FROM slot_settimana_tipo WHERE id = $1`,
+    [slotId],
+  );
+  if (slotStato.rows[0]?.indisponibile_permanente) {
+    return { ok: false, motivo: `slot ${slotId} non disponibile (indisponibilità permanente)` };
+  }
   const r = await db.query<{ associazione_id: string; tipo: string }>(
     `SELECT associazione_id, tipo FROM assegnazioni WHERE slot_id = $1 AND stato IN ('provvisoria', 'validata')`,
     [slotId],

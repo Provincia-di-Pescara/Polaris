@@ -241,6 +241,33 @@ test('controlloAssegnazioneAttivaAttesa: utilizzo_slot_libero ok solo se slot da
   assert.equal((await controlloAssegnazioneAttivaAttesa(pool, fx.slotAId, null)).ok, false);
 });
 
+test('controlloAssegnazioneAttivaAttesa: fallisce su slot indisponibile_permanente (C2 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  await pool.query(`UPDATE slot_settimana_tipo SET indisponibile_permanente = true WHERE id = $1`, [fx.slotLiberoId]);
+  const esito = await controlloAssegnazioneAttivaAttesa(pool, fx.slotLiberoId, null);
+  assert.equal(esito.ok, false);
+  assert.match(esito.motivo ?? '', /indisponibil/);
+});
+
+test('validaProposta: rigetta utilizzo_slot_libero su slot indisponibile_permanente (C2 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  await pool.query(`UPDATE slot_settimana_tipo SET indisponibile_permanente = true WHERE id = $1`, [fx.slotLiberoId]);
+
+  const proposta = await creaProposta(
+    pool,
+    { stagioneId: fx.stagioneId, tipo: 'utilizzo_slot_libero', slot: [{ slotId: fx.slotLiberoId, associazioneRiceventeId: fx.p1.associazioneId }] },
+    fx.p1.personaId,
+    fx.p1.associazioneId,
+  );
+  const esito = await validaProposta(pool, proposta.id, randomUUID());
+  assert.equal(esito.esito, 'rigettata');
+  assert.match(esito.motivazione ?? '', /indisponibil/);
+});
+
 test('controlloDisciplinaCompatibile: fallisce se il ricevente non ha domanda con disciplina compatibile', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
   const pool = new Pool({ connectionString: dsn });
   t.after(() => pool.end());
