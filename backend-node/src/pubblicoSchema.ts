@@ -88,6 +88,10 @@ export type CreaOsservazioneRequest = z.infer<typeof schemaCreaOsservazione>;
 export const schemaCreaProposta = z
   .object({
     stagioneId: z.string().uuid(),
+    // Chi propone (deve essere una delle associazioni coinvolte nei blocchi `slot`, verificato
+    // dal chiamante): art. B.24-26 contempla negoziazione avviata da cedente O ricevente, non
+    // solo dal cedente del primo slot (che era l'inferenza implicita usata in precedenza).
+    proponenteAssociazioneId: z.string().uuid(),
     tipo: z.enum([
       'scambio_bilaterale',
       'scambio_multilaterale',

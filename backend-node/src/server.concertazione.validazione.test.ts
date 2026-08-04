@@ -106,6 +106,7 @@ async function creaEAccettaProposta(base: string, fx: Awaited<ReturnType<typeof 
     headers: { Authorization: `Bearer ${fx.p1.token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       stagioneId: fx.stagioneId,
+      proponenteAssociazioneId: fx.p1.associazioneId,
       tipo: 'scambio_bilaterale',
       slot: [
         { slotId: fx.slotAId, associazioneCedenteId: fx.p1.associazioneId, associazioneRiceventeId: fx.p2.associazioneId },

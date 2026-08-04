@@ -2270,7 +2270,14 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         res.status(409).json({ errore: 'la stagione non è in fase di concertazione' });
         return;
       }
-      const associazioneProponente = parsed.data.slot.find((s) => s.associazioneCedenteId)?.associazioneCedenteId ?? parsed.data.slot[0]!.associazioneRiceventeId;
+      const associazioniCoinvolte = new Set(
+        parsed.data.slot.flatMap((s) => [s.associazioneCedenteId, s.associazioneRiceventeId].filter((x): x is string => x != null)),
+      );
+      const associazioneProponente = parsed.data.proponenteAssociazioneId;
+      if (!associazioniCoinvolte.has(associazioneProponente)) {
+        res.status(400).json({ errore: 'proponenteAssociazioneId deve essere una delle associazioni coinvolte nella proposta' });
+        return;
+      }
       const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, associazioneProponente, stagioneId);
       if (!delegante) {
         res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });

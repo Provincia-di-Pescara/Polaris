@@ -92,7 +92,7 @@ async function creaFixtureCompleta(pool: Pool, adminId: string) {
     [slotA.id, domanda1.id, p1.associazioneId],
   );
 
-  return { stagioneId, slotAId: slotA.id, slotLiberoId: slotLibero.id, p1 };
+  return { stagioneId, slotAId: slotA.id, slotLiberoId: slotLibero.id, p1, disciplinaCodice: disciplina.codice };
 }
 
 test('crea proposta utilizzo_slot_libero, lista, dettaglio, annulla', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
@@ -108,6 +108,7 @@ test('crea proposta utilizzo_slot_libero, lista, dettaglio, annulla', { skip: ds
     headers: { Authorization: `Bearer ${fx.p1.token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       stagioneId: fx.stagioneId,
+      proponenteAssociazioneId: fx.p1.associazioneId,
       tipo: 'utilizzo_slot_libero',
       slot: [{ slotId: fx.slotLiberoId, associazioneRiceventeId: fx.p1.associazioneId }],
     }),
@@ -133,6 +134,76 @@ test('crea proposta utilizzo_slot_libero, lista, dettaglio, annulla', { skip: ds
   assert.equal(annullaCorpo.stato, 'annullata');
 });
 
+test('il ricevente puo essere proponente di una cessione (I3 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(chiudi);
+  const adminId = await creaOperatoreAdmin(pool);
+  const fx = await creaFixtureCompleta(pool, adminId);
+  const p2 = await creaParteConAbilitazione(pool, fx.stagioneId, adminId, 'due');
+  const domanda2 = await creaDomanda(
+    pool,
+    {
+      associazioneId: p2.associazioneId,
+      stagioneId: fx.stagioneId,
+      disciplineCodici: [fx.disciplinaCodice],
+      numeroTesserati: 10,
+      numeroAtletiPartecipanti: 8,
+      numeroSquadre: 1,
+      numeroSquadreFederaliStagionePrecedente: 0,
+      attivitaGiovanile: true,
+      attivitaAgonistica: false,
+      attivitaParalimpicaInclusiva: false,
+      fabbisognoMinimoMinuti: '60.000',
+      fabbisognoOttimaleMinuti: '60.000',
+      preferenze: [fx.slotAId],
+      blocchiAllenamento: [],
+      richiedeGiornataGara: false,
+      richiesteGiornataGara: [],
+    },
+    p2.personaId,
+  );
+  await pool.query(`UPDATE domande SET stato = 'ammessa' WHERE id = $1`, [domanda2.id]);
+
+  // p2 e' il RICEVENTE di uno slot ceduto da p1: prima del fix solo il cedente (p1) poteva
+  // essere proponente. Qui p2 avvia la proposta come ricevente.
+  const r = await fetch(`${base}/pubblico/stagioni/${fx.stagioneId}/concertazione/proposte`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${p2.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      stagioneId: fx.stagioneId,
+      proponenteAssociazioneId: p2.associazioneId,
+      tipo: 'cessione',
+      slot: [{ slotId: fx.slotAId, associazioneCedenteId: fx.p1.associazioneId, associazioneRiceventeId: p2.associazioneId }],
+    }),
+  });
+  assert.equal(r.status, 201);
+  const proposta = (await r.json()) as { proponenteAssociazioneId: string };
+  assert.equal(proposta.proponenteAssociazioneId, p2.associazioneId);
+});
+
+test('400 se proponenteAssociazioneId non e tra le associazioni coinvolte (I3 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(chiudi);
+  const adminId = await creaOperatoreAdmin(pool);
+  const fx = await creaFixtureCompleta(pool, adminId);
+
+  const r = await fetch(`${base}/pubblico/stagioni/${fx.stagioneId}/concertazione/proposte`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${fx.p1.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      stagioneId: fx.stagioneId,
+      proponenteAssociazioneId: randomUUID(),
+      tipo: 'utilizzo_slot_libero',
+      slot: [{ slotId: fx.slotLiberoId, associazioneRiceventeId: fx.p1.associazioneId }],
+    }),
+  });
+  assert.equal(r.status, 400);
+});
+
 test('403 su creazione proposta senza abilitazione attiva', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
   const pool = new Pool({ connectionString: dsn });
   t.after(() => pool.end());
@@ -145,7 +216,7 @@ test('403 su creazione proposta senza abilitazione attiva', { skip: dsn ? false 
   const r = await fetch(`${base}/pubblico/stagioni/${fx.stagioneId}/concertazione/proposte`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${estraneo}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ stagioneId: fx.stagioneId, tipo: 'utilizzo_slot_libero', slot: [{ slotId: fx.slotLiberoId, associazioneRiceventeId: fx.p1.associazioneId }] }),
+    body: JSON.stringify({ stagioneId: fx.stagioneId, proponenteAssociazioneId: fx.p1.associazioneId, tipo: 'utilizzo_slot_libero', slot: [{ slotId: fx.slotLiberoId, associazioneRiceventeId: fx.p1.associazioneId }] }),
   });
   assert.equal(r.status, 403);
 });
