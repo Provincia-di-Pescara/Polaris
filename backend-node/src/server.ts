@@ -2433,10 +2433,18 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(403).json({ errore: 'solo il proponente può annullare la proposta' });
           return;
         }
+        // I5 final review: solo il proponente originale non basta — la sua abilitazione
+        // sull'associazione proponente potrebbe essere stata revocata nel frattempo (stesso
+        // pattern di controllo usato da ogni altra route pubblica di scrittura).
+        const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, proposta.proponenteAssociazioneId, proposta.stagioneId);
+        if (!delegante) {
+          res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
+          return;
+        }
         const aggiornata = await eseguiInTransazione(pool, async (client) => {
           const p = await annullaProposta(client, id);
           await registraOperazione(client, {
-            attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: proposta.proponenteAssociazioneId },
+            attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: proposta.proponenteAssociazioneId, ruolo: delegante.ruolo },
             azione: 'annulla_proposta_concertazione',
             entitaTipo: 'concertazione_proposte',
             entitaId: p.id,

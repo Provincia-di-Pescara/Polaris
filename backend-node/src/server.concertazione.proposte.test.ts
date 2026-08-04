@@ -10,7 +10,7 @@ import { creaImpianto } from './impianti.ts';
 import { creaSpazio } from './spazi.ts';
 import { creaSlot } from './slot.ts';
 import { creaDomanda } from './domande.ts';
-import { creaAbilitazionePrincipale, approvaAbilitazione } from './abilitazioni.ts';
+import { creaAbilitazionePrincipale, approvaAbilitazione, revocaAbilitazioneConCascata } from './abilitazioni.ts';
 import { hashPassword } from './auth/password.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
@@ -47,7 +47,7 @@ async function creaParteConAbilitazione(pool: Pool, stagioneId: string, adminId:
   const abilitazione = await creaAbilitazionePrincipale(pool, { personaFisicaId: persona.rows[0]!.id, associazioneId: associazione.rows[0]!.id, stagioneId });
   await approvaAbilitazione(pool, abilitazione.id, adminId);
   const token = generaAccessTokenPubblico({ sub: persona.rows[0]!.id, codiceFiscale: cf, nome: 'Test', cognome: label });
-  return { associazioneId: associazione.rows[0]!.id, personaId: persona.rows[0]!.id, token };
+  return { associazioneId: associazione.rows[0]!.id, personaId: persona.rows[0]!.id, token, abilitazioneId: abilitazione.id };
 }
 
 async function creaFixtureCompleta(pool: Pool, adminId: string) {
@@ -202,6 +202,36 @@ test('400 se proponenteAssociazioneId non e tra le associazioni coinvolte (I3 fi
     }),
   });
   assert.equal(r.status, 400);
+});
+
+test('403 su annulla se l\'abilitazione del proponente è stata revocata nel frattempo (I5 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(chiudi);
+  const adminId = await creaOperatoreAdmin(pool);
+  const fx = await creaFixtureCompleta(pool, adminId);
+
+  const rCrea = await fetch(`${base}/pubblico/stagioni/${fx.stagioneId}/concertazione/proposte`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${fx.p1.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      stagioneId: fx.stagioneId,
+      proponenteAssociazioneId: fx.p1.associazioneId,
+      tipo: 'utilizzo_slot_libero',
+      slot: [{ slotId: fx.slotLiberoId, associazioneRiceventeId: fx.p1.associazioneId }],
+    }),
+  });
+  assert.equal(rCrea.status, 201);
+  const proposta = (await rCrea.json()) as { id: string };
+
+  await revocaAbilitazioneConCascata(pool, fx.p1.abilitazioneId);
+
+  const rAnnulla = await fetch(`${base}/pubblico/concertazione/proposte/${proposta.id}/annulla`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${fx.p1.token}` },
+  });
+  assert.equal(rAnnulla.status, 403);
 });
 
 test('403 su creazione proposta senza abilitazione attiva', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
