@@ -64,12 +64,27 @@ export async function trovaPropostaProvvisoria(db: Db, stagioneId: string): Prom
   }
   const r = await db.query<RigaVoceProposta>(
     `SELECT a.slot_id, a.associazione_id, a.tipo, a.valore_minuti::text AS valore_minuti,
-            fr.fr_finale_minuti::text AS fr_finale_minuti, a.isf_al_momento::text AS isf,
+            fr.fr_finale_minuti::text AS fr_finale_minuti,
+            -- ISF = VA/FR (art. A.13), calcolato qui e non letto da assegnazioni.isf_al_momento
+            -- (colonna mai scritta dal motore Go, sempre NULL in pratica — vedi CLAUDE.md). FR=0
+            -- => ISF non definito (regola di dominio consolidata, mai divisione per zero).
+            (CASE WHEN fr.fr_finale_minuti IS NULL OR fr.fr_finale_minuti = 0 THEN NULL
+                  ELSE ROUND(a.valore_minuti / fr.fr_finale_minuti, 3) END)::text AS isf,
             so.id AS sorteggio_id, so.articolo_riferimento
      FROM assegnazioni a
      JOIN slot_settimana_tipo st ON st.id = a.slot_id
      LEFT JOIN fabbisogni_riconosciuti fr ON fr.domanda_id = a.domanda_id
-     LEFT JOIN sorteggi so ON so.elaborazione_id = a.elaborazione_id AND so.vincitore_associazione_id = a.associazione_id
+     -- LATERAL con LIMIT 1: la tabella sorteggi non ha un discriminatore per-slot/fascia, solo
+     -- (elaborazione_id, vincitore_associazione_id). Se un'associazione vince più sorteggi
+     -- nella stessa elaborazione, questo riferimento ne mostra uno arbitrario (il più vecchio
+     -- per seme generato) — limite noto, non un cambio di schema in questa fix wave. Senza
+     -- LATERAL, il JOIN diretto duplicava ogni riga di assegnazione una volta per sorteggio
+     -- vinto dalla stessa associazione nella stessa elaborazione.
+     LEFT JOIN LATERAL (
+       SELECT id, articolo_riferimento FROM sorteggi
+       WHERE elaborazione_id = a.elaborazione_id AND vincitore_associazione_id = a.associazione_id
+       ORDER BY seme_generato_il ASC LIMIT 1
+     ) so ON true
      WHERE st.stagione_id = $1 AND a.stato IN ('provvisoria', 'validata')
      ORDER BY st.giorno_settimana, st.orario_inizio`,
     [stagioneId],
