@@ -339,6 +339,7 @@ export async function controlloLimitiConcentrazione(
   associazioneId: string,
   slotIdCeduti: string[],
   slotIdRicevuti: string[],
+  parametricoDato?: Awaited<ReturnType<typeof leggiVersioneAttiva>>,
 ): Promise<EsitoControllo> {
   const attuali = await db.query<RigaCarico>(
     `SELECT a.slot_id, sp.impianto_id, s.durata_minuti, s.pregiata
@@ -373,7 +374,7 @@ export async function controlloLimitiConcentrazione(
   // all'utente: propaga come eccezione, la route la mapperà a 500 come ogni altro errore
   // imprevisto (coerente con `erroriDominio.ts`, dove {ok:false} è riservato agli esiti di
   // validazione attesi, mai a un malfunzionamento del backend).
-  const parametrico = await leggiVersioneAttiva(db);
+  const parametrico = parametricoDato ?? (await leggiVersioneAttiva(db));
   if (!parametrico) {
     throw new Error('nessuna versione parametrica attiva trovata: misconfigurazione di sistema');
   }
@@ -448,11 +449,18 @@ export async function validaProposta(db: Db, propostaId: string, validataDa: str
     }
   }
 
+  // Caricata una sola volta e riusata sia dal controllo limiti sotto sia dal calcolo del
+  // valore_minuti ponderato nell'applicazione (evita N query identiche per proposta).
+  const parametrico = await leggiVersioneAttiva(db);
+  if (!parametrico) {
+    throw new Error('nessuna versione parametrica attiva trovata: misconfigurazione di sistema');
+  }
+
   const riceventi = [...new Set(slotProposta.rows.map((r) => r.associazione_ricevente_id))];
   for (const riceventeId of riceventi) {
     const ceduti = slotProposta.rows.filter((r) => r.associazione_cedente_id === riceventeId).map((r) => r.slot_id);
     const ricevuti = slotProposta.rows.filter((r) => r.associazione_ricevente_id === riceventeId).map((r) => r.slot_id);
-    const controlloLimiti = await controlloLimitiConcentrazione(db, propostaRiga.stagione_id, riceventeId, ceduti, ricevuti);
+    const controlloLimiti = await controlloLimitiConcentrazione(db, propostaRiga.stagione_id, riceventeId, ceduti, ricevuti, parametrico);
     if (!controlloLimiti.ok) {
       return await applicaRigetto(db, propostaId, controlloLimiti.motivo!);
     }
@@ -467,11 +475,19 @@ export async function validaProposta(db: Db, propostaId: string, validataDa: str
       );
     }
     const domandaId = await domandaAmmessaId(db, riga.associazione_ricevente_id, propostaRiga.stagione_id);
-    const durata = await db.query<{ durata_minuti: number }>(`SELECT durata_minuti FROM slot_settimana_tipo WHERE id = $1`, [riga.slot_id]);
+    // art. A.9 + B.19: la stessa ponderazione applicata dal motore Go
+    // (engine-go/internal/postgres/assegnazione.go::valorePonderatoFascia) — durata × peso
+    // fascia pregiata, calcolata come espressione NUMERIC in SQL (mai float JS) così che
+    // l'arrotondamento a 3 cifre sia fatto dal tipo di colonna numeric(10,3), non da JS.
+    const slotDati = await db.query<{ durata_minuti: number; pregiata: boolean }>(
+      `SELECT durata_minuti, pregiata FROM slot_settimana_tipo WHERE id = $1`,
+      [riga.slot_id],
+    );
+    const { durata_minuti: durataMinuti, pregiata } = slotDati.rows[0]!;
     await db.query(
       `INSERT INTO assegnazioni (slot_id, domanda_id, associazione_id, tipo, valore_minuti, stato, concertazione_proposta_id)
-       VALUES ($1, $2, $3, 'singola', $4, 'validata', $5)`,
-      [riga.slot_id, domandaId, riga.associazione_ricevente_id, durata.rows[0]!.durata_minuti, propostaId],
+       VALUES ($1, $2, $3, 'singola', ($4::numeric * CASE WHEN $5 THEN $6::numeric ELSE 1 END), 'validata', $7)`,
+      [riga.slot_id, domandaId, riga.associazione_ricevente_id, durataMinuti, pregiata, parametrico.pesoFasciaPregiata, propostaId],
     );
   }
 

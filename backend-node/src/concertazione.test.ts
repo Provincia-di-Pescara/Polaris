@@ -21,6 +21,7 @@ import { creaSpazio } from './spazi.ts';
 import { creaSlot } from './slot.ts';
 import { creaDomanda } from './domande.ts';
 import { ErroreRiferimentoNonValido, ErroreStatoNonValidoPerTransizione, ErroreNonTrovato } from './erroriDominio.ts';
+import { leggiVersioneAttiva } from './repository/parametrico.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 
@@ -374,6 +375,43 @@ test('validaProposta: blocca con FIFO se esiste una proposta più vecchia sullo 
   const admin = await creaOperatoreTest(pool);
   const esito = await validaProposta(pool, propostaVecchia.id, admin);
   assert.equal(esito.esito, 'validata');
+});
+
+test('validaProposta: su slot pregiata il valore_minuti persistito è ponderato (C1 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+
+  // Slot pregiata nello stesso spazio del fixture, libero: usiamo utilizzo_slot_libero così
+  // non serve un cedente/assegnazione preesistente da spostare.
+  const spazio = await pool.query<{ spazio_id: string }>(`SELECT spazio_id FROM slot_settimana_tipo WHERE id = $1`, [fx.slotAId]);
+  const slotPregiata = await creaSlot(pool, {
+    stagioneId: fx.stagioneId,
+    spazioId: spazio.rows[0]!.spazio_id,
+    giornoSettimana: 4,
+    orarioInizio: '18:00',
+    orarioFine: '19:00',
+    pregiata: true,
+  });
+
+  const proposta = await creaProposta(
+    pool,
+    { stagioneId: fx.stagioneId, tipo: 'utilizzo_slot_libero', slot: [{ slotId: slotPregiata.id, associazioneRiceventeId: fx.p1.associazioneId }] },
+    fx.p1.personaId,
+    fx.p1.associazioneId,
+  );
+  const admin = await creaOperatoreTest(pool);
+  const esito = await validaProposta(pool, proposta.id, admin);
+  assert.equal(esito.esito, 'validata');
+
+  const parametrico = await leggiVersioneAttiva(pool);
+  const atteso = 60 * Number(parametrico!.pesoFasciaPregiata);
+
+  const riga = await pool.query<{ valore_minuti: string }>(
+    `SELECT valore_minuti::text AS valore_minuti FROM assegnazioni WHERE slot_id = $1 AND stato = 'validata'`,
+    [slotPregiata.id],
+  );
+  assert.equal(Number(riga.rows[0]!.valore_minuti), Number(atteso.toFixed(3)));
 });
 
 test('rigettaProposta: rigetto manuale su proposta accettata_da_tutti', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
