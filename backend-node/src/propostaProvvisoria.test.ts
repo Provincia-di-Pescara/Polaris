@@ -140,6 +140,35 @@ test('trovaPropostaProvvisoria calcola l\'ISF come VA/FR arrotondato a 3 cifre (
   assert.equal(voci[0]!.isf, '0.600');
 });
 
+test('trovaPropostaProvvisoria calcola l\'ISF cumulativo su VA totale dell\'associazione, non sulla singola riga (I2b final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixtureConAssegnazione(pool);
+
+  // secondo slot sullo stesso spazio/giorno, orario successivo (niente sovrapposizione EXCLUDE),
+  // seconda assegnazione ATTIVA per la STESSA associazione/domanda/elaborazione: simula
+  // un'associazione con più slot vinti nel round-robin (es. blocco allenamento su più fasce).
+  const slot2 = await pool.query<{ id: string }>(
+    `INSERT INTO slot_settimana_tipo (spazio_id, stagione_id, giorno_settimana, orario_inizio, orario_fine)
+     SELECT spazio_id, stagione_id, giorno_settimana, '19:00', '20:00' FROM slot_settimana_tipo WHERE id = $1 RETURNING id`,
+    [fx.slotId],
+  );
+  const domanda = await pool.query<{ domanda_id: string }>(`SELECT domanda_id FROM assegnazioni WHERE id = (
+     SELECT id FROM assegnazioni WHERE slot_id = $1 LIMIT 1)`, [fx.slotId]);
+  await pool.query(
+    `INSERT INTO assegnazioni (slot_id, domanda_id, associazione_id, elaborazione_id, tipo, valore_minuti, stato) VALUES ($1, $2, $3, $4, 'singola', 60, 'validata')`,
+    [slot2.rows[0]!.id, domanda.rows[0]!.domanda_id, fx.associazioneId, fx.elaborazioneId],
+  );
+
+  const voci = await trovaPropostaProvvisoria(pool, fx.stagioneId);
+  assert.equal(voci.length, 2);
+  // VA cumulativa = 60 + 60 = 120, FR finale = 100 => ISF = 1.200 su ENTRAMBE le righe,
+  // non 0.600 (che sarebbe l'ISF calcolato sulla sola riga, il bug corretto in questa fix wave).
+  for (const v of voci) {
+    assert.equal(v.isf, '1.200');
+  }
+});
+
 test('trovaPropostaProvvisoria: una sola riga per assegnazione anche con piu sorteggi vinti dalla stessa associazione (I1 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
   const pool = new Pool({ connectionString: dsn });
   t.after(() => pool.end());
