@@ -99,6 +99,7 @@ import {
 } from './concertazione.ts';
 import { ErroreConflittoFifoConcertazione } from './erroriDominio.ts';
 import { approvaSettimanaTipoDefinitiva } from './settimanaTipoDefinitiva.ts';
+import { confermaConvenzione, listaConvenzioniPerStagione } from './convenzioni.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
 const COOKIE_PATH_OIDC = '/auth/oidc';
@@ -2050,6 +2051,66 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           return e;
         });
         res.status(200).json(esito);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Convenzioni (art. B.31) ---
+
+  app.get(
+    '/backoffice/stagioni/:id/convenzioni',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req, res) => {
+      const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      const stato = req.query.stato === 'in_attesa' || req.query.stato === 'perfezionata' ? req.query.stato : undefined;
+      try {
+        res.status(200).json(await listaConvenzioniPerStagione(pool, stagioneId, stato));
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.put(
+    '/backoffice/convenzioni/:id/conferma',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        const convenzione = await eseguiInTransazione(pool, async (client) => {
+          const c = await confermaConvenzione(client, id, req.utente!.sub);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'conferma_convenzione',
+            entitaTipo: 'convenzioni',
+            entitaId: c.id,
+            dettaglio: { stato: c.stato },
+          });
+          return c;
+        });
+        res.status(200).json(convenzione);
       } catch (err) {
         if (err instanceof ErroreNonTrovato) {
           res.status(404).json({ errore: err.message });
