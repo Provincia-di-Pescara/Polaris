@@ -90,6 +90,9 @@ if (!dsn) {
       eseguiPrimaAssegnazione:
         overrides.eseguiPrimaAssegnazione ??
         (async () => ({ elaborazioneId: randomUUID(), numeroAssegnazioni: 0, roundEseguiti: 0 })),
+      eseguiRiassegnazioneResidua:
+        overrides.eseguiRiassegnazioneResidua ??
+        (async () => ({ elaborazioneId: randomUUID(), numeroAssegnazioni: 0, roundEseguiti: 0 })),
     };
   }
 
@@ -336,6 +339,9 @@ if (!dsn) {
       },
       eseguiPrimaAssegnazione: async () => {
         throw new Error('eseguiPrimaAssegnazione NON deve essere chiamato con uno stagioneId malformato');
+      },
+      eseguiRiassegnazioneResidua: async () => {
+        throw new Error('eseguiRiassegnazioneResidua NON deve essere chiamato con uno stagioneId malformato');
       },
     };
   }

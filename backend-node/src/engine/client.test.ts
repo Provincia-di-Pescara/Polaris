@@ -123,3 +123,18 @@ test('timeout allo scadere produce ErroreMotoreIrraggiungibile', async () => {
     await chiudi();
   }
 });
+
+test('eseguiRiassegnazioneResidua: risposta 200 valida mappata in camelCase', async () => {
+  const { baseUrl, chiudi } = await avviaServerFittizio((req, res) => {
+    assert.equal(req.url, '/stagioni/stagione-4/riassegnazione-residua');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ elaborazione_id: 'elab-3', numero_assegnazioni: 1, round_eseguiti: 1 }));
+  });
+  try {
+    const client = creaClientMotore(baseUrl, 5000);
+    const risultato = await client.eseguiRiassegnazioneResidua('stagione-4');
+    assert.deepEqual(risultato, { elaborazioneId: 'elab-3', numeroAssegnazioni: 1, roundEseguiti: 1 });
+  } finally {
+    await chiudi();
+  }
+});

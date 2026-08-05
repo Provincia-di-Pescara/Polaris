@@ -14,6 +14,12 @@ export interface RisultatoPrimaAssegnazione {
   roundEseguiti: number;
 }
 
+export interface RisultatoRiassegnazioneResidua {
+  elaborazioneId: string;
+  numeroAssegnazioni: number;
+  roundEseguiti: number;
+}
+
 // Il motore non è raggiungibile: connessione rifiutata, DNS, o il nostro
 // timeout (AbortSignal.timeout) è scaduto prima di ricevere una risposta.
 // Non sappiamo se il motore ha effettivamente eseguito qualcosa lato suo.
@@ -28,6 +34,7 @@ export interface ClientMotore {
   eseguiIstruttoria(stagioneId: string): Promise<RisultatoIstruttoria>;
   eseguiBlocchiGara(stagioneId: string): Promise<RisultatoBlocchiGara>;
   eseguiPrimaAssegnazione(stagioneId: string): Promise<RisultatoPrimaAssegnazione>;
+  eseguiRiassegnazioneResidua(stagioneId: string): Promise<RisultatoRiassegnazioneResidua>;
 }
 
 async function chiamaMotore(baseUrl: string, timeoutMs: number, path: string): Promise<unknown> {
@@ -81,6 +88,18 @@ export function creaClientMotore(baseUrl: string, timeoutMs: number): ClientMoto
     },
     async eseguiPrimaAssegnazione(stagioneId) {
       const body = (await chiamaMotore(baseUrl, timeoutMs, `/stagioni/${stagioneId}/prima-assegnazione`)) as {
+        elaborazione_id: string;
+        numero_assegnazioni: number;
+        round_eseguiti: number;
+      };
+      return {
+        elaborazioneId: body.elaborazione_id,
+        numeroAssegnazioni: body.numero_assegnazioni,
+        roundEseguiti: body.round_eseguiti,
+      };
+    },
+    async eseguiRiassegnazioneResidua(stagioneId) {
+      const body = (await chiamaMotore(baseUrl, timeoutMs, `/stagioni/${stagioneId}/riassegnazione-residua`)) as {
         elaborazione_id: string;
         numero_assegnazioni: number;
         round_eseguiti: number;
