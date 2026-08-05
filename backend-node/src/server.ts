@@ -98,6 +98,7 @@ import {
   rigettaProposta,
 } from './concertazione.ts';
 import { ErroreConflittoFifoConcertazione } from './erroriDominio.ts';
+import { approvaSettimanaTipoDefinitiva } from './settimanaTipoDefinitiva.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
 const COOKIE_PATH_OIDC = '/auth/oidc';
@@ -2016,6 +2017,46 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       } catch (err) {
         if (err instanceof ErroreNonTrovato) {
           res.status(404).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Approvazione settimana tipo definitiva (art. B.30) ---
+
+  app.post(
+    '/backoffice/stagioni/:id/approva-definitiva',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        const esito = await eseguiInTransazione(pool, async (client) => {
+          const e = await approvaSettimanaTipoDefinitiva(client, stagioneId);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'approva_settimana_tipo_definitiva',
+            entitaTipo: 'stagioni_sportive',
+            entitaId: stagioneId,
+            dettaglio: { convenzioniCreate: e.convenzioniCreate },
+          });
+          return e;
+        });
+        res.status(200).json(esito);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
           return;
         }
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
