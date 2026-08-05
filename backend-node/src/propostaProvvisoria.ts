@@ -48,6 +48,46 @@ interface RigaVoceProposta {
   articolo_riferimento: string | null;
 }
 
+// I2 (final review): frammento SQL condiviso con settimanaTipoDefinitiva.ts::
+// trovaSettimanaTipoDefinitiva, che ha la stessa identica esigenza (ISF cumulativo +
+// riferimento al sorteggio) estesa con le proprie colonne (concertazione_proposta_id,
+// efficacia). Prima di questa estrazione le ~25 righe sotto erano duplicate verbatim nei
+// due file — un fix futuro su questa logica avrebbe dovuto essere trovato e applicato in
+// entrambi i posti separatamente. Le colonne selezionate qui (fr_finale_minuti, isf,
+// sorteggio_id, articolo_riferimento) e i JOIN richiesti vanno sempre usati insieme.
+//
+// ISF = VA/FR (art. A.13). VA è il valore CUMULATIVO assegnato all'associazione su tutte
+// le sue assegnazioni attive nella stagione (stessa definizione del motore Go,
+// engine-go/internal/postgres/assegnazione.go::caricaStatoIniziale), non il valore_minuti
+// della singola riga — un'associazione con più slot deve mostrare lo stesso ISF cumulativo
+// su ciascuna delle proprie righe, non un ISF sotto-stimato per riga. La window function
+// somma solo sulle righe già filtrate da WHERE/JOIN della query che include questo
+// frammento (stato IN ('provvisoria','validata') per la stagione), non sulla tabella
+// intera: opera sul result-set dopo il filtro, non prima.
+// Calcolato qui e non letto da assegnazioni.isf_al_momento (colonna mai scritta dal motore
+// Go, sempre NULL in pratica — vedi CLAUDE.md). FR=0 => ISF non definito (regola di
+// dominio consolidata, mai divisione per zero). FR è stabile per associazione in questa
+// query (un'unica domanda per associazione per stagione, vedi
+// domande_associazione_stagione_uq), quindi dividere la VA cumulativa per il FR di una
+// qualunque riga dell'associazione è sicuro.
+export const COLONNE_ISF_SORTEGGIO = `fr.fr_finale_minuti::text AS fr_finale_minuti,
+            (CASE WHEN fr.fr_finale_minuti IS NULL OR fr.fr_finale_minuti = 0 THEN NULL
+                  ELSE ROUND(SUM(a.valore_minuti) OVER (PARTITION BY a.associazione_id) / fr.fr_finale_minuti, 3) END)::text AS isf,
+            so.id AS sorteggio_id, so.articolo_riferimento`;
+
+// LATERAL con LIMIT 1: la tabella sorteggi non ha un discriminatore per-slot/fascia, solo
+// (elaborazione_id, vincitore_associazione_id). Se un'associazione vince più sorteggi
+// nella stessa elaborazione, questo riferimento ne mostra uno arbitrario (il più vecchio
+// per seme generato) — limite noto, non un cambio di schema in questa fix wave. Senza
+// LATERAL, il JOIN diretto duplicava ogni riga di assegnazione una volta per sorteggio
+// vinto dalla stessa associazione nella stessa elaborazione.
+export const JOIN_ISF_SORTEGGIO = `LEFT JOIN fabbisogni_riconosciuti fr ON fr.domanda_id = a.domanda_id
+     LEFT JOIN LATERAL (
+       SELECT id, articolo_riferimento FROM sorteggi
+       WHERE elaborazione_id = a.elaborazione_id AND vincitore_associazione_id = a.associazione_id
+       ORDER BY seme_generato_il ASC LIMIT 1
+     ) so ON true`;
+
 // Disponibile solo dopo la pubblicazione (B.23): 'concertazione' o 'definitiva' (quando il
 // blocco 4/4 chiuderà la settimana tipo definitiva, questa vista resta comunque valida
 // come consultazione storica).
@@ -64,38 +104,10 @@ export async function trovaPropostaProvvisoria(db: Db, stagioneId: string): Prom
   }
   const r = await db.query<RigaVoceProposta>(
     `SELECT a.slot_id, a.associazione_id, a.tipo, a.valore_minuti::text AS valore_minuti,
-            fr.fr_finale_minuti::text AS fr_finale_minuti,
-            -- ISF = VA/FR (art. A.13). VA è il valore CUMULATIVO assegnato all'associazione su
-            -- tutte le sue assegnazioni attive nella stagione (stessa definizione del motore Go,
-            -- engine-go/internal/postgres/assegnazione.go::caricaStatoIniziale), non il
-            -- valore_minuti della singola riga — un'associazione con più slot deve mostrare lo
-            -- stesso ISF cumulativo su ciascuna delle proprie righe, non un ISF sotto-stimato
-            -- per riga. La window function somma solo sulle righe già filtrate da WHERE/JOIN di
-            -- questa query (stato IN ('provvisoria','validata') per questa stagione), non sulla
-            -- tabella intera: opera sul result-set dopo il filtro, non prima.
-            -- Calcolato qui e non letto da assegnazioni.isf_al_momento (colonna mai scritta dal
-            -- motore Go, sempre NULL in pratica — vedi CLAUDE.md). FR=0 => ISF non definito
-            -- (regola di dominio consolidata, mai divisione per zero). FR è stabile per
-            -- associazione in questa query (un'unica domanda per associazione per stagione,
-            -- vedi domande_associazione_stagione_uq), quindi dividere la VA cumulativa per il FR
-            -- di una qualunque riga dell'associazione è sicuro.
-            (CASE WHEN fr.fr_finale_minuti IS NULL OR fr.fr_finale_minuti = 0 THEN NULL
-                  ELSE ROUND(SUM(a.valore_minuti) OVER (PARTITION BY a.associazione_id) / fr.fr_finale_minuti, 3) END)::text AS isf,
-            so.id AS sorteggio_id, so.articolo_riferimento
+            ${COLONNE_ISF_SORTEGGIO}
      FROM assegnazioni a
      JOIN slot_settimana_tipo st ON st.id = a.slot_id
-     LEFT JOIN fabbisogni_riconosciuti fr ON fr.domanda_id = a.domanda_id
-     -- LATERAL con LIMIT 1: la tabella sorteggi non ha un discriminatore per-slot/fascia, solo
-     -- (elaborazione_id, vincitore_associazione_id). Se un'associazione vince più sorteggi
-     -- nella stessa elaborazione, questo riferimento ne mostra uno arbitrario (il più vecchio
-     -- per seme generato) — limite noto, non un cambio di schema in questa fix wave. Senza
-     -- LATERAL, il JOIN diretto duplicava ogni riga di assegnazione una volta per sorteggio
-     -- vinto dalla stessa associazione nella stessa elaborazione.
-     LEFT JOIN LATERAL (
-       SELECT id, articolo_riferimento FROM sorteggi
-       WHERE elaborazione_id = a.elaborazione_id AND vincitore_associazione_id = a.associazione_id
-       ORDER BY seme_generato_il ASC LIMIT 1
-     ) so ON true
+     ${JOIN_ISF_SORTEGGIO}
      WHERE st.stagione_id = $1 AND a.stato IN ('provvisoria', 'validata')
      ORDER BY st.giorno_settimana, st.orario_inizio`,
     [stagioneId],

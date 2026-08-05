@@ -1,5 +1,6 @@
 import type { Db } from './db.ts';
 import { ErroreNonTrovato, ErroreStatoNonValidoPerTransizione } from './erroriDominio.ts';
+import { COLONNE_ISF_SORTEGGIO, JOIN_ISF_SORTEGGIO } from './propostaProvvisoria.ts';
 
 // art. B.30: approva il quadro definitivo. Nessuna precondizione oltre lo stato — la
 // riassegnazione residua (art. B.29) è un'azione discrezionale separata, non un
@@ -94,11 +95,13 @@ interface RigaVoceDefinitiva {
 
 const STATI_STAGIONE_CON_DEFINITIVA = ['definitiva', 'chiusa'];
 
-// art. B.30-31: stessa query di propostaProvvisoria.ts::trovaPropostaProvvisoria (ISF
-// cumulativo via window function, LATERAL su sorteggi per evitare fan-out — vedi i
-// commenti lì per il ragionamento completo, non ripetuto qui), estesa con il riferimento
-// all'accordo di concertazione (se la fascia deriva da uno scambio validato) e
-// l'efficacia (B.31: subordinata al perfezionamento della convenzione).
+// art. B.30-31: riusa il frammento SQL condiviso con propostaProvvisoria.ts::
+// trovaPropostaProvvisoria (COLONNE_ISF_SORTEGGIO/JOIN_ISF_SORTEGGIO — ISF cumulativo via
+// window function, LATERAL su sorteggi per evitare fan-out, vedi i commenti lì per il
+// ragionamento completo, non ripetuto qui — I2 final review, prima duplicato verbatim in
+// entrambi i file), estesa con il riferimento all'accordo di concertazione (se la fascia
+// deriva da uno scambio validato) e l'efficacia (B.31: subordinata al perfezionamento
+// della convenzione).
 export async function trovaSettimanaTipoDefinitiva(
   db: Db,
   stagioneId: string,
@@ -114,20 +117,12 @@ export async function trovaSettimanaTipoDefinitiva(
 
   const fasce = await db.query<RigaVoceDefinitiva>(
     `SELECT a.slot_id, a.associazione_id, a.tipo, a.valore_minuti::text AS valore_minuti,
-            fr.fr_finale_minuti::text AS fr_finale_minuti,
-            (CASE WHEN fr.fr_finale_minuti IS NULL OR fr.fr_finale_minuti = 0 THEN NULL
-                  ELSE ROUND(SUM(a.valore_minuti) OVER (PARTITION BY a.associazione_id) / fr.fr_finale_minuti, 3) END)::text AS isf,
-            so.id AS sorteggio_id, so.articolo_riferimento,
+            ${COLONNE_ISF_SORTEGGIO},
             a.concertazione_proposta_id,
             COALESCE(c.stato = 'perfezionata', false) AS efficace
      FROM assegnazioni a
      JOIN slot_settimana_tipo st ON st.id = a.slot_id
-     LEFT JOIN fabbisogni_riconosciuti fr ON fr.domanda_id = a.domanda_id
-     LEFT JOIN LATERAL (
-       SELECT id, articolo_riferimento FROM sorteggi
-       WHERE elaborazione_id = a.elaborazione_id AND vincitore_associazione_id = a.associazione_id
-       ORDER BY seme_generato_il ASC LIMIT 1
-     ) so ON true
+     ${JOIN_ISF_SORTEGGIO}
      LEFT JOIN convenzioni c ON c.assegnazione_id = a.id
      WHERE st.stagione_id = $1 AND a.stato IN ('provvisoria', 'validata')
      ORDER BY st.giorno_settimana, st.orario_inizio`,
