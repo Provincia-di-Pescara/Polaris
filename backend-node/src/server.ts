@@ -2046,7 +2046,7 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
             azione: 'approva_settimana_tipo_definitiva',
             entitaTipo: 'stagioni_sportive',
             entitaId: stagioneId,
-            dettaglio: { convenzioniCreate: e.convenzioniCreate },
+            dettaglio: { convenzioniCreate: e.convenzioniCreate, assegnazioniSenzaIstituzioneSaltate: e.assegnazioniSenzaIstituzioneSaltate },
           });
           return e;
         });

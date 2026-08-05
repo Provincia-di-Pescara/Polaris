@@ -5,7 +5,10 @@ import { ErroreNonTrovato, ErroreStatoNonValidoPerTransizione } from './erroriDo
 // riassegnazione residua (art. B.29) è un'azione discrezionale separata, non un
 // prerequisito rigido (l'admin può approvare anche senza rieseguirla se non restano
 // fasce libere da assegnare).
-export async function approvaSettimanaTipoDefinitiva(db: Db, stagioneId: string): Promise<{ convenzioniCreate: number }> {
+export async function approvaSettimanaTipoDefinitiva(
+  db: Db,
+  stagioneId: string,
+): Promise<{ convenzioniCreate: number; assegnazioniSenzaIstituzioneSaltate: number }> {
   const r = await db.query(
     `UPDATE stagioni_sportive SET stato = 'definitiva' WHERE id = $1 AND stato = 'concertazione' RETURNING id`,
     [stagioneId],
@@ -23,6 +26,15 @@ export async function approvaSettimanaTipoDefinitiva(db: Db, stagioneId: string)
   // assegnazione attiva che non ne ha già una (copre singola/blocco_allenamento/
   // blocco_gara, B.31 non distingue per tipo). NOT EXISTS la rende idempotente: una
   // riapprovazione non duplica le convenzioni già create.
+  // `impianti.istituzione_scolastica_id` è NULLABLE (un impianto può legittimamente
+  // esistere senza istituzione assegnata, il CRUD lo permette) mentre
+  // `convenzioni.istituzione_scolastica_id` è NOT NULL — senza il filtro esplicito
+  // l'INSERT...SELECT falliva con una violazione NOT NULL grezza (23502) non appena una
+  // sola assegnazione attiva ricadeva su un impianto del genere, portando al ROLLBACK
+  // dell'intera transazione di approvazione (trovato dalla final review, verificato
+  // empiricamente contro Postgres reale). Le assegnazioni filtrate qui semplicemente non
+  // ricevono una convenzione (art. B.31 parla di efficacia "presso una palestra
+  // scolastica" — un impianto senza istituzione non ne ha una), non bloccano l'approvazione.
   const convenzioni = await db.query(
     `INSERT INTO convenzioni (assegnazione_id, istituzione_scolastica_id)
      SELECT a.id, i.istituzione_scolastica_id
@@ -31,11 +43,28 @@ export async function approvaSettimanaTipoDefinitiva(db: Db, stagioneId: string)
      JOIN spazi_sportivi sp ON sp.id = st.spazio_id
      JOIN impianti i ON i.id = sp.impianto_id
      WHERE st.stagione_id = $1 AND a.stato IN ('provvisoria', 'validata')
+       AND i.istituzione_scolastica_id IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM convenzioni c WHERE c.assegnazione_id = a.id)
      RETURNING id`,
     [stagioneId],
   );
-  return { convenzioniCreate: convenzioni.rowCount ?? 0 };
+
+  const saltate = await db.query<{ count: string }>(
+    `SELECT count(*)::text
+     FROM assegnazioni a
+     JOIN slot_settimana_tipo st ON st.id = a.slot_id
+     JOIN spazi_sportivi sp ON sp.id = st.spazio_id
+     JOIN impianti i ON i.id = sp.impianto_id
+     WHERE st.stagione_id = $1 AND a.stato IN ('provvisoria', 'validata')
+       AND i.istituzione_scolastica_id IS NULL
+       AND NOT EXISTS (SELECT 1 FROM convenzioni c WHERE c.assegnazione_id = a.id)`,
+    [stagioneId],
+  );
+
+  return {
+    convenzioniCreate: convenzioni.rowCount ?? 0,
+    assegnazioniSenzaIstituzioneSaltate: Number(saltate.rows[0]!.count),
+  };
 }
 
 export interface VoceSettimanaTipoDefinitiva {

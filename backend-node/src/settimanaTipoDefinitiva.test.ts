@@ -58,6 +58,7 @@ test('approvaSettimanaTipoDefinitiva transiziona stato e crea una convenzione pe
 
   const esito = await approvaSettimanaTipoDefinitiva(pool, fx.stagioneId);
   assert.equal(esito.convenzioniCreate, 1);
+  assert.equal(esito.assegnazioniSenzaIstituzioneSaltate, 0);
 
   const stato = await pool.query<{ stato: string }>(`SELECT stato FROM stagioni_sportive WHERE id = $1`, [fx.stagioneId]);
   assert.equal(stato.rows[0]!.stato, 'definitiva');
@@ -94,6 +95,49 @@ test('approvaSettimanaTipoDefinitiva lancia ErroreNonTrovato su stagione inesist
   const pool = new Pool({ connectionString: dsn });
   t.after(() => pool.end());
   await assert.rejects(() => approvaSettimanaTipoDefinitiva(pool, randomUUID()), ErroreNonTrovato);
+});
+
+test('approvaSettimanaTipoDefinitiva non fallisce e conta le assegnazioni su impianti senza istituzione (C1)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+
+  // Secondo impianto/spazio/slot/assegnazione nella stessa stagione, impianto SENZA istituzione.
+  const disciplina2 = await creaDisciplina(pool, { codice: `RUGBY-${randomUUID().slice(0, 8)}`, denominazione: 'Rugby' });
+  const impiantoSenzaIstituzione = await creaImpianto(pool, { denominazione: 'Palazzetto senza istituzione' });
+  const spazio2 = await creaSpazio(pool, { impiantoId: impiantoSenzaIstituzione.id, denominazione: 'Campo 2', disciplineCompatibili: [disciplina2.codice] });
+  const slot2 = await creaSlot(pool, { stagioneId: fx.stagioneId, spazioId: spazio2.id, giornoSettimana: 2, orarioInizio: '18:00', orarioFine: '19:00' });
+  const associazione2 = await pool.query<{ id: string }>(
+    `INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ($1, $2) RETURNING id`,
+    [`ASD stt2 ${randomUUID()}`, `PIVA-${randomUUID().slice(0, 8)}`],
+  );
+  const persona2 = await pool.query<{ id: string }>(
+    `INSERT INTO persone_fisiche (codice_fiscale, nome, cognome, oidc_subject, oidc_provider) VALUES ($1, 'Test', 'Stt2', $2, 'spid') RETURNING id`,
+    [`TSTST2${randomUUID().slice(0, 10).toUpperCase()}`, randomUUID()],
+  );
+  const domanda2 = await creaDomanda(
+    pool,
+    {
+      associazioneId: associazione2.rows[0]!.id, stagioneId: fx.stagioneId, disciplineCodici: [disciplina2.codice],
+      numeroTesserati: 10, numeroAtletiPartecipanti: 8, numeroSquadre: 1, numeroSquadreFederaliStagionePrecedente: 0,
+      attivitaGiovanile: true, attivitaAgonistica: false, attivitaParalimpicaInclusiva: false,
+      fabbisognoMinimoMinuti: '60.000', fabbisognoOttimaleMinuti: '60.000',
+      preferenze: [slot2.id], blocchiAllenamento: [], richiedeGiornataGara: false, richiesteGiornataGara: [],
+    },
+    persona2.rows[0]!.id,
+  );
+  await pool.query(`UPDATE domande SET stato = 'ammessa' WHERE id = $1`, [domanda2.id]);
+  await pool.query(
+    `INSERT INTO assegnazioni (slot_id, domanda_id, associazione_id, tipo, valore_minuti, stato) VALUES ($1, $2, $3, 'singola', 60, 'provvisoria')`,
+    [slot2.id, domanda2.id, associazione2.rows[0]!.id],
+  );
+
+  const esito = await approvaSettimanaTipoDefinitiva(pool, fx.stagioneId);
+  assert.equal(esito.convenzioniCreate, 1); // solo la fixture con istituzione
+  assert.equal(esito.assegnazioniSenzaIstituzioneSaltate, 1); // la seconda, senza istituzione
+
+  const stato = await pool.query<{ stato: string }>(`SELECT stato FROM stagioni_sportive WHERE id = $1`, [fx.stagioneId]);
+  assert.equal(stato.rows[0]!.stato, 'definitiva');
 });
 
 test('trovaSettimanaTipoDefinitiva rifiuta prima dell\'approvazione', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
