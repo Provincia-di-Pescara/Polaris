@@ -240,7 +240,7 @@ func CaricaSnapshotRoundRobin(ctx context.Context, pool *pgxpool.Pool, stagioneI
 // PersistiEsitoRoundRobin scrive l'esito del round-robin in transazione: la riga
 // elaborazioni, tutte le assegnazioni e, dove è stato necessario, il verbale di
 // sorteggio tracciato con i suoi candidati.
-func PersistiEsitoRoundRobin(ctx context.Context, pool *pgxpool.Pool, stagioneID, parametricoVersioneID string, snapshot SnapshotRoundRobin, esito roundrobin.Esito) (elaborazioneID string, err error) {
+func PersistiEsitoRoundRobin(ctx context.Context, pool *pgxpool.Pool, stagioneID, parametricoVersioneID, tipo string, snapshot SnapshotRoundRobin, esito roundrobin.Esito) (elaborazioneID string, err error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("apertura transazione round-robin: %w", err)
@@ -249,9 +249,9 @@ func PersistiEsitoRoundRobin(ctx context.Context, pool *pgxpool.Pool, stagioneID
 
 	err = tx.QueryRow(ctx, `
 		INSERT INTO elaborazioni (stagione_id, tipo, parametrico_versione_id, conclusa_il, stato, numero_round_eseguiti)
-		VALUES ($1, 'prima_assegnazione', $2, now(), 'completata', $3)
+		VALUES ($1, $2, $3, now(), 'completata', $4)
 		RETURNING id
-	`, stagioneID, parametricoVersioneID, esito.RoundEseguiti).Scan(&elaborazioneID)
+	`, stagioneID, tipo, parametricoVersioneID, esito.RoundEseguiti).Scan(&elaborazioneID)
 	if err != nil {
 		return "", fmt.Errorf("inserimento elaborazione: %w", err)
 	}

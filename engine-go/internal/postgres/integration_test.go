@@ -158,3 +158,92 @@ func TestIntegrazione_IstruttoriaERoundRobin(t *testing.T) {
 		t.Errorf("stato elaborazione = %s, atteso completata", statoElaborazione)
 	}
 }
+
+func TestIntegrazione_RiassegnazioneResidua(t *testing.T) {
+	pool := connessioneTest(t)
+	ctx := context.Background()
+
+	must := func(query string, args ...any) string {
+		var id string
+		if err := pool.QueryRow(ctx, query+" RETURNING id", args...).Scan(&id); err != nil {
+			t.Fatalf("setup fixture (%s): %v", query, err)
+		}
+		return id
+	}
+
+	sfx := suffissoCasuale(t)
+	stagioneID := must(`INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, $2, $3)`,
+		"2027/2028 - test riassegnazione "+sfx, "2027-09-01", "2028-06-30")
+	impiantoID := must(`INSERT INTO impianti (denominazione) VALUES ($1)`, "Palestra Riassegnazione")
+	spazioID := must(`INSERT INTO spazi_sportivi (impianto_id, denominazione) VALUES ($1, $2)`, impiantoID, "Campo")
+	slot1ID := must(`INSERT INTO slot_settimana_tipo (stagione_id, spazio_id, giorno_settimana, orario_inizio, orario_fine) VALUES ($1, $2, 1, '16:30', '18:00')`,
+		stagioneID, spazioID)
+	slot2ID := must(`INSERT INTO slot_settimana_tipo (stagione_id, spazio_id, giorno_settimana, orario_inizio, orario_fine) VALUES ($1, $2, 1, '18:00', '19:30')`,
+		stagioneID, spazioID)
+	personaID := must(`INSERT INTO persone_fisiche (codice_fiscale, nome, cognome, oidc_subject, oidc_provider) VALUES ($1, 'Test', 'Riassegnazione', $2, 'spid')`,
+		"TSTRSS-"+sfx, "sub-riassegnazione-"+sfx)
+	assoc1ID := must(`INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ($1, $2)`, "ASD Riassegnazione Uno "+sfx, "91"+sfx+"001")
+	assoc2ID := must(`INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ($1, $2)`, "ASD Riassegnazione Due "+sfx, "91"+sfx+"002")
+
+	domanda1ID := must(`
+		INSERT INTO domande (numero_protocollo, associazione_id, stagione_id, presentata_da_persona_fisica_id,
+			classe_attivita_codice, fabbisogno_minimo_minuti, fabbisogno_ottimale_minuti, stato)
+		VALUES ($1, $2, $3, $4, 'A', 60, 500, 'ammessa')`,
+		"PROT-RSS-"+sfx+"-1", assoc1ID, stagioneID, personaID)
+	domanda2ID := must(`
+		INSERT INTO domande (numero_protocollo, associazione_id, stagione_id, presentata_da_persona_fisica_id,
+			classe_attivita_codice, fabbisogno_minimo_minuti, fabbisogno_ottimale_minuti, stato)
+		VALUES ($1, $2, $3, $4, 'A', 60, 500, 'ammessa')`,
+		"PROT-RSS-"+sfx+"-2", assoc2ID, stagioneID, personaID)
+
+	for _, d := range []string{domanda1ID, domanda2ID} {
+		if _, err := pool.Exec(ctx, `INSERT INTO preferenze (domanda_id, slot_id, ordine_preferenza) VALUES ($1, $2, 1)`, d, slot1ID); err != nil {
+			t.Fatalf("setup preferenza slot1: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO preferenze (domanda_id, slot_id, ordine_preferenza) VALUES ($1, $2, 2)`, d, slot2ID); err != nil {
+			t.Fatalf("setup preferenza slot2: %v", err)
+		}
+	}
+
+	if _, err := EseguiIstruttoria(ctx, pool, stagioneID); err != nil {
+		t.Fatalf("EseguiIstruttoria: %v", err)
+	}
+
+	// Prima esecuzione: 2 associazioni, 2 slot -> entrambi assegnati, nessuna fascia residua.
+	esitoPrimo, _, err := EseguiRoundRobin(ctx, pool, stagioneID, semeIntegrationTest)
+	if err != nil {
+		t.Fatalf("EseguiRoundRobin: %v", err)
+	}
+	if len(esitoPrimo.Assegnazioni) != 2 {
+		t.Fatalf("prima esecuzione: %d assegnazioni, attese 2", len(esitoPrimo.Assegnazioni))
+	}
+
+	// Riassegnazione residua sulla STESSA stagione: nessuno slot libero rimasto, deve
+	// produrre 0 nuove assegnazioni e un'elaborazione tipo='riassegnazione_residue'
+	// distinta da quella di prima_assegnazione, senza toccare le 2 assegnazioni esistenti.
+	esitoResiduo, elaborazioneResiduoID, err := EseguiRiassegnazioneResidua(ctx, pool, stagioneID, semeIntegrationTest)
+	if err != nil {
+		t.Fatalf("EseguiRiassegnazioneResidua: %v", err)
+	}
+	if len(esitoResiduo.Assegnazioni) != 0 {
+		t.Fatalf("riassegnazione residua: %d assegnazioni, attese 0 (nessuno slot libero)", len(esitoResiduo.Assegnazioni))
+	}
+
+	var tipoPersistito string
+	if err := pool.QueryRow(ctx, `SELECT tipo FROM elaborazioni WHERE id = $1`, elaborazioneResiduoID).Scan(&tipoPersistito); err != nil {
+		t.Fatalf("lettura tipo elaborazione: %v", err)
+	}
+	if tipoPersistito != "riassegnazione_residue" {
+		t.Errorf("tipo elaborazione = %q, atteso riassegnazione_residue", tipoPersistito)
+	}
+
+	var numAssegnazioniTotali int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM assegnazioni a JOIN slot_settimana_tipo st ON st.id = a.slot_id
+		WHERE st.stagione_id = $1 AND a.stato IN ('provvisoria', 'validata')`, stagioneID).Scan(&numAssegnazioniTotali); err != nil {
+		t.Fatalf("conteggio assegnazioni totali: %v", err)
+	}
+	if numAssegnazioniTotali != 2 {
+		t.Errorf("assegnazioni attive totali dopo riassegnazione = %d, attese 2 (invariate)", numAssegnazioniTotali)
+	}
+}
