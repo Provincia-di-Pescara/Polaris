@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { approvaSettimanaTipoDefinitiva } from './settimanaTipoDefinitiva.ts';
+import { approvaSettimanaTipoDefinitiva, trovaSettimanaTipoDefinitiva } from './settimanaTipoDefinitiva.ts';
 import { creaDisciplina } from './discipline.ts';
 import { creaIstituzione } from './istituzioni.ts';
 import { creaImpianto } from './impianti.ts';
@@ -94,4 +94,30 @@ test('approvaSettimanaTipoDefinitiva lancia ErroreNonTrovato su stagione inesist
   const pool = new Pool({ connectionString: dsn });
   t.after(() => pool.end());
   await assert.rejects(() => approvaSettimanaTipoDefinitiva(pool, randomUUID()), ErroreNonTrovato);
+});
+
+test('trovaSettimanaTipoDefinitiva rifiuta prima dell\'approvazione', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  await assert.rejects(() => trovaSettimanaTipoDefinitiva(pool, fx.stagioneId), ErroreStatoNonValidoPerTransizione);
+});
+
+test('trovaSettimanaTipoDefinitiva: fasce assegnate + slot liberi + efficacia dopo approvazione', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  // Un secondo slot libero nella stessa stagione, mai assegnato.
+  const spazio = await pool.query<{ spazio_id: string }>(`SELECT spazio_id FROM slot_settimana_tipo WHERE stagione_id = $1 LIMIT 1`, [fx.stagioneId]);
+  const slotLibero = await pool.query<{ id: string }>(
+    `INSERT INTO slot_settimana_tipo (stagione_id, spazio_id, giorno_settimana, orario_inizio, orario_fine) VALUES ($1, $2, 3, '18:00', '19:00') RETURNING id`,
+    [fx.stagioneId, spazio.rows[0]!.spazio_id],
+  );
+
+  await approvaSettimanaTipoDefinitiva(pool, fx.stagioneId);
+  const esito = await trovaSettimanaTipoDefinitiva(pool, fx.stagioneId);
+
+  assert.equal(esito.fasce.length, 1);
+  assert.equal(esito.fasce[0]!.efficace, false); // convenzione ancora in_attesa
+  assert.deepEqual(esito.slotLiberi, [slotLibero.rows[0]!.id]);
 });

@@ -98,7 +98,7 @@ import {
   rigettaProposta,
 } from './concertazione.ts';
 import { ErroreConflittoFifoConcertazione } from './erroriDominio.ts';
-import { approvaSettimanaTipoDefinitiva } from './settimanaTipoDefinitiva.ts';
+import { approvaSettimanaTipoDefinitiva, trovaSettimanaTipoDefinitiva } from './settimanaTipoDefinitiva.ts';
 import { confermaConvenzione, listaConvenzioniPerStagione } from './convenzioni.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
@@ -2111,6 +2111,34 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           return c;
         });
         res.status(200).json(convenzione);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Pubblico: settimana tipo definitiva (art. B.30-31) ---
+
+  app.get(
+    '/pubblico/stagioni/:id/settimana-tipo-definitiva',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        res.status(200).json(await trovaSettimanaTipoDefinitiva(pool, stagioneId));
       } catch (err) {
         if (err instanceof ErroreNonTrovato) {
           res.status(404).json({ errore: err.message });
