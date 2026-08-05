@@ -16,7 +16,8 @@ const dsn = process.env.TEST_DATABASE_URL;
 
 async function creaFixtureConConvenzione(pool: Pool) {
   const disciplina = await creaDisciplina(pool, { codice: `SCHERMA-${randomUUID().slice(0, 8)}`, denominazione: 'Scherma' });
-  const istituzione = await creaIstituzione(pool, { denominazione: `Istituto conv ${randomUUID()}` });
+  const istituzioneDenominazione = `Istituto conv ${randomUUID()}`;
+  const istituzione = await creaIstituzione(pool, { denominazione: istituzioneDenominazione });
   const impianto = await creaImpianto(pool, { denominazione: 'Palestra conv', istituzioneScolasticaId: istituzione.id });
   const spazio = await creaSpazio(pool, { impiantoId: impianto.id, denominazione: 'Sala conv', disciplineCompatibili: [disciplina.codice] });
   const stagione = await pool.query<{ id: string }>(
@@ -25,9 +26,10 @@ async function creaFixtureConConvenzione(pool: Pool) {
   );
   const stagioneId = stagione.rows[0]!.id;
   const slot = await creaSlot(pool, { stagioneId, spazioId: spazio.id, giornoSettimana: 1, orarioInizio: '18:00', orarioFine: '19:00' });
+  const associazioneDenominazione = `ASD conv ${randomUUID()}`;
   const associazione = await pool.query<{ id: string }>(
     `INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ($1, $2) RETURNING id`,
-    [`ASD conv ${randomUUID()}`, `PIVA-${randomUUID().slice(0, 8)}`],
+    [associazioneDenominazione, `PIVA-${randomUUID().slice(0, 8)}`],
   );
   const persona = await pool.query<{ id: string }>(
     `INSERT INTO persone_fisiche (codice_fiscale, nome, cognome, oidc_subject, oidc_provider) VALUES ($1, 'Test', 'Conv', $2, 'spid') RETURNING id`,
@@ -58,7 +60,17 @@ async function creaFixtureConConvenzione(pool: Pool) {
     `INSERT INTO utenti_backoffice (email, password_hash, nome, cognome, ruolo, stato) VALUES ($1, 'x', 'Test', 'Admin', 'admin', 'attivo') RETURNING id`,
     [`conv-admin-${randomUUID()}@test.local`],
   );
-  return { stagioneId, convenzioneId: convenzione.rows[0]!.id, adminId: admin.rows[0]!.id };
+  return {
+    stagioneId,
+    convenzioneId: convenzione.rows[0]!.id,
+    adminId: admin.rows[0]!.id,
+    associazioneId: associazione.rows[0]!.id,
+    associazioneDenominazione,
+    istituzioneScolasticaDenominazione: istituzioneDenominazione,
+    giornoSettimana: 1,
+    orarioInizio: '18:00',
+    orarioFine: '19:00',
+  };
 }
 
 test('confermaConvenzione transiziona a perfezionata', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
@@ -102,4 +114,20 @@ test('listaConvenzioniPerStagione filtra per stato', { skip: dsn ? false : 'TEST
   assert.equal(perfezionate.length, 1);
   const ancoraInAttesa = await listaConvenzioniPerStagione(pool, fx.stagioneId, 'in_attesa');
   assert.equal(ancoraInAttesa.length, 0);
+});
+
+test('listaConvenzioniPerStagione popola i dettagli per la coda di lavoro (I3 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixtureConConvenzione(pool);
+
+  const lista = await listaConvenzioniPerStagione(pool, fx.stagioneId);
+  assert.equal(lista.length, 1);
+  const riga = lista[0]!;
+  assert.equal(riga.associazioneId, fx.associazioneId);
+  assert.equal(riga.associazioneDenominazione, fx.associazioneDenominazione);
+  assert.equal(riga.istituzioneScolasticaDenominazione, fx.istituzioneScolasticaDenominazione);
+  assert.equal(riga.giornoSettimana, fx.giornoSettimana);
+  assert.equal(riga.orarioInizio, fx.orarioInizio);
+  assert.equal(riga.orarioFine, fx.orarioFine);
 });
