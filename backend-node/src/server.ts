@@ -1763,6 +1763,10 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       res.status(409).json({ errore: err.message });
       return;
     }
+    if (err instanceof ErroreStatoNonValidoPerTransizione) {
+      res.status(409).json({ errore: err.message });
+      return;
+    }
     if (err instanceof ErroreMotoreIrraggiungibile) {
       // Finding 5 (review finale "coda motore Go"): il ROLLBACK della transazione (innescato
       // da questo errore) rilascia SUBITO il lock advisory, ma non sappiamo se il motore Go
@@ -1905,6 +1909,67 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           await registraOperazione(client, {
             attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
             azione: 'esegui_prima_assegnazione',
+            entitaTipo: 'stagioni_sportive',
+            entitaId: stagioneId,
+            dettaglio: r as unknown as Record<string, unknown>,
+          });
+          return r;
+        });
+        res.status(200).json(risultato);
+      } catch (err) {
+        gestisciEsecuzioneMotore(err, res);
+      }
+    },
+  );
+
+  app.post(
+    '/backoffice/stagioni/:id/riassegnazione-residua',
+    limitatoreEsecuzioneMotore,
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      if (!clientMotore) {
+        res.status(500).json({ errore: 'motore non configurato' });
+        return;
+      }
+      try {
+        validaStagioneIdUuid(stagioneId);
+        const risultato = await eseguiInTransazione(pool, async (client) => {
+          const lock = await client.query<{ pg_try_advisory_xact_lock: boolean }>('SELECT pg_try_advisory_xact_lock(hashtext($1))', [
+            stagioneId,
+          ]);
+          if (!lock.rows[0]!.pg_try_advisory_xact_lock) {
+            throw new ErroreElaborazioneInCorso('elaborazione già in corso per questa stagione');
+          }
+          await verificaStagioneEsiste(client, stagioneId);
+          const stagione = await client.query<{ stato: string }>('SELECT stato FROM stagioni_sportive WHERE id = $1', [stagioneId]);
+          if (stagione.rows[0]!.stato !== 'concertazione') {
+            throw new ErroreStatoNonValidoPerTransizione('la stagione non è in fase di concertazione');
+          }
+          // art. B.24: la finestra di concertazione ha una fine — le proposte già accettate
+          // da tutte le parti ma non ancora decise dal backoffice (B.27-28) devono essere
+          // validate/rigettate ESPLICITAMENTE prima di chiudere, per non far scavalcare uno
+          // scambio già consensuale tra associazioni dalla riassegnazione algoritmica.
+          const pendenti = await client.query(
+            `SELECT 1 FROM concertazione_proposte WHERE stagione_id = $1 AND stato = 'accettata_da_tutti' LIMIT 1`,
+            [stagioneId],
+          );
+          if ((pendenti.rowCount ?? 0) > 0) {
+            throw new ErroreStatoNonValidoPerTransizione(
+              'esistono proposte di concertazione accettate da tutte le parti non ancora validate o rigettate',
+            );
+          }
+          // Le proposte mai arrivate a piena accettazione decadono automaticamente alla
+          // chiusura della finestra (nessuna parte ha ancora un interesse consolidato).
+          await client.query(
+            `UPDATE concertazione_proposte SET stato = 'annullata' WHERE stagione_id = $1 AND stato = 'in_attesa_accettazione'`,
+            [stagioneId],
+          );
+          const r = await clientMotore.eseguiRiassegnazioneResidua(stagioneId);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'riassegnazione_residua',
             entitaTipo: 'stagioni_sportive',
             entitaId: stagioneId,
             dettaglio: r as unknown as Record<string, unknown>,
