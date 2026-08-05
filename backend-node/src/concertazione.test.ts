@@ -596,6 +596,42 @@ test('validaProposta: su slot pregiata il valore_minuti persistito è ponderato 
   assert.equal(Number(riga.rows[0]!.valore_minuti), Number(atteso.toFixed(3)));
 });
 
+test('accettaProposta: rifiuta se la stagione non è più in concertazione (C2/I1 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+
+  const proposta = await creaProposta(
+    pool,
+    {
+      stagioneId: fx.stagioneId,
+      tipo: 'scambio_bilaterale',
+      slot: [
+        { slotId: fx.slotAId, associazioneCedenteId: fx.p1.associazioneId, associazioneRiceventeId: fx.p2.associazioneId },
+        { slotId: fx.slotBId, associazioneCedenteId: fx.p2.associazioneId, associazioneRiceventeId: fx.p1.associazioneId },
+      ],
+    },
+    fx.p1.personaId,
+    fx.p1.associazioneId,
+  );
+
+  await pool.query(`UPDATE stagioni_sportive SET stato = 'definitiva' WHERE id = $1`, [fx.stagioneId]);
+
+  await assert.rejects(() => accettaProposta(pool, proposta.id, fx.p2.associazioneId, fx.p2.personaId), ErroreStatoNonValidoPerTransizione);
+});
+
+test('validaProposta: rifiuta se la stagione non è più in concertazione (C2/I1 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const proposta = await propostaAccettata(pool, fx);
+
+  await pool.query(`UPDATE stagioni_sportive SET stato = 'definitiva' WHERE id = $1`, [fx.stagioneId]);
+
+  const admin = await creaOperatoreTest(pool);
+  await assert.rejects(() => validaProposta(pool, proposta.id, admin), ErroreStatoNonValidoPerTransizione);
+});
+
 test('rigettaProposta: rigetto manuale su proposta accettata_da_tutti', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
   const pool = new Pool({ connectionString: dsn });
   t.after(() => pool.end());

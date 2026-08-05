@@ -105,6 +105,21 @@ export interface DatiCreaProposta {
   slot: { slotId: string; associazioneCedenteId?: string | undefined; associazioneRiceventeId: string }[];
 }
 
+// C2/I1 (final review): approva-definitiva chiude la finestra di concertazione
+// (stagione → 'definitiva') ma né accettaProposta né validaProposta verificavano lo stato
+// della stagione — solo la route di CREAZIONE proposta lo faceva. Una proposta pendente
+// poteva quindi essere accettata/validata dopo l'approvazione, riscrivendo assegnazioni già
+// pubblicate nella settimana tipo definitiva senza alcuna possibilità di generare la
+// relativa convenzione. Stessa classe di errore già usata altrove in questo file per le
+// guardie di stato — nessun nuovo concetto, nessuna modifica alle route (già mappano
+// ErroreStatoNonValidoPerTransizione a 409).
+async function verificaStagioneInConcertazione(db: Db, stagioneId: string): Promise<void> {
+  const r = await db.query<{ stato: string }>(`SELECT stato FROM stagioni_sportive WHERE id = $1`, [stagioneId]);
+  if (r.rows[0]?.stato !== 'concertazione') {
+    throw new ErroreStatoNonValidoPerTransizione('la stagione non è più in fase di concertazione');
+  }
+}
+
 async function domandaAmmessaId(db: Db, associazioneId: string, stagioneId: string): Promise<string> {
   const r = await db.query<{ id: string }>(
     `SELECT id FROM domande WHERE associazione_id = $1 AND stagione_id = $2 AND stato = 'ammessa'`,
@@ -218,8 +233,8 @@ export async function listaPropostePerStagioneBackoffice(db: Db, stagioneId: str
 // informativo incrementato ad ogni transizione, non serve un WHERE versione=$ perché il
 // lock FOR UPDATE già esclude la race.
 export async function accettaProposta(db: Db, propostaId: string, associazioneId: string, personaFisicaId: string): Promise<Proposta> {
-  const lock = await db.query<{ stato: StatoProposta }>(
-    `SELECT stato FROM concertazione_proposte WHERE id = $1 FOR UPDATE`,
+  const lock = await db.query<{ stato: StatoProposta; stagione_id: string }>(
+    `SELECT stato, stagione_id FROM concertazione_proposte WHERE id = $1 FOR UPDATE`,
     [propostaId],
   );
   const propostaRiga = lock.rows[0];
@@ -229,6 +244,12 @@ export async function accettaProposta(db: Db, propostaId: string, associazioneId
   if (propostaRiga.stato !== 'in_attesa_accettazione') {
     throw new ErroreStatoNonValidoPerTransizione('la proposta non è in attesa di accettazione');
   }
+  // C2/I1 (final review): senza questa guardia, un'associazione poteva ancora accettare una
+  // proposta pendente dopo che approva-definitiva aveva già chiuso la finestra di
+  // concertazione (transizione stagione a 'definitiva') — la nuova assegnazione risultante
+  // non avrebbe mai potuto ricevere una convenzione (approva-definitiva richiede
+  // stato='concertazione' e non è ri-eseguibile).
+  await verificaStagioneInConcertazione(db, propostaRiga.stagione_id);
   const parte = await db.query<{ accettato_il: Date | null }>(
     `SELECT accettato_il FROM concertazione_proposta_parti WHERE proposta_id = $1 AND associazione_id = $2`,
     [propostaId, associazioneId],
@@ -425,6 +446,8 @@ export async function validaProposta(db: Db, propostaId: string, validataDa: str
   if (propostaRiga.stato !== 'accettata_da_tutti') {
     throw new ErroreStatoNonValidoPerTransizione('la proposta non è accettata da tutte le parti');
   }
+  // C2/I1 (final review): vedi commento su verificaStagioneInConcertazione.
+  await verificaStagioneInConcertazione(db, propostaRiga.stagione_id);
 
   const slotProposta = await db.query<{ slot_id: string; associazione_cedente_id: string | null; associazione_ricevente_id: string }>(
     `SELECT slot_id, associazione_cedente_id, associazione_ricevente_id FROM concertazione_proposta_slot WHERE proposta_id = $1 ORDER BY slot_id`,

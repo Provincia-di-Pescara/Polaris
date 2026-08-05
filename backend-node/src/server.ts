@@ -2040,6 +2040,37 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
       try {
         const esito = await eseguiInTransazione(pool, async (client) => {
+          // C2/I1 (final review): stesso advisory lock non-bloccante delle 4 route
+          // motore-Go — senza, un secondo admin (o la stessa persona in due tab) poteva
+          // chiamare approva-definitiva mentre una riassegnazione-residua era ancora in
+          // corso contro il motore Go (fino a ENGINE_TIMEOUT_MS, default 5 minuti): lo
+          // snapshot delle convenzioni verrebbe preso prima che le assegnazioni della
+          // riassegnazione residua siano committate, e approva-definitiva non è
+          // ri-eseguibile (richiede stato='concertazione').
+          const lock = await client.query<{ pg_try_advisory_xact_lock: boolean }>('SELECT pg_try_advisory_xact_lock(hashtext($1))', [
+            stagioneId,
+          ]);
+          if (!lock.rows[0]!.pg_try_advisory_xact_lock) {
+            throw new ErroreElaborazioneInCorso('elaborazione già in corso per questa stagione');
+          }
+          // Stessa chiusura della finestra di concertazione fatta da riassegnazione-residua
+          // (art. B.24/B.27): 409 se restano proposte accettate da tutte le parti ma non
+          // ancora decise dal backoffice, poi annullamento bulk di quelle mai arrivate a
+          // piena accettazione — approva-definitiva è un altro modo di chiudere la finestra,
+          // non deve lasciarne aperte di pendenti dietro di sé.
+          const pendenti = await client.query(
+            `SELECT 1 FROM concertazione_proposte WHERE stagione_id = $1 AND stato = 'accettata_da_tutti' LIMIT 1`,
+            [stagioneId],
+          );
+          if ((pendenti.rowCount ?? 0) > 0) {
+            throw new ErroreStatoNonValidoPerTransizione(
+              'esistono proposte di concertazione accettate da tutte le parti non ancora validate o rigettate',
+            );
+          }
+          await client.query(
+            `UPDATE concertazione_proposte SET stato = 'annullata' WHERE stagione_id = $1 AND stato = 'in_attesa_accettazione'`,
+            [stagioneId],
+          );
           const e = await approvaSettimanaTipoDefinitiva(client, stagioneId);
           await registraOperazione(client, {
             attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
@@ -2054,6 +2085,10 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       } catch (err) {
         if (err instanceof ErroreNonTrovato) {
           res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreElaborazioneInCorso) {
+          res.status(409).json({ errore: err.message });
           return;
         }
         if (err instanceof ErroreStatoNonValidoPerTransizione) {
