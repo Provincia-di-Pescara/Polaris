@@ -246,4 +246,120 @@ func TestIntegrazione_RiassegnazioneResidua(t *testing.T) {
 	if numAssegnazioniTotali != 2 {
 		t.Errorf("assegnazioni attive totali dopo riassegnazione = %d, attese 2 (invariate)", numAssegnazioniTotali)
 	}
+
+	// I4 (final review): il caso sopra prova solo il no-op (nessuno slot libero, 0 nuove
+	// assegnazioni) — non prova mai il punto reale della B.29, ovvero che uno slot che si
+	// libera durante la concertazione venga effettivamente raccolto e assegnato dalla
+	// riassegnazione residua. Estendiamo lo scenario: uno slot3 nuovo, inserito nella
+	// STESSA stagione DOPO il primo round-robin (simula uno slot liberato in
+	// concertazione), e una terza domanda/associazione la cui unica preferenza è slot3 —
+	// mai vista dal primo round-robin (creata dopo), quindi slot3 resta garantito libero
+	// fino alla riassegnazione residua.
+	type righeOriginali struct {
+		id             string
+		elaborazioneID string
+	}
+	var originali []righeOriginali
+	rowsOrig, err := pool.Query(ctx, `
+		SELECT a.id, a.elaborazione_id FROM assegnazioni a JOIN slot_settimana_tipo st ON st.id = a.slot_id
+		WHERE st.stagione_id = $1 AND a.stato IN ('provvisoria', 'validata') ORDER BY a.id`, stagioneID)
+	if err != nil {
+		t.Fatalf("lettura assegnazioni originali: %v", err)
+	}
+	for rowsOrig.Next() {
+		var r righeOriginali
+		if err := rowsOrig.Scan(&r.id, &r.elaborazioneID); err != nil {
+			t.Fatalf("scan assegnazioni originali: %v", err)
+		}
+		originali = append(originali, r)
+	}
+	rowsOrig.Close()
+	if len(originali) != 2 {
+		t.Fatalf("attese 2 assegnazioni originali prima dell'estensione, trovate %d", len(originali))
+	}
+
+	slot3ID := must(`INSERT INTO slot_settimana_tipo (stagione_id, spazio_id, giorno_settimana, orario_inizio, orario_fine) VALUES ($1, $2, 2, '16:30', '18:00')`,
+		stagioneID, spazioID)
+	personaID3 := must(`INSERT INTO persone_fisiche (codice_fiscale, nome, cognome, oidc_subject, oidc_provider) VALUES ($1, 'Test', 'Riassegnazione3', $2, 'spid')`,
+		"TSTRS3-"+sfx, "sub-riassegnazione3-"+sfx)
+	assoc3ID := must(`INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ($1, $2)`, "ASD Riassegnazione Tre "+sfx, "91"+sfx+"003")
+	domanda3ID := must(`
+		INSERT INTO domande (numero_protocollo, associazione_id, stagione_id, presentata_da_persona_fisica_id,
+			classe_attivita_codice, fabbisogno_minimo_minuti, fabbisogno_ottimale_minuti, stato)
+		VALUES ($1, $2, $3, $4, 'A', 60, 90, 'ammessa')`,
+		"PROT-RSS-"+sfx+"-3", assoc3ID, stagioneID, personaID3)
+	if _, err := pool.Exec(ctx, `INSERT INTO preferenze (domanda_id, slot_id, ordine_preferenza) VALUES ($1, $2, 1)`, domanda3ID, slot3ID); err != nil {
+		t.Fatalf("setup preferenza slot3: %v", err)
+	}
+
+	// Ri-eseguire l'istruttoria sull'intera stagione è idempotente (upsert ON CONFLICT su
+	// domanda_id, vedi EseguiIstruttoria/CLAUDE.md) — calcola FR/coefficienti anche per la
+	// nuova domanda3, senza toccare quelli già calcolati per domanda1/domanda2.
+	if _, err := EseguiIstruttoria(ctx, pool, stagioneID); err != nil {
+		t.Fatalf("EseguiIstruttoria (estensione I4): %v", err)
+	}
+
+	esitoResiduo2, elaborazioneResiduo2ID, err := EseguiRiassegnazioneResidua(ctx, pool, stagioneID, semeIntegrationTest)
+	if err != nil {
+		t.Fatalf("EseguiRiassegnazioneResidua (estensione I4): %v", err)
+	}
+	if len(esitoResiduo2.Assegnazioni) != 1 {
+		t.Fatalf("riassegnazione residua estesa: %d assegnazioni, attesa 1 (slot3 raccolto da domanda3)", len(esitoResiduo2.Assegnazioni))
+	}
+	nuovaAssegnazione := esitoResiduo2.Assegnazioni[0]
+	if nuovaAssegnazione.FasciaID != slot3ID {
+		t.Errorf("nuova assegnazione su slot %q, atteso slot3 %q", nuovaAssegnazione.FasciaID, slot3ID)
+	}
+	if nuovaAssegnazione.AssociazioneID != assoc3ID {
+		t.Errorf("nuova assegnazione ad associazione %q, attesa assoc3 %q", nuovaAssegnazione.AssociazioneID, assoc3ID)
+	}
+
+	// (1) la nuova assegnazione persistita è collegata alla nuova elaborazione residua.
+	var nuovaElaborazioneID string
+	if err := pool.QueryRow(ctx, `
+		SELECT elaborazione_id FROM assegnazioni WHERE slot_id = $1 AND associazione_id = $2 AND stato IN ('provvisoria', 'validata')`,
+		slot3ID, assoc3ID).Scan(&nuovaElaborazioneID); err != nil {
+		t.Fatalf("lettura elaborazione_id nuova assegnazione: %v", err)
+	}
+	if nuovaElaborazioneID != elaborazioneResiduo2ID {
+		t.Errorf("elaborazione_id persistito = %q, atteso %q (elaborazione residua estesa)", nuovaElaborazioneID, elaborazioneResiduo2ID)
+	}
+
+	// (2) le 2 assegnazioni originali del primo round-robin restano identiche (stesso id,
+	// stessa elaborazione_id) — la riassegnazione residua non le ha mai ricalcolate.
+	var dopoOriginali []righeOriginali
+	rowsDopo, err := pool.Query(ctx, `
+		SELECT a.id, a.elaborazione_id FROM assegnazioni a
+		WHERE a.id = ANY($1) AND a.stato IN ('provvisoria', 'validata') ORDER BY a.id`,
+		[]string{originali[0].id, originali[1].id})
+	if err != nil {
+		t.Fatalf("lettura assegnazioni originali dopo estensione: %v", err)
+	}
+	for rowsDopo.Next() {
+		var r righeOriginali
+		if err := rowsDopo.Scan(&r.id, &r.elaborazioneID); err != nil {
+			t.Fatalf("scan assegnazioni originali dopo estensione: %v", err)
+		}
+		dopoOriginali = append(dopoOriginali, r)
+	}
+	rowsDopo.Close()
+	if len(dopoOriginali) != 2 {
+		t.Fatalf("attese 2 assegnazioni originali ancora attive dopo l'estensione, trovate %d", len(dopoOriginali))
+	}
+	for i := range originali {
+		if dopoOriginali[i].id != originali[i].id || dopoOriginali[i].elaborazioneID != originali[i].elaborazioneID {
+			t.Errorf("assegnazione originale %d alterata: prima={%q,%q} dopo={%q,%q}",
+				i, originali[i].id, originali[i].elaborazioneID, dopoOriginali[i].id, dopoOriginali[i].elaborazioneID)
+		}
+	}
+
+	var numAssegnazioniTotaliFinale int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM assegnazioni a JOIN slot_settimana_tipo st ON st.id = a.slot_id
+		WHERE st.stagione_id = $1 AND a.stato IN ('provvisoria', 'validata')`, stagioneID).Scan(&numAssegnazioniTotaliFinale); err != nil {
+		t.Fatalf("conteggio assegnazioni totali finale: %v", err)
+	}
+	if numAssegnazioniTotaliFinale != 3 {
+		t.Errorf("assegnazioni attive totali dopo l'estensione = %d, attese 3 (2 originali + 1 nuova)", numAssegnazioniTotaliFinale)
+	}
 }
