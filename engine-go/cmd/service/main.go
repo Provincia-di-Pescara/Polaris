@@ -46,6 +46,9 @@ func main() {
 		EseguiRoundRobin: func(ctx context.Context, stagioneID, semeHex string) (roundrobin.Esito, string, error) {
 			return postgres.EseguiRoundRobin(ctx, pool, stagioneID, semeHex)
 		},
+		EseguiRiassegnazioneResidua: func(ctx context.Context, stagioneID, semeHex string) (roundrobin.Esito, string, error) {
+			return postgres.EseguiRiassegnazioneResidua(ctx, pool, stagioneID, semeHex)
+		},
 	}
 
 	httpServer := &http.Server{

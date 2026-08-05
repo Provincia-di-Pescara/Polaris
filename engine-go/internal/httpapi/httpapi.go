@@ -18,10 +18,11 @@ import (
 // Server raccoglie le dipendenze necessarie agli handler. GeneraSeme, se nil, usa
 // GeneraSemeCSPRNG di default (iniettabile nei test per un seme deterministico).
 type Server struct {
-	EseguiIstruttoria func(ctx context.Context, stagioneID string) (int, error)
-	EseguiBlocchiGara func(ctx context.Context, stagioneID, semeHex string) (gara.Esito, string, error)
-	EseguiRoundRobin  func(ctx context.Context, stagioneID, semeHex string) (roundrobin.Esito, string, error)
-	GeneraSeme        func() (string, error)
+	EseguiIstruttoria           func(ctx context.Context, stagioneID string) (int, error)
+	EseguiBlocchiGara           func(ctx context.Context, stagioneID, semeHex string) (gara.Esito, string, error)
+	EseguiRoundRobin            func(ctx context.Context, stagioneID, semeHex string) (roundrobin.Esito, string, error)
+	EseguiRiassegnazioneResidua func(ctx context.Context, stagioneID, semeHex string) (roundrobin.Esito, string, error)
+	GeneraSeme                  func() (string, error)
 }
 
 // GeneraSemeCSPRNG implementa il requisito dell'art. B.38: seme casuale generato con
@@ -41,6 +42,7 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("POST /stagioni/{id}/istruttoria", s.handleIstruttoria)
 	mux.HandleFunc("POST /stagioni/{id}/blocchi-gara", s.handleBlocchiGara)
 	mux.HandleFunc("POST /stagioni/{id}/prima-assegnazione", s.handlePrimaAssegnazione)
+	mux.HandleFunc("POST /stagioni/{id}/riassegnazione-residua", s.handleRiassegnazioneResidua)
 	return mux
 }
 
@@ -105,6 +107,35 @@ func (s *Server) handlePrimaAssegnazione(w http.ResponseWriter, r *http.Request)
 	}
 
 	esito, elaborazioneID, err := s.EseguiRoundRobin(r.Context(), stagioneID, seme)
+	if err != nil {
+		scriviErrore(w, err)
+		return
+	}
+
+	scriviJSON(w, http.StatusOK, map[string]any{
+		"elaborazione_id":     elaborazioneID,
+		"numero_assegnazioni": len(esito.Assegnazioni),
+		"round_eseguiti":      esito.RoundEseguiti,
+	})
+}
+
+// handleRiassegnazioneResidua esegue l'art. B.29: come le altre elaborazioni, il seme
+// del sorteggio è generato QUI, prima dell'elaborazione (art. B.38) — anche una
+// riassegnazione residua può richiedere sorteggi (B.21) tra i candidati rimasti.
+func (s *Server) handleRiassegnazioneResidua(w http.ResponseWriter, r *http.Request) {
+	stagioneID := r.PathValue("id")
+
+	generaSeme := s.GeneraSeme
+	if generaSeme == nil {
+		generaSeme = GeneraSemeCSPRNG
+	}
+	seme, err := generaSeme()
+	if err != nil {
+		scriviErrore(w, err)
+		return
+	}
+
+	esito, elaborazioneID, err := s.EseguiRiassegnazioneResidua(r.Context(), stagioneID, seme)
 	if err != nil {
 		scriviErrore(w, err)
 		return

@@ -133,6 +133,65 @@ func TestPrimaAssegnazione_ErroreGenerazioneSeme(t *testing.T) {
 	}
 }
 
+func TestRiassegnazioneResidua_Successo(t *testing.T) {
+	var semeUsato, stagioneRicevuta string
+	s := &Server{
+		GeneraSeme: func() (string, error) { return "seme-di-test", nil },
+		EseguiRiassegnazioneResidua: func(ctx context.Context, stagioneID, semeHex string) (roundrobin.Esito, string, error) {
+			stagioneRicevuta = stagioneID
+			semeUsato = semeHex
+			return roundrobin.Esito{
+				Assegnazioni:  []roundrobin.Assegnazione{{FasciaID: "f1"}},
+				RoundEseguiti: 1,
+			}, "elab-residuo-1", nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/stagioni/stagione-9/riassegnazione-residua", nil)
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, atteso 200, body: %s", rec.Code, rec.Body.String())
+	}
+	if stagioneRicevuta != "stagione-9" {
+		t.Errorf("stagione_id passato = %s, atteso stagione-9", stagioneRicevuta)
+	}
+	if semeUsato != "seme-di-test" {
+		t.Errorf("seme passato a EseguiRiassegnazioneResidua = %s, atteso quello di GeneraSeme", semeUsato)
+	}
+
+	var body struct {
+		ElaborazioneID     string `json:"elaborazione_id"`
+		NumeroAssegnazioni int    `json:"numero_assegnazioni"`
+		RoundEseguiti      int    `json:"round_eseguiti"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("risposta non JSON valido: %v", err)
+	}
+	if body.ElaborazioneID != "elab-residuo-1" || body.NumeroAssegnazioni != 1 || body.RoundEseguiti != 1 {
+		t.Errorf("body = %+v, atteso elaborazione_id=elab-residuo-1 numero_assegnazioni=1 round_eseguiti=1", body)
+	}
+}
+
+func TestRiassegnazioneResidua_ErroreGenerazioneSeme(t *testing.T) {
+	s := &Server{
+		GeneraSeme: func() (string, error) { return "", errors.New("csprng non disponibile") },
+		EseguiRiassegnazioneResidua: func(ctx context.Context, stagioneID, semeHex string) (roundrobin.Esito, string, error) {
+			t.Fatal("EseguiRiassegnazioneResidua non dovrebbe essere chiamato se la generazione del seme fallisce")
+			return roundrobin.Esito{}, "", nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/stagioni/x/riassegnazione-residua", nil)
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, atteso 500", rec.Code)
+	}
+}
+
 func TestGeneraSemeCSPRNG_ProduceEsadecimale64Caratteri(t *testing.T) {
 	seme, err := GeneraSemeCSPRNG()
 	if err != nil {
