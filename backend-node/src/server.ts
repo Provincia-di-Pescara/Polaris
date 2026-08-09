@@ -60,7 +60,8 @@ import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } fro
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
 import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni } from './backofficeSchema.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione } from './backofficeSchema.ts';
+import { registraUtilizzo, trovaUtilizzoPerId, listaUtilizziPerAssegnazione, accogliGiustificazione, rigettaGiustificazione } from './utilizziEffettivi.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
 import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaCreaOsservazione, schemaCreaProposta, schemaAccettaProposta, schemaCreaVariazione, schemaAccettaVariazione } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
@@ -3277,6 +3278,143 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       try {
         res.status(200).json(await listaVariazioniPerStagione(pool, stagioneId, filtri));
       } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Rilevazione utilizzo effettivo (art. B.34) ---
+
+  app.post(
+    '/backoffice/assegnazioni/:id/utilizzi',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const assegnazioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      const parsed = schemaRegistraUtilizzo.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const utilizzo = await eseguiInTransazione(pool, async (client) => {
+          const u = await registraUtilizzo(client, { assegnazioneId, ...parsed.data });
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'registra_utilizzo_effettivo',
+            entitaTipo: 'utilizzi_effettivi',
+            entitaId: u.id,
+            dettaglio: u as unknown as Record<string, unknown>,
+          });
+          return u;
+        });
+        res.status(201).json(utilizzo);
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/backoffice/assegnazioni/:id/utilizzi',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const assegnazioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        res.status(200).json(await listaUtilizziPerAssegnazione(pool, assegnazioneId));
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.put(
+    '/backoffice/utilizzi/:id/accogli-giustificazione',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        const aggiornato = await eseguiInTransazione(pool, async (client) => {
+          const u = await accogliGiustificazione(client, id, req.utente!.sub);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'accoglie_giustificazione',
+            entitaTipo: 'utilizzi_effettivi',
+            entitaId: u.id,
+            dettaglio: { esito: u.esito },
+          });
+          return u;
+        });
+        res.status(200).json(aggiornato);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.put(
+    '/backoffice/utilizzi/:id/rigetta-giustificazione',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      const parsed = schemaRigettaGiustificazione.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const aggiornato = await eseguiInTransazione(pool, async (client) => {
+          const u = await rigettaGiustificazione(client, id, req.utente!.sub, parsed.data.motivazione);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'rigetta_giustificazione',
+            entitaTipo: 'utilizzi_effettivi',
+            entitaId: u.id,
+            dettaglio: { motivazione: parsed.data.motivazione },
+          });
+          return u;
+        });
+        res.status(200).json(aggiornato);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
         if (erroreRiferimento) {
           res.status(400).json({ errore: erroreRiferimento.message });

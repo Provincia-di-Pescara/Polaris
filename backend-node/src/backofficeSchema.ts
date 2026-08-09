@@ -298,3 +298,15 @@ export const schemaFiltriVariazioni = z.object({
   tipo: z.enum(['liberazione', 'recupero', 'scambio_temporaneo', 'utilizzo_occasionale']).optional(),
   stato: z.enum(['in_attesa_accettazione', 'accettata', 'rifiutata', 'annullata']).optional(),
 });
+
+export const schemaRegistraUtilizzo = z.object({
+  data: zDataIso,
+  esito: z.enum(['utilizzato', 'non_utilizzato_giustificato', 'non_utilizzato_non_giustificato', 'indisponibilita_impianto']),
+  note: z.string().min(1).optional(),
+});
+export type RegistraUtilizzoRequest = z.infer<typeof schemaRegistraUtilizzo>;
+
+export const schemaRigettaGiustificazione = z.object({
+  motivazione: z.string().min(1),
+});
+export type RigettaGiustificazioneRequest = z.infer<typeof schemaRigettaGiustificazione>;
