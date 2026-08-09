@@ -60,7 +60,7 @@ import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } fro
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
 import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico } from './backofficeSchema.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita } from './backofficeSchema.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
 import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaCreaOsservazione, schemaCreaProposta, schemaAccettaProposta } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
@@ -100,6 +100,7 @@ import {
 import { ErroreConflittoFifoConcertazione } from './erroriDominio.ts';
 import { approvaSettimanaTipoDefinitiva, trovaSettimanaTipoDefinitiva } from './settimanaTipoDefinitiva.ts';
 import { confermaConvenzione, listaConvenzioniPerStagione } from './convenzioni.ts';
+import { creaIndisponibilita, listaIndisponibilitaPerAssociazione } from './indisponibilita.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
 const COOKIE_PATH_OIDC = '/auth/oidc';
@@ -2995,6 +2996,75 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(409).json({ errore: err.message });
           return;
         }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Indisponibilità sopravvenute (art. B.33) ---
+
+  app.post(
+    '/backoffice/slot/:id/indisponibilita',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const slotId = typeof req.params.id === 'string' ? req.params.id : '';
+      const parsed = schemaCreaIndisponibilita.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const indisponibilita = await eseguiInTransazione(pool, async (client) => {
+          const ind = await creaIndisponibilita(client, { slotId, ...parsed.data });
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'crea_indisponibilita',
+            entitaTipo: 'indisponibilita_sopravvenute',
+            entitaId: ind.id,
+            dettaglio: ind as unknown as Record<string, unknown>,
+          });
+          return ind;
+        });
+        res.status(201).json(indisponibilita);
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/pubblico/associazioni/:id/indisponibilita',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const associazioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      const stagioneId = typeof req.query.stagioneId === 'string' ? req.query.stagioneId : undefined;
+      try {
+        const abilitazione = stagioneId
+          ? await pool.query(
+              `SELECT 1 FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2 AND stagione_id = $3 AND stato = 'approvata' LIMIT 1`,
+              [req.persona!.sub, associazioneId, stagioneId],
+            )
+          : await pool.query(
+              `SELECT 1 FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2 AND stato = 'approvata' LIMIT 1`,
+              [req.persona!.sub, associazioneId],
+            );
+        if ((abilitazione.rowCount ?? 0) === 0) {
+          res.status(403).json({ errore: 'nessuna abilitazione propria su questa associazione' });
+          return;
+        }
+        res.status(200).json(await listaIndisponibilitaPerAssociazione(pool, associazioneId, stagioneId));
+      } catch (err) {
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
         if (erroreRiferimento) {
           res.status(400).json({ errore: erroreRiferimento.message });
