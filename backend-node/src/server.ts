@@ -62,7 +62,7 @@ import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSov
 import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
 import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita } from './backofficeSchema.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
-import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaCreaOsservazione, schemaCreaProposta, schemaAccettaProposta } from './pubblicoSchema.ts';
+import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaCreaOsservazione, schemaCreaProposta, schemaAccettaProposta, schemaCreaVariazione, schemaAccettaVariazione } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
 import { MulterError } from 'multer';
 import { readFile, unlink } from 'node:fs/promises';
@@ -101,6 +101,7 @@ import { ErroreConflittoFifoConcertazione } from './erroriDominio.ts';
 import { approvaSettimanaTipoDefinitiva, trovaSettimanaTipoDefinitiva } from './settimanaTipoDefinitiva.ts';
 import { confermaConvenzione, listaConvenzioniPerStagione } from './convenzioni.ts';
 import { creaIndisponibilita, listaIndisponibilitaPerAssociazione } from './indisponibilita.ts';
+import { creaVariazione, accettaVariazione, annullaVariazione, listaVariazioniPerStagione, trovaVariazionePerId, type TipoVariazione, type StatoVariazione } from './variazioni.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
 const COOKIE_PATH_OIDC = '/auth/oidc';
@@ -3072,6 +3073,152 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
+    },
+  );
+
+  // --- Variazioni ordinarie (art. B.32) — interamente tra associazioni, nessuna
+  // validazione backoffice attiva (istruzione esplicita del committente) ---
+
+  app.post(
+    '/pubblico/variazioni',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const parsed = schemaCreaVariazione.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, parsed.data.associazioneId, parsed.data.stagioneId);
+      if (!delegante) {
+        res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
+        return;
+      }
+      try {
+        const variazione = await eseguiInTransazione(pool, async (client) => {
+          const v = await creaVariazione(client, parsed.data, req.persona!.sub);
+          await registraOperazione(client, {
+            attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: parsed.data.associazioneId, ruolo: delegante.ruolo },
+            azione: 'crea_variazione_ordinaria',
+            entitaTipo: 'variazioni_ordinarie',
+            entitaId: v.id,
+            dettaglio: v as unknown as Record<string, unknown>,
+          });
+          return v;
+        });
+        res.status(201).json(variazione);
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.post(
+    '/pubblico/variazioni/:id/accetta',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      const parsed = schemaAccettaVariazione.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      const variazione = await trovaVariazionePerId(pool, id);
+      if (!variazione) {
+        res.status(404).json({ errore: 'variazione non trovata' });
+        return;
+      }
+      const stagione = await pool.query<{ stagione_id: string }>(
+        `SELECT stagione_id FROM slot_settimana_tipo WHERE id = $1`,
+        [variazione.slotId],
+      );
+      const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, parsed.data.associazioneId, stagione.rows[0]!.stagione_id);
+      if (!delegante) {
+        res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
+        return;
+      }
+      try {
+        const aggiornata = await eseguiInTransazione(pool, async (client) => {
+          const v = await accettaVariazione(client, id, parsed.data.associazioneId);
+          await registraOperazione(client, {
+            attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: parsed.data.associazioneId, ruolo: delegante.ruolo },
+            azione: 'accetta_variazione_ordinaria',
+            entitaTipo: 'variazioni_ordinarie',
+            entitaId: v.id,
+            dettaglio: { stato: v.stato, motivazioneRifiuto: v.motivazioneRifiuto },
+          });
+          return v;
+        });
+        res.status(200).json(aggiornata);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.post(
+    '/pubblico/variazioni/:id/annulla',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      const variazione = await trovaVariazionePerId(pool, id);
+      if (!variazione) {
+        res.status(404).json({ errore: 'variazione non trovata' });
+        return;
+      }
+      if (variazione.richiestaDaPersonaFisicaId !== req.persona!.sub) {
+        res.status(403).json({ errore: 'solo il richiedente può annullare la variazione' });
+        return;
+      }
+      try {
+        const aggiornata = await eseguiInTransazione(pool, async (client) => {
+          const v = await annullaVariazione(client, id);
+          await registraOperazione(client, {
+            attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: variazione.richiestaDaAssociazioneId },
+            azione: 'annulla_variazione_ordinaria',
+            entitaTipo: 'variazioni_ordinarie',
+            entitaId: v.id,
+            dettaglio: { stato: v.stato },
+          });
+          return v;
+        });
+        res.status(200).json(aggiornata);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/backoffice/stagioni/:id/variazioni',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req, res) => {
+      const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      const filtri: { tipo?: TipoVariazione; stato?: StatoVariazione } = {};
+      if (typeof req.query.tipo === 'string') filtri.tipo = req.query.tipo as TipoVariazione;
+      if (typeof req.query.stato === 'string') filtri.stato = req.query.stato as StatoVariazione;
+      res.status(200).json(await listaVariazioniPerStagione(pool, stagioneId, filtri));
     },
   );
 
