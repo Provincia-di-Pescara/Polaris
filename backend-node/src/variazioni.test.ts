@@ -2,14 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { trovaProprietarioOccorrenza, creaVariazione } from './variazioni.ts';
+import { trovaProprietarioOccorrenza, creaVariazione, accettaVariazione, annullaVariazione, listaVariazioniPerStagione } from './variazioni.ts';
 import { creaDisciplina } from './discipline.ts';
 import { creaIstituzione } from './istituzioni.ts';
 import { creaImpianto } from './impianti.ts';
 import { creaSpazio } from './spazi.ts';
 import { creaSlot } from './slot.ts';
 import { creaDomanda } from './domande.ts';
-import { ErroreRiferimentoNonValido } from './erroriDominio.ts';
+import { ErroreRiferimentoNonValido, ErroreStatoNonValidoPerTransizione } from './erroriDominio.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 
@@ -145,4 +145,71 @@ test('creaVariazione rifiuta slot fuori stagione', { skip: dsn ? false : 'TEST_D
       ),
     ErroreRiferimentoNonValido,
   );
+});
+
+test('accettaVariazione: scambio valido transiziona ad accettata, entrambi i lati risultano scambiati', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const proposta = await creaVariazione(
+    pool,
+    {
+      tipo: 'scambio_temporaneo', stagioneId: fx.stagioneId,
+      slotId: fx.slotAId, data: '2030-11-04', associazioneId: fx.p1.associazioneId,
+      slotDestinazioneId: fx.slotLiberoId, dataDestinazione: '2030-11-06',
+      controparteAssociazioneId: fx.p2.associazioneId,
+    },
+    fx.p1.personaId,
+  );
+
+  const accettata = await accettaVariazione(pool, proposta.id, fx.p2.associazioneId);
+  assert.equal(accettata.stato, 'accettata');
+  assert.equal(await trovaProprietarioOccorrenza(pool, fx.slotAId, '2030-11-04'), fx.p2.associazioneId);
+  assert.equal(await trovaProprietarioOccorrenza(pool, fx.slotLiberoId, '2030-11-06'), fx.p1.associazioneId);
+});
+
+test('accettaVariazione: 409 se non in_attesa_accettazione', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const variazione = await creaVariazione(
+    pool,
+    { tipo: 'utilizzo_occasionale', stagioneId: fx.stagioneId, slotId: fx.slotLiberoId, data: '2030-11-11', associazioneId: fx.p1.associazioneId },
+    fx.p1.personaId,
+  );
+  await assert.rejects(() => accettaVariazione(pool, variazione.id, fx.p2.associazioneId), ErroreStatoNonValidoPerTransizione);
+});
+
+test('annullaVariazione: solo prima dell\'accettazione', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const proposta = await creaVariazione(
+    pool,
+    {
+      tipo: 'scambio_temporaneo', stagioneId: fx.stagioneId,
+      slotId: fx.slotAId, data: '2030-11-18', associazioneId: fx.p1.associazioneId,
+      slotDestinazioneId: fx.slotLiberoId, dataDestinazione: '2030-11-20',
+      controparteAssociazioneId: fx.p2.associazioneId,
+    },
+    fx.p1.personaId,
+  );
+  const annullata = await annullaVariazione(pool, proposta.id);
+  assert.equal(annullata.stato, 'annullata');
+  await assert.rejects(() => accettaVariazione(pool, proposta.id, fx.p2.associazioneId), ErroreStatoNonValidoPerTransizione);
+});
+
+test('listaVariazioniPerStagione filtra per tipo e stato', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  await creaVariazione(
+    pool,
+    { tipo: 'utilizzo_occasionale', stagioneId: fx.stagioneId, slotId: fx.slotLiberoId, data: '2030-12-02', associazioneId: fx.p1.associazioneId },
+    fx.p1.personaId,
+  );
+  const lista = await listaVariazioniPerStagione(pool, fx.stagioneId, { tipo: 'utilizzo_occasionale', stato: 'accettata' });
+  assert.equal(lista.length, 1);
+  const vuota = await listaVariazioniPerStagione(pool, fx.stagioneId, { tipo: 'liberazione' });
+  assert.equal(vuota.length, 0);
 });

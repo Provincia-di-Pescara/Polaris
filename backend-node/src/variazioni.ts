@@ -1,5 +1,5 @@
 import type { Db } from './db.ts';
-import { ErroreNonTrovato, ErroreRiferimentoNonValido } from './erroriDominio.ts';
+import { ErroreNonTrovato, ErroreRiferimentoNonValido, ErroreStatoNonValidoPerTransizione } from './erroriDominio.ts';
 import { controlloDisciplinaCompatibile } from './concertazione.ts';
 import { validaSlotAppartengonoAStagione } from './domande.ts';
 
@@ -188,4 +188,101 @@ export async function creaVariazione(
 export async function trovaVariazionePerId(db: Db, id: string): Promise<Variazione | null> {
   const r = await db.query<RigaVariazione>(`SELECT ${COLONNE_SELECT} FROM variazioni_ordinarie WHERE id = $1`, [id]);
   return r.rows[0] ? daRiga(r.rows[0]) : null;
+}
+
+// art. B.32: lo scambio è tra le associazioni, l'Ente non interviene — i controlli
+// strutturali (disciplina compatibile, occorrenza libera) si eseguono qui, alla
+// conferma della controparte, sulla configurazione finale (prima, alla creazione,
+// nessun controllo era ancora stato fatto sullo scambio nel suo complesso).
+export async function accettaVariazione(db: Db, id: string, controparteAssociazioneId: string): Promise<Variazione> {
+  const lock = await db.query<{ stato: StatoVariazione; controparte_associazione_id: string | null }>(
+    `SELECT stato, controparte_associazione_id FROM variazioni_ordinarie WHERE id = $1 FOR UPDATE`,
+    [id],
+  );
+  const riga = lock.rows[0];
+  if (!riga) {
+    throw new ErroreNonTrovato('variazione non trovata');
+  }
+  if (riga.stato !== 'in_attesa_accettazione') {
+    throw new ErroreStatoNonValidoPerTransizione('la variazione non è in attesa di accettazione');
+  }
+  if (riga.controparte_associazione_id !== controparteAssociazioneId) {
+    throw new ErroreNonTrovato('questa associazione non è la controparte della variazione');
+  }
+
+  const variazione = (await trovaVariazionePerId(db, id))!;
+  const motivoOrigine = await verificaControlliStrutturali(db, {
+    stagioneId: '', tipo: 'liberazione', slotId: variazione.slotId, data: variazione.data,
+    associazioneId: variazione.richiestaDaAssociazioneId,
+  });
+  // Destinazione: riusa lo stesso controllo di libertà+disciplina applicato in creaVariazione
+  // per i tipi non-liberazione — NON un confronto di titolarità con la controparte (lo slot
+  // di destinazione di uno scambio è tipicamente uno slot libero, non già posseduto da chi
+  // accetta: è la persona che accetta a confermare l'operazione, non a "cedere" quello slot).
+  let motivo = motivoOrigine;
+  if (!motivo) {
+    const stagioneRiga = await db.query<{ stagione_id: string }>(
+      `SELECT stagione_id FROM slot_settimana_tipo WHERE id = $1`,
+      [variazione.slotDestinazioneId],
+    );
+    motivo = await verificaControlliStrutturali(db, {
+      stagioneId: stagioneRiga.rows[0]!.stagione_id,
+      tipo: variazione.tipo,
+      slotId: variazione.slotId,
+      data: variazione.data,
+      slotDestinazioneId: variazione.slotDestinazioneId!,
+      dataDestinazione: variazione.dataDestinazione!,
+      associazioneId: variazione.richiestaDaAssociazioneId,
+    });
+  }
+
+  const nuovoStato: StatoVariazione = motivo ? 'rifiutata' : 'accettata';
+  await db.query(
+    `UPDATE variazioni_ordinarie SET stato = $2, motivazione_rifiuto = $3 WHERE id = $1`,
+    [id, nuovoStato, motivo],
+  );
+  return (await trovaVariazionePerId(db, id))!;
+}
+
+export async function annullaVariazione(db: Db, id: string): Promise<Variazione> {
+  const r = await db.query<{ id: string }>(
+    `UPDATE variazioni_ordinarie SET stato = 'annullata' WHERE id = $1 AND stato = 'in_attesa_accettazione' RETURNING id`,
+    [id],
+  );
+  if ((r.rowCount ?? 0) === 0) {
+    const check = await db.query(`SELECT 1 FROM variazioni_ordinarie WHERE id = $1`, [id]);
+    if ((check.rowCount ?? 0) === 0) {
+      throw new ErroreNonTrovato('variazione non trovata');
+    }
+    throw new ErroreStatoNonValidoPerTransizione('la variazione non è più annullabile');
+  }
+  return (await trovaVariazionePerId(db, id))!;
+}
+
+export async function listaVariazioniPerStagione(
+  db: Db,
+  stagioneId: string,
+  filtri?: { tipo?: TipoVariazione; stato?: StatoVariazione },
+): Promise<Variazione[]> {
+  const condizioni: string[] = ['st.stagione_id = $1'];
+  const valori: unknown[] = [stagioneId];
+  if (filtri?.tipo) {
+    valori.push(filtri.tipo);
+    condizioni.push(`v.tipo = $${valori.length}`);
+  }
+  if (filtri?.stato) {
+    valori.push(filtri.stato);
+    condizioni.push(`v.stato = $${valori.length}`);
+  }
+  const r = await db.query<RigaVariazione>(
+    `SELECT v.id, v.tipo, v.slot_id, v.data::text, v.slot_destinazione_id, v.data_destinazione::text,
+            v.richiesta_da_associazione_id, v.richiesta_da_persona_fisica_id, v.controparte_associazione_id,
+            v.indisponibilita_id, v.stato, v.motivazione_rifiuto, v.creata_il
+     FROM variazioni_ordinarie v
+     JOIN slot_settimana_tipo st ON st.id = v.slot_id
+     WHERE ${condizioni.join(' AND ')}
+     ORDER BY v.creata_il DESC`,
+    valori,
+  );
+  return r.rows.map(daRiga);
 }
