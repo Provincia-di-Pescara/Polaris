@@ -1,5 +1,6 @@
 import type { Db } from './db.ts';
 import { leggiVersioneAttiva } from './repository/parametrico.ts';
+import { ErroreNonTrovato, ErroreStatoNonValidoPerTransizione } from './erroriDominio.ts';
 
 export type EsitoUtilizzo = 'utilizzato' | 'non_utilizzato_giustificato' | 'non_utilizzato_non_giustificato' | 'indisponibilita_impianto';
 export type RilevatoTramite = 'registro_impianto' | 'autodichiarazione' | 'checkin_digitale';
@@ -123,4 +124,63 @@ export async function listaUtilizziPerAssociazione(db: Db, associazioneId: strin
         [associazioneId],
       );
   return r.rows.map(daRiga);
+}
+
+// art. B.35: la finestra si apre alla registrazione (Task 3) e si chiude alla prima tra
+// scadenza e presentazione — guardia atomica UPDATE...WHERE...RETURNING (pattern TOCTOU-
+// safe consolidato nel progetto), un SELECT di disambiguazione separato solo sul percorso
+// di fallimento per distinguere 404 da 409.
+export async function presentaGiustificazione(db: Db, id: string, testo: string): Promise<UtilizzoEffettivo> {
+  const r = await db.query<{ id: string }>(
+    `UPDATE utilizzi_effettivi
+     SET giustificazione_testo = $2, giustificazione_presentata_il = now()
+     WHERE id = $1 AND esito = 'non_utilizzato_non_giustificato'
+       AND giustificazione_presentata_il IS NULL AND giustificazione_scade_il > now()
+     RETURNING id`,
+    [id, testo],
+  );
+  if ((r.rowCount ?? 0) === 0) {
+    const check = await db.query(`SELECT 1 FROM utilizzi_effettivi WHERE id = $1`, [id]);
+    if ((check.rowCount ?? 0) === 0) {
+      throw new ErroreNonTrovato('utilizzo non trovato');
+    }
+    throw new ErroreStatoNonValidoPerTransizione('finestra di giustificazione non aperta, già presentata o scaduta');
+  }
+  return (await trovaUtilizzoPerId(db, id))!;
+}
+
+export async function accogliGiustificazione(db: Db, id: string, decisoreId: string): Promise<UtilizzoEffettivo> {
+  const r = await db.query<{ id: string }>(
+    `UPDATE utilizzi_effettivi
+     SET esito = 'non_utilizzato_giustificato', giustificazione_decisa_da = $2, giustificazione_decisa_il = now()
+     WHERE id = $1 AND giustificazione_presentata_il IS NOT NULL AND giustificazione_decisa_il IS NULL
+     RETURNING id`,
+    [id, decisoreId],
+  );
+  if ((r.rowCount ?? 0) === 0) {
+    const check = await db.query(`SELECT 1 FROM utilizzi_effettivi WHERE id = $1`, [id]);
+    if ((check.rowCount ?? 0) === 0) {
+      throw new ErroreNonTrovato('utilizzo non trovato');
+    }
+    throw new ErroreStatoNonValidoPerTransizione('nessuna giustificazione presentata da decidere, o già decisa');
+  }
+  return (await trovaUtilizzoPerId(db, id))!;
+}
+
+export async function rigettaGiustificazione(db: Db, id: string, decisoreId: string, motivazione: string): Promise<UtilizzoEffettivo> {
+  const r = await db.query<{ id: string }>(
+    `UPDATE utilizzi_effettivi
+     SET giustificazione_decisa_da = $2, giustificazione_decisa_il = now(), giustificazione_motivazione_rigetto = $3
+     WHERE id = $1 AND giustificazione_presentata_il IS NOT NULL AND giustificazione_decisa_il IS NULL
+     RETURNING id`,
+    [id, decisoreId, motivazione],
+  );
+  if ((r.rowCount ?? 0) === 0) {
+    const check = await db.query(`SELECT 1 FROM utilizzi_effettivi WHERE id = $1`, [id]);
+    if ((check.rowCount ?? 0) === 0) {
+      throw new ErroreNonTrovato('utilizzo non trovato');
+    }
+    throw new ErroreStatoNonValidoPerTransizione('nessuna giustificazione presentata da decidere, o già decisa');
+  }
+  return (await trovaUtilizzoPerId(db, id))!;
 }

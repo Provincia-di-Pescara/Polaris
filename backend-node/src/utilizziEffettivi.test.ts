@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { registraUtilizzo, trovaUtilizzoPerId, listaUtilizziPerAssegnazione, listaUtilizziPerAssociazione } from './utilizziEffettivi.ts';
+import { registraUtilizzo, trovaUtilizzoPerId, listaUtilizziPerAssegnazione, listaUtilizziPerAssociazione, presentaGiustificazione, accogliGiustificazione, rigettaGiustificazione } from './utilizziEffettivi.ts';
+import { ErroreNonTrovato, ErroreStatoNonValidoPerTransizione } from './erroriDominio.ts';
 import { creaDisciplina } from './discipline.ts';
 import { creaIstituzione } from './istituzioni.ts';
 import { creaImpianto } from './impianti.ts';
@@ -47,7 +48,11 @@ async function creaFixture(pool: Pool) {
     `INSERT INTO assegnazioni (slot_id, domanda_id, associazione_id, tipo, valore_minuti, stato) VALUES ($1, $2, $3, 'singola', 60, 'provvisoria') RETURNING id`,
     [slot.id, domanda.id, associazione.rows[0]!.id],
   );
-  return { stagioneId, assegnazioneId: assegnazione.rows[0]!.id, associazioneId: associazione.rows[0]!.id };
+  const utente = await pool.query<{ id: string }>(
+    `INSERT INTO utenti_backoffice (email, password_hash, nome, cognome, ruolo, stato, ultimo_accesso_il) VALUES ($1, 'test', 'Test', 'Operatore', 'operatore', 'attivo', now()) RETURNING id`,
+    [`operatore-${randomUUID()}@test.local`],
+  );
+  return { stagioneId, assegnazioneId: assegnazione.rows[0]!.id, associazioneId: associazione.rows[0]!.id, operatoreId: utente.rows[0]!.id };
 }
 
 test('registraUtilizzo con esito utilizzato: nessuna finestra di giustificazione', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
@@ -93,4 +98,64 @@ test('listaUtilizziPerAssegnazione e listaUtilizziPerAssociazione trovano il rec
   const perAssociazione = await listaUtilizziPerAssociazione(pool, fx.associazioneId, fx.stagioneId);
   assert.equal(perAssociazione.length, 1);
   assert.equal(perAssociazione[0]!.assegnazioneId, fx.assegnazioneId);
+});
+
+test('presentaGiustificazione: apre solo se non_utilizzato_non_giustificato con finestra aperta', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const utilizzo = await registraUtilizzo(pool, { assegnazioneId: fx.assegnazioneId, data: '2030-10-07', esito: 'non_utilizzato_non_giustificato' });
+
+  const presentata = await presentaGiustificazione(pool, utilizzo.id, 'assenza per lavori improvvisi in impianto');
+  assert.equal(presentata.giustificazioneTesto, 'assenza per lavori improvvisi in impianto');
+  assert.ok(presentata.giustificazionePresentataIl !== null);
+
+  await assert.rejects(() => presentaGiustificazione(pool, utilizzo.id, 'seconda presentazione'), ErroreStatoNonValidoPerTransizione);
+});
+
+test('presentaGiustificazione: 404 se non trovato, 409 se finestra scaduta', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+
+  await assert.rejects(() => presentaGiustificazione(pool, randomUUID(), 'x'), ErroreNonTrovato);
+
+  const utilizzo = await registraUtilizzo(pool, { assegnazioneId: fx.assegnazioneId, data: '2030-10-14', esito: 'non_utilizzato_non_giustificato' });
+  await pool.query(`UPDATE utilizzi_effettivi SET giustificazione_scade_il = now() - interval '1 day' WHERE id = $1`, [utilizzo.id]);
+  await assert.rejects(() => presentaGiustificazione(pool, utilizzo.id, 'tardiva'), ErroreStatoNonValidoPerTransizione);
+});
+
+test('accogliGiustificazione: sposta esito a non_utilizzato_giustificato', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const utilizzo = await registraUtilizzo(pool, { assegnazioneId: fx.assegnazioneId, data: '2030-10-21', esito: 'non_utilizzato_non_giustificato' });
+  await presentaGiustificazione(pool, utilizzo.id, 'motivo valido');
+
+  const accolta = await accogliGiustificazione(pool, utilizzo.id, fx.operatoreId);
+  assert.equal(accolta.esito, 'non_utilizzato_giustificato');
+  assert.equal(accolta.giustificazioneDecisaDa, fx.operatoreId);
+
+  await assert.rejects(() => accogliGiustificazione(pool, utilizzo.id, fx.operatoreId), ErroreStatoNonValidoPerTransizione);
+});
+
+test('accogliGiustificazione: 409 se nessuna giustificazione presentata', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const utilizzo = await registraUtilizzo(pool, { assegnazioneId: fx.assegnazioneId, data: '2030-10-28', esito: 'non_utilizzato_non_giustificato' });
+
+  await assert.rejects(() => accogliGiustificazione(pool, utilizzo.id, randomUUID()), ErroreStatoNonValidoPerTransizione);
+});
+
+test('rigettaGiustificazione: esito resta non_utilizzato_non_giustificato, motivazione registrata', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const utilizzo = await registraUtilizzo(pool, { assegnazioneId: fx.assegnazioneId, data: '2030-11-04', esito: 'non_utilizzato_non_giustificato' });
+  await presentaGiustificazione(pool, utilizzo.id, 'motivo debole');
+
+  const rigettata = await rigettaGiustificazione(pool, utilizzo.id, fx.operatoreId, 'giustificazione non pertinente');
+  assert.equal(rigettata.esito, 'non_utilizzato_non_giustificato');
+  assert.equal(rigettata.giustificazioneMotivazioneRigetto, 'giustificazione non pertinente');
 });
