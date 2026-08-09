@@ -61,10 +61,10 @@ import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } f
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
 import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
 import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione, schemaCreaProvvedimento } from './backofficeSchema.ts';
-import { registraUtilizzo, trovaUtilizzoPerId, listaUtilizziPerAssegnazione, accogliGiustificazione, rigettaGiustificazione } from './utilizziEffettivi.ts';
+import { registraUtilizzo, trovaUtilizzoPerId, listaUtilizziPerAssegnazione, accogliGiustificazione, rigettaGiustificazione, presentaGiustificazione, listaUtilizziPerAssociazione } from './utilizziEffettivi.ts';
 import { codaMancatiUtilizzi, creaProvvedimento, listaProvvedimentiPerAssegnazione, applicaDecadenza } from './provvedimenti.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
-import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaCreaOsservazione, schemaCreaProposta, schemaAccettaProposta, schemaCreaVariazione, schemaAccettaVariazione } from './pubblicoSchema.ts';
+import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaCreaOsservazione, schemaCreaProposta, schemaAccettaProposta, schemaCreaVariazione, schemaAccettaVariazione, schemaPresentaGiustificazione } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
 import { MulterError } from 'multer';
 import { readFile, unlink } from 'node:fs/promises';
@@ -3517,6 +3517,99 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       const assegnazioneId = typeof req.params.id === 'string' ? req.params.id : '';
       try {
         res.status(200).json(await listaProvvedimentiPerAssegnazione(pool, assegnazioneId));
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Giustificazione mancato utilizzo (pubblico) + lettura storico (art. B.34-35) ---
+
+  app.post(
+    '/pubblico/utilizzi/:id/giustificazione',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      const parsed = schemaPresentaGiustificazione.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const utilizzo = await trovaUtilizzoPerId(pool, id);
+        if (!utilizzo) {
+          res.status(404).json({ errore: 'utilizzo non trovato' });
+          return;
+        }
+        const contesto = await pool.query<{ associazione_id: string; stagione_id: string }>(
+          `SELECT a.associazione_id, st.stagione_id
+           FROM assegnazioni a JOIN slot_settimana_tipo st ON st.id = a.slot_id
+           WHERE a.id = $1`,
+          [utilizzo.assegnazioneId],
+        );
+        const { associazione_id: associazioneId, stagione_id: stagioneId } = contesto.rows[0]!;
+        const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, associazioneId, stagioneId);
+        if (!delegante) {
+          res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
+          return;
+        }
+        const aggiornato = await eseguiInTransazione(pool, async (client) => {
+          const u = await presentaGiustificazione(client, id, parsed.data.testo);
+          await registraOperazione(client, {
+            attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId, ruolo: delegante.ruolo },
+            azione: 'presenta_giustificazione_mancato_utilizzo',
+            entitaTipo: 'utilizzi_effettivi',
+            entitaId: u.id,
+            dettaglio: { giustificazioneTesto: u.giustificazioneTesto },
+          });
+          return u;
+        });
+        res.status(200).json(aggiornato);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/pubblico/associazioni/:id/utilizzi',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const associazioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      const stagioneId = typeof req.query.stagioneId === 'string' ? req.query.stagioneId : undefined;
+      try {
+        const abilitazione = stagioneId
+          ? await pool.query(
+              `SELECT 1 FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2 AND stagione_id = $3 AND stato = 'approvata' LIMIT 1`,
+              [req.persona!.sub, associazioneId, stagioneId],
+            )
+          : await pool.query(
+              `SELECT 1 FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2 AND stato = 'approvata' LIMIT 1`,
+              [req.persona!.sub, associazioneId],
+            );
+        if ((abilitazione.rowCount ?? 0) === 0) {
+          res.status(403).json({ errore: 'nessuna abilitazione propria su questa associazione' });
+          return;
+        }
+        res.status(200).json(await listaUtilizziPerAssociazione(pool, associazioneId, stagioneId));
       } catch (err) {
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
         if (erroreRiferimento) {

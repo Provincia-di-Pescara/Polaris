@@ -166,3 +166,8 @@ export const schemaAccettaVariazione = z.object({
   associazioneId: z.string().uuid(),
 });
 export type AccettaVariazioneRequest = z.infer<typeof schemaAccettaVariazione>;
+
+export const schemaPresentaGiustificazione = z.object({
+  testo: z.string().min(1),
+});
+export type PresentaGiustificazioneRequest = z.infer<typeof schemaPresentaGiustificazione>;
