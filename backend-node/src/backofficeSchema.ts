@@ -275,3 +275,14 @@ export const schemaCreaVersioneParametrico = z
     }
   });
 export type CreaVersioneParametricoRequest = z.infer<typeof schemaCreaVersioneParametrico>;
+
+export const schemaCreaIndisponibilita = z
+  .object({
+    dal: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    al: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    motivo: z.string().min(1),
+    comunicataDa: z.enum(['istituzione_scolastica', 'ente']),
+    slotRecuperoId: z.string().uuid().optional(),
+  })
+  .refine((d) => d.al >= d.dal, { message: 'al deve essere >= dal', path: ['al'] });
+export type CreaIndisponibilitaRequest = z.infer<typeof schemaCreaIndisponibilita>;
