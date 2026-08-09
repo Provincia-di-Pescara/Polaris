@@ -221,6 +221,9 @@ export const schemaCreaVersioneParametrico = z
     // scheduler di housekeeping (il predicato diventa sempre vero).
     retentionLogOperazioniGiorni: z.number().int().min(1),
     quotaNuoveAssociazioniPct: z.string().regex(REGEX_RAPPORTO_01),
+    // 🔺 placeholder, default 7gg — nessun valore fisso nella norma (analogo al "termine
+    // indicato nell'avviso" di B.11), editabile dall'admin come ogni altro parametro.
+    termineGiustificazioneGiorni: z.number().int().min(1),
     csdScaglioni: z.array(schemaCsdScaglione),
   })
   // Finding 2 (parte 2): la diffida deve arrivare prima della decadenza, non dopo/uguale.

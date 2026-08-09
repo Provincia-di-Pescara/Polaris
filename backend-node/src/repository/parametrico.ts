@@ -27,6 +27,7 @@ export interface VersioneParametrica {
   sogliaIsfCompensazione: string;
   retentionLogOperazioniGiorni: number;
   quotaNuoveAssociazioniPct: string;
+  termineGiustificazioneGiorni: number;
   creataIl: string;
   csdScaglioni: ScaglioneCsd[];
 }
@@ -59,6 +60,7 @@ interface RigaVersione {
   soglia_isf_compensazione: string;
   retention_log_operazioni_giorni: number;
   quota_nuove_associazioni_pct: string;
+  termine_giustificazione_giorni: number;
   creata_il: Date;
 }
 
@@ -74,7 +76,7 @@ const COLONNE_SELECT_VERSIONE = `id, valida_dal, pubblicata_da, note,
   caa_neutro::text, csd_neutro::text, tolleranza_isf_pct::text,
   soglia_mancati_utilizzi_diffida, soglia_mancati_utilizzi_decadenza,
   soglia_scostamento_dichiarato_pct::text, soglia_isf_compensazione::text,
-  retention_log_operazioni_giorni, quota_nuove_associazioni_pct::text, creata_il`;
+  retention_log_operazioni_giorni, quota_nuove_associazioni_pct::text, termine_giustificazione_giorni, creata_il`;
 
 function daRigaVersione(r: RigaVersione, csdScaglioni: ScaglioneCsd[]): VersioneParametrica {
   return {
@@ -98,6 +100,7 @@ function daRigaVersione(r: RigaVersione, csdScaglioni: ScaglioneCsd[]): Versione
     sogliaIsfCompensazione: r.soglia_isf_compensazione,
     retentionLogOperazioniGiorni: r.retention_log_operazioni_giorni,
     quotaNuoveAssociazioniPct: r.quota_nuove_associazioni_pct,
+    termineGiustificazioneGiorni: r.termine_giustificazione_giorni,
     creataIl: r.creata_il.toISOString(),
     csdScaglioni,
   };
@@ -166,6 +169,7 @@ export interface DatiCreaVersione {
   sogliaIsfCompensazione: string;
   retentionLogOperazioniGiorni: number;
   quotaNuoveAssociazioniPct: string;
+  termineGiustificazioneGiorni: number;
   csdScaglioni: Array<{ rapportoFdFrMin: string; rapportoFdFrMax: string | null; coefficiente: string }>;
 }
 
@@ -180,8 +184,8 @@ export async function creaVersione(
         slot_max_stesso_impianto, fasce_pregiate_max, giornate_gara_max, incremento_squadre_neutro,
         caa_neutro, csd_neutro, tolleranza_isf_pct, soglia_mancati_utilizzi_diffida,
         soglia_mancati_utilizzi_decadenza, soglia_scostamento_dichiarato_pct, soglia_isf_compensazione,
-        retention_log_operazioni_giorni, quota_nuove_associazioni_pct)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        retention_log_operazioni_giorni, quota_nuove_associazioni_pct, termine_giustificazione_giorni)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
      RETURNING ${COLONNE_SELECT_VERSIONE}`,
     [
       pubblicataDa,
@@ -202,6 +206,7 @@ export async function creaVersione(
       dati.sogliaIsfCompensazione,
       dati.retentionLogOperazioniGiorni,
       dati.quotaNuoveAssociazioniPct,
+      dati.termineGiustificazioneGiorni,
     ],
   );
   const versione = r.rows[0]!;

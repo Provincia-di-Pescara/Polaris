@@ -84,6 +84,7 @@ test(
           sogliaIsfCompensazione: '0.2000',
           retentionLogOperazioniGiorni: 30,
           quotaNuoveAssociazioniPct: '0.0000',
+          termineGiustificazioneGiorni: 7,
           csdScaglioni: [],
         },
         admin.id,
@@ -155,6 +156,7 @@ test(
       sogliaIsfCompensazione: '0.2000',
       retentionLogOperazioniGiorni: 30,
       quotaNuoveAssociazioniPct: '0.0000',
+      termineGiustificazioneGiorni: 7,
       csdScaglioni: [{ rapportoFdFrMin: '0.000', rapportoFdFrMax: null, coefficiente: '1.000' }],
     };
 
@@ -252,6 +254,7 @@ test(
       sogliaIsfCompensazione: '0.2000',
       retentionLogOperazioniGiorni: 30,
       quotaNuoveAssociazioniPct: '0.0000',
+      termineGiustificazioneGiorni: 7,
       csdScaglioni: [{ rapportoFdFrMin: '0.000', rapportoFdFrMax: null, coefficiente: '1.000' }],
     };
 
