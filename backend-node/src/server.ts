@@ -60,7 +60,7 @@ import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } fro
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
 import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita } from './backofficeSchema.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni } from './backofficeSchema.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
 import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaCreaOsservazione, schemaCreaProposta, schemaAccettaProposta, schemaCreaVariazione, schemaAccettaVariazione } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
@@ -3112,6 +3112,18 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(400).json({ errore: erroreRiferimento.message });
           return;
         }
+        if (err instanceof ErroreValoreDuplicato) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },
@@ -3127,21 +3139,23 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
         return;
       }
-      const variazione = await trovaVariazionePerId(pool, id);
-      if (!variazione) {
-        res.status(404).json({ errore: 'variazione non trovata' });
-        return;
-      }
-      const stagione = await pool.query<{ stagione_id: string }>(
-        `SELECT stagione_id FROM slot_settimana_tipo WHERE id = $1`,
-        [variazione.slotId],
-      );
-      const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, parsed.data.associazioneId, stagione.rows[0]!.stagione_id);
-      if (!delegante) {
-        res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
-        return;
-      }
       try {
+        // Lookup pre-flight DENTRO il try (I2 final review): fuori, un UUID malformato nel
+        // path scappava come 22P02 non gestito → 500 invece di 400.
+        const variazione = await trovaVariazionePerId(pool, id);
+        if (!variazione) {
+          res.status(404).json({ errore: 'variazione non trovata' });
+          return;
+        }
+        const stagione = await pool.query<{ stagione_id: string }>(
+          `SELECT stagione_id FROM slot_settimana_tipo WHERE id = $1`,
+          [variazione.slotId],
+        );
+        const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, parsed.data.associazioneId, stagione.rows[0]!.stagione_id);
+        if (!delegante) {
+          res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
+          return;
+        }
         const aggiornata = await eseguiInTransazione(pool, async (client) => {
           const v = await accettaVariazione(client, id, parsed.data.associazioneId);
           await registraOperazione(client, {
@@ -3163,6 +3177,15 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(409).json({ errore: err.message });
           return;
         }
+        if (err instanceof ErroreValoreDuplicato) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },
@@ -3173,20 +3196,43 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     richiedeAutenticazionePubblico,
     async (req: RequestAutenticataPubblico, res) => {
       const id = typeof req.params.id === 'string' ? req.params.id : '';
-      const variazione = await trovaVariazionePerId(pool, id);
-      if (!variazione) {
-        res.status(404).json({ errore: 'variazione non trovata' });
-        return;
-      }
-      if (variazione.richiestaDaPersonaFisicaId !== req.persona!.sub) {
-        res.status(403).json({ errore: 'solo il richiedente può annullare la variazione' });
-        return;
-      }
       try {
+        const variazione = await trovaVariazionePerId(pool, id);
+        if (!variazione) {
+          res.status(404).json({ errore: 'variazione non trovata' });
+          return;
+        }
+        if (variazione.richiestaDaPersonaFisicaId !== req.persona!.sub) {
+          res.status(403).json({ errore: 'solo il richiedente può annullare la variazione' });
+          return;
+        }
+        // Essere stati il richiedente non basta: l'abilitazione va ancora verificata attiva
+        // al momento dell'annullamento (M4 final review — un delegato revocato poteva
+        // continuare ad annullare le proprie richieste). Serve anche a ottenere il `ruolo`
+        // da registrare nell'audit log (art. B.39), che prima mancava.
+        const stagione = await pool.query<{ stagione_id: string }>(
+          `SELECT stagione_id FROM slot_settimana_tipo WHERE id = $1`,
+          [variazione.slotId],
+        );
+        const delegante = await trovaAbilitazioneAttiva(
+          pool,
+          req.persona!.sub,
+          variazione.richiestaDaAssociazioneId,
+          stagione.rows[0]!.stagione_id,
+        );
+        if (!delegante) {
+          res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
+          return;
+        }
         const aggiornata = await eseguiInTransazione(pool, async (client) => {
           const v = await annullaVariazione(client, id);
           await registraOperazione(client, {
-            attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: variazione.richiestaDaAssociazioneId },
+            attore: {
+              tipo: 'pubblico',
+              personaFisicaId: req.persona!.sub,
+              associazioneId: variazione.richiestaDaAssociazioneId,
+              ruolo: delegante.ruolo,
+            },
             azione: 'annulla_variazione_ordinaria',
             entitaTipo: 'variazioni_ordinarie',
             entitaId: v.id,
@@ -3204,6 +3250,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(409).json({ errore: err.message });
           return;
         }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },
@@ -3215,10 +3266,24 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     richiedeRuolo('admin', 'operatore'),
     async (req, res) => {
       const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      const parsed = schemaFiltriVariazioni.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
       const filtri: { tipo?: TipoVariazione; stato?: StatoVariazione } = {};
-      if (typeof req.query.tipo === 'string') filtri.tipo = req.query.tipo as TipoVariazione;
-      if (typeof req.query.stato === 'string') filtri.stato = req.query.stato as StatoVariazione;
-      res.status(200).json(await listaVariazioniPerStagione(pool, stagioneId, filtri));
+      if (parsed.data.tipo) filtri.tipo = parsed.data.tipo;
+      if (parsed.data.stato) filtri.stato = parsed.data.stato;
+      try {
+        res.status(200).json(await listaVariazioniPerStagione(pool, stagioneId, filtri));
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
     },
   );
 

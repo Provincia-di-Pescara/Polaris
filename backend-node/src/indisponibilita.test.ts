@@ -9,6 +9,7 @@ import { creaImpianto } from './impianti.ts';
 import { creaSpazio } from './spazi.ts';
 import { creaSlot } from './slot.ts';
 import { creaDomanda } from './domande.ts';
+import { ErroreRiferimentoNonValido } from './erroriDominio.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 
@@ -77,6 +78,22 @@ test('creaIndisponibilita senza slotRecuperoId', { skip: dsn ? false : 'TEST_DAT
   });
 
   assert.equal(indisponibilita.slotRecuperoId, null);
+});
+
+test('M7: slotRecuperoId di un\'altra stagione rifiutato (la FK da sola non lo impedisce)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  const altra = await creaFixture(pool);
+
+  await assert.rejects(
+    () =>
+      creaIndisponibilita(pool, {
+        slotId: fx.slotId, dal: '2030-10-01', al: '2030-10-07', motivo: 'lavori',
+        comunicataDa: 'ente', slotRecuperoId: altra.slotRecuperoId,
+      }),
+    ErroreRiferimentoNonValido,
+  );
 });
 
 test('listaIndisponibilitaPerAssociazione trova le indisponibilità sovrapposte a un\'assegnazione attiva', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {

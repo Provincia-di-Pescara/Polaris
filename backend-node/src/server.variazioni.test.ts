@@ -57,7 +57,7 @@ async function creaFixtureDueParti(pool: Pool, adminId: string) {
   const impianto = await creaImpianto(pool, { denominazione: 'Palestra var http', istituzioneScolasticaId: istituzione.id });
   const spazio = await creaSpazio(pool, { impiantoId: impianto.id, denominazione: 'Campo var http', disciplineCompatibili: [disciplina.codice] });
   const stagione = await pool.query<{ id: string }>(
-    `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2030-09-01', '2031-06-30') RETURNING id`,
+    `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine, stato) VALUES ($1, '2030-09-01', '2031-06-30', 'definitiva') RETURNING id`,
     [`stagione-var-http-${randomUUID()}`],
   );
   const stagioneId = stagione.rows[0]!.id;
@@ -72,7 +72,11 @@ async function creaFixtureDueParti(pool: Pool, adminId: string) {
     fabbisognoMinimoMinuti: '60.000', fabbisognoOttimaleMinuti: '60.000', richiedeGiornataGara: false, richiesteGiornataGara: [],
   };
   const d1 = await creaDomanda(pool, { ...datiDomanda, associazioneId: p1.associazioneId, stagioneId, preferenze: [slotA.id], blocchiAllenamento: [] }, p1.personaId);
-  await pool.query(`UPDATE domande SET stato = 'ammessa' WHERE id = $1`, [d1.id]);
+  // Anche p2 ha una domanda ammessa sulla stessa disciplina: in uno scambio la controparte
+  // riceve l'occorrenza di origine, e la compatibilità di disciplina è verificata anche per
+  // lei (I1 final review) — senza questa domanda lo scambio verrebbe legittimamente rifiutato.
+  const d2 = await creaDomanda(pool, { ...datiDomanda, associazioneId: p2.associazioneId, stagioneId, preferenze: [slotB.id], blocchiAllenamento: [] }, p2.personaId);
+  await pool.query(`UPDATE domande SET stato = 'ammessa' WHERE id = ANY($1)`, [[d1.id, d2.id]]);
   await pool.query(
     `INSERT INTO assegnazioni (slot_id, domanda_id, associazione_id, tipo, valore_minuti, stato) VALUES ($1, $2, $3, 'singola', 60, 'provvisoria')`,
     [slotA.id, d1.id, p1.associazioneId],
@@ -172,4 +176,69 @@ test('POST .../annulla: solo il richiedente, 409 dopo accettazione', async (t) =
     body: JSON.stringify({ associazioneId: fx.p2.associazioneId }),
   });
   assert.equal(rAccettaDopo.status, 409);
+});
+
+test('I2: id malformato nel path → 400 su accetta/annulla e su GET coda; M3: filtro invalido → 400', async (t) => {
+  if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(chiudi);
+  const admin = await creaAdmin(pool);
+  const fx = await creaFixtureDueParti(pool, admin.id);
+
+  const rAccetta = await fetch(`${base}/pubblico/variazioni/non-un-uuid/accetta`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${fx.p1.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ associazioneId: fx.p1.associazioneId }),
+  });
+  assert.equal(rAccetta.status, 400);
+
+  const rAnnulla = await fetch(`${base}/pubblico/variazioni/non-un-uuid/annulla`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${fx.p1.token}` },
+  });
+  assert.equal(rAnnulla.status, 400);
+
+  const rCoda = await fetch(`${base}/backoffice/stagioni/non-un-uuid/variazioni`, {
+    headers: { Authorization: `Bearer ${admin.token}` },
+  });
+  assert.equal(rCoda.status, 400);
+
+  const rFiltro = await fetch(`${base}/backoffice/stagioni/${fx.stagioneId}/variazioni?stato=inventato`, {
+    headers: { Authorization: `Bearer ${admin.token}` },
+  });
+  assert.equal(rFiltro.status, 400);
+});
+
+test('C1 via HTTP: recupero senza indisponibilitaId respinto dalla validazione (400)', async (t) => {
+  if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(chiudi);
+  const admin = await creaAdmin(pool);
+  const fx = await creaFixtureDueParti(pool, admin.id);
+
+  const r = await fetch(`${base}/pubblico/variazioni`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${fx.p2.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      stagioneId: fx.stagioneId, tipo: 'recupero', associazioneId: fx.p2.associazioneId,
+      slotId: fx.slotAId, data: '2030-12-02', // occorrenza di p1
+      slotDestinazioneId: fx.slotBId, dataDestinazione: '2030-12-04',
+    }),
+  });
+  assert.equal(r.status, 400);
+
+  // data sintatticamente valida ma inesistente → 400 di validazione, non 500 da Postgres
+  const rData = await fetch(`${base}/pubblico/variazioni`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${fx.p1.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      stagioneId: fx.stagioneId, tipo: 'liberazione', associazioneId: fx.p1.associazioneId,
+      slotId: fx.slotAId, data: '2030-13-45',
+    }),
+  });
+  assert.equal(rData.status, 400);
 });

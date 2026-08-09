@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { zDataIso } from './schemaComune.ts';
 
 export const schemaCreaDisciplina = z.object({
   codice: z.string().min(1),
@@ -278,11 +279,19 @@ export type CreaVersioneParametricoRequest = z.infer<typeof schemaCreaVersionePa
 
 export const schemaCreaIndisponibilita = z
   .object({
-    dal: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    al: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    dal: zDataIso,
+    al: zDataIso,
     motivo: z.string().min(1),
     comunicataDa: z.enum(['istituzione_scolastica', 'ente']),
     slotRecuperoId: z.string().uuid().optional(),
   })
   .refine((d) => d.al >= d.dal, { message: 'al deve essere >= dal', path: ['al'] });
 export type CreaIndisponibilitaRequest = z.infer<typeof schemaCreaIndisponibilita>;
+
+// Filtri della coda backoffice delle variazioni: validati con zod come ogni altro input
+// HTTP, non castati con `as` (M3 final review — un filtro invalido ritornava silenziosamente
+// una lista vuota invece di 400).
+export const schemaFiltriVariazioni = z.object({
+  tipo: z.enum(['liberazione', 'recupero', 'scambio_temporaneo', 'utilizzo_occasionale']).optional(),
+  stato: z.enum(['in_attesa_accettazione', 'accettata', 'rifiutata', 'annullata']).optional(),
+});

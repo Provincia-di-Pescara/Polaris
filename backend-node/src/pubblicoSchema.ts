@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { zDataIso } from './schemaComune.ts';
 
 export const schemaCreaAssociazione = z.object({
   denominazione: z.string().min(1),
@@ -133,9 +134,9 @@ export const schemaCreaVariazione = z
     tipo: z.enum(['liberazione', 'recupero', 'scambio_temporaneo', 'utilizzo_occasionale']),
     associazioneId: z.string().uuid(), // l'associazione del chiamante che agisce (una persona può averne più di una)
     slotId: z.string().uuid(),
-    data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    data: zDataIso,
     slotDestinazioneId: z.string().uuid().optional(),
-    dataDestinazione: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    dataDestinazione: zDataIso.optional(),
     controparteAssociazioneId: z.string().uuid().optional(),
     indisponibilitaId: z.string().uuid().optional(),
   })
@@ -145,6 +146,18 @@ export const schemaCreaVariazione = z
   })
   .refine((d) => (d.tipo === 'scambio_temporaneo') === (d.controparteAssociazioneId !== undefined), {
     message: 'controparteAssociazioneId richiesto solo per scambio_temporaneo',
+    path: ['controparteAssociazioneId'],
+  })
+  // art. B.33: un recupero esiste solo a fronte di un'indisponibilità sopravvenuta reale.
+  // Senza questo vincolo `recupero` era una richiesta libera su una fascia qualsiasi
+  // (C1 final review); la corrispondenza fascia/data dell'indisponibilità è poi verificata
+  // in variazioni.ts, qui si impone solo la presenza del riferimento.
+  .refine((d) => (d.tipo === 'recupero') === (d.indisponibilitaId !== undefined), {
+    message: 'indisponibilitaId è obbligatorio per un recupero e ammesso solo per un recupero',
+    path: ['indisponibilitaId'],
+  })
+  .refine((d) => d.controparteAssociazioneId !== d.associazioneId, {
+    message: 'la controparte non può essere la stessa associazione richiedente',
     path: ['controparteAssociazioneId'],
   });
 export type CreaVariazioneRequest = z.infer<typeof schemaCreaVariazione>;

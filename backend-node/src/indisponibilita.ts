@@ -1,4 +1,5 @@
 import type { Db } from './db.ts';
+import { ErroreRiferimentoNonValido } from './erroriDominio.ts';
 
 export interface Indisponibilita {
   id: string;
@@ -55,6 +56,24 @@ export interface DatiCreaIndisponibilita {
 // all'INSERT), non invio email (le persone fisiche OIDC non garantiscono un claim email
 // nei dati SPID/CIE — assunzione 🔺 documentata nello spec).
 export async function creaIndisponibilita(db: Db, dati: DatiCreaIndisponibilita): Promise<Indisponibilita> {
+  // La FK garantisce solo che slot_recupero_id esista: una fascia di recupero in una
+  // stagione DIVERSA da quella della fascia indisponibile non ha senso di dominio e
+  // resterebbe invisibile a ogni query per stagione (M7 final review). L'impianto è invece
+  // volutamente libero: un recupero in un'altra palestra è uno scenario legittimo.
+  if (dati.slotRecuperoId) {
+    const stagioni = await db.query<{ id: string; stagione_id: string }>(
+      `SELECT id, stagione_id FROM slot_settimana_tipo WHERE id = ANY($1)`,
+      [[dati.slotId, dati.slotRecuperoId]],
+    );
+    const stagioneOrigine = stagioni.rows.find((r) => r.id === dati.slotId)?.stagione_id;
+    const stagioneRecupero = stagioni.rows.find((r) => r.id === dati.slotRecuperoId)?.stagione_id;
+    if (!stagioneOrigine || !stagioneRecupero) {
+      throw new ErroreRiferimentoNonValido('slot indicato inesistente');
+    }
+    if (stagioneOrigine !== stagioneRecupero) {
+      throw new ErroreRiferimentoNonValido('la fascia di recupero deve appartenere alla stessa stagione della fascia indisponibile');
+    }
+  }
   const r = await db.query<RigaIndisponibilita>(
     `INSERT INTO indisponibilita_sopravvenute (slot_id, dal, al, motivo, comunicata_da, notificata_alle_associazioni_il, slot_recupero_id)
      VALUES ($1, $2, $3, $4, $5, now(), $6)

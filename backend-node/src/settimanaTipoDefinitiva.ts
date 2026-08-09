@@ -93,7 +93,10 @@ interface RigaVoceDefinitiva {
   efficace: boolean;
 }
 
-const STATI_STAGIONE_CON_DEFINITIVA = ['definitiva', 'chiusa'];
+// Esportata: è la precondizione "esiste una settimana tipo definitiva su cui operare",
+// riusata anche dalle variazioni ordinarie (art. B.32, variazioni.ts) — una variazione su
+// una stagione ancora in bozza/concertazione non ha un quadro da variare.
+export const STATI_STAGIONE_CON_DEFINITIVA = ['definitiva', 'chiusa'];
 
 // art. B.30-31: riusa il frammento SQL condiviso con propostaProvvisoria.ts::
 // trovaPropostaProvvisoria (COLONNE_ISF_SORTEGGIO/JOIN_ISF_SORTEGGIO — ISF cumulativo via
