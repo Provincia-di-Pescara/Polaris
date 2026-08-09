@@ -126,3 +126,30 @@ export const schemaAccettaProposta = z.object({
   associazioneId: z.string().uuid(),
 });
 export type AccettaPropostaRequest = z.infer<typeof schemaAccettaProposta>;
+
+export const schemaCreaVariazione = z
+  .object({
+    stagioneId: z.string().uuid(),
+    tipo: z.enum(['liberazione', 'recupero', 'scambio_temporaneo', 'utilizzo_occasionale']),
+    associazioneId: z.string().uuid(), // l'associazione del chiamante che agisce (una persona può averne più di una)
+    slotId: z.string().uuid(),
+    data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    slotDestinazioneId: z.string().uuid().optional(),
+    dataDestinazione: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    controparteAssociazioneId: z.string().uuid().optional(),
+    indisponibilitaId: z.string().uuid().optional(),
+  })
+  .refine((d) => (d.tipo === 'recupero' || d.tipo === 'scambio_temporaneo') === (d.slotDestinazioneId !== undefined && d.dataDestinazione !== undefined), {
+    message: 'slotDestinazioneId e dataDestinazione richiesti solo per recupero e scambio_temporaneo',
+    path: ['slotDestinazioneId'],
+  })
+  .refine((d) => (d.tipo === 'scambio_temporaneo') === (d.controparteAssociazioneId !== undefined), {
+    message: 'controparteAssociazioneId richiesto solo per scambio_temporaneo',
+    path: ['controparteAssociazioneId'],
+  });
+export type CreaVariazioneRequest = z.infer<typeof schemaCreaVariazione>;
+
+export const schemaAccettaVariazione = z.object({
+  associazioneId: z.string().uuid(),
+});
+export type AccettaVariazioneRequest = z.infer<typeof schemaAccettaVariazione>;
