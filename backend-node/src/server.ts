@@ -60,8 +60,9 @@ import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } fro
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
 import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione } from './backofficeSchema.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione, schemaCreaProvvedimento } from './backofficeSchema.ts';
 import { registraUtilizzo, trovaUtilizzoPerId, listaUtilizziPerAssegnazione, accogliGiustificazione, rigettaGiustificazione } from './utilizziEffettivi.ts';
+import { codaMancatiUtilizzi, creaProvvedimento, listaProvvedimentiPerAssegnazione, applicaDecadenza } from './provvedimenti.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
 import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaCreaOsservazione, schemaCreaProposta, schemaAccettaProposta, schemaCreaVariazione, schemaAccettaVariazione } from './pubblicoSchema.ts';
 import { uploadDocumento } from './documenti/storage.ts';
@@ -3415,6 +3416,108 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(409).json({ errore: err.message });
           return;
         }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Coda mancati utilizzi + provvedimenti (art. B.35) ---
+
+  app.get(
+    '/backoffice/associazioni/:id/mancati-utilizzi',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const associazioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      const stagioneId = typeof req.query.stagioneId === 'string' ? req.query.stagioneId : undefined;
+      if (!stagioneId) {
+        res.status(400).json({ errore: 'stagioneId è richiesto come query param' });
+        return;
+      }
+      try {
+        res.status(200).json(await codaMancatiUtilizzi(pool, associazioneId, stagioneId));
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.post(
+    '/backoffice/assegnazioni/:id/provvedimenti',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const assegnazioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      const parsed = schemaCreaProvvedimento.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const provvedimento = await eseguiInTransazione(pool, async (client) => {
+          const riga = await client.query<{ associazione_id: string }>(
+            `SELECT associazione_id FROM assegnazioni WHERE id = $1`,
+            [assegnazioneId],
+          );
+          if ((riga.rowCount ?? 0) === 0) {
+            throw new ErroreNonTrovato('assegnazione non trovata');
+          }
+          const associazioneId = riga.rows[0]!.associazione_id;
+          if (parsed.data.tipo === 'decadenza') {
+            await applicaDecadenza(client, assegnazioneId, parsed.data.motivazione);
+          }
+          const p = await creaProvvedimento(client, {
+            associazioneId, assegnazioneId, tipo: parsed.data.tipo,
+            motivazione: parsed.data.motivazione, emessoDa: req.utente!.sub,
+          });
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'emette_provvedimento_mancato_utilizzo',
+            entitaTipo: 'provvedimenti_mancato_utilizzo',
+            entitaId: p.id,
+            dettaglio: p as unknown as Record<string, unknown>,
+          });
+          return p;
+        });
+        res.status(201).json(provvedimento);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreStatoNonValidoPerTransizione) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/backoffice/assegnazioni/:id/provvedimenti',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req: RequestAutenticata, res) => {
+      const assegnazioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        res.status(200).json(await listaProvvedimentiPerAssegnazione(pool, assegnazioneId));
+      } catch (err) {
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
         if (erroreRiferimento) {
           res.status(400).json({ errore: erroreRiferimento.message });

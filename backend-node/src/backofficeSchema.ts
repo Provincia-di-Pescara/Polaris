@@ -310,3 +310,9 @@ export const schemaRigettaGiustificazione = z.object({
   motivazione: z.string().min(1),
 });
 export type RigettaGiustificazioneRequest = z.infer<typeof schemaRigettaGiustificazione>;
+
+export const schemaCreaProvvedimento = z.object({
+  tipo: z.enum(['diffida', 'decadenza']),
+  motivazione: z.string().min(1),
+});
+export type CreaProvvedimentoRequest = z.infer<typeof schemaCreaProvvedimento>;
