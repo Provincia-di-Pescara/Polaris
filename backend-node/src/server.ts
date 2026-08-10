@@ -1,6 +1,8 @@
 import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
+import cors from 'cors';
 import { timingSafeEqual } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { Db } from './db.ts';
@@ -239,6 +241,20 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       : null);
 
   const app = express();
+
+  if (process.env.TRUST_PROXY) {
+    const valoreNumerico = Number(process.env.TRUST_PROXY);
+    app.set('trust proxy', Number.isNaN(valoreNumerico) ? process.env.TRUST_PROXY : valoreNumerico);
+  }
+
+  app.use(helmet());
+
+  const originiConsentite = (process.env.CORS_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0);
+  app.use(cors({ origin: originiConsentite.length > 0 ? originiConsentite : false, credentials: true }));
+
   app.use(express.json());
   app.use(cookieParser(segretoCookie()));
 
