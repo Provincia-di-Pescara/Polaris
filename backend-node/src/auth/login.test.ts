@@ -102,6 +102,24 @@ test(
       assert.equal(tentativo.rows[0]?.esito, 'account_bloccato');
     });
 
+    await t.test('lockout: scade dopo la finestra, il login con password corretta torna a funzionare', async () => {
+      const email = `login-lockout-scaduto-${runId}@test.local`;
+      await creaUtenteTest(pool, { email, password: 'password-corretta-scaduto' });
+
+      for (let i = 0; i < 5; i++) {
+        await assert.rejects(() => eseguiLogin(pool, email, 'password-sbagliata', '127.0.0.1'), ErroreCredenzialiNonValide);
+      }
+
+      // simula che i tentativi falliti siano usciti dalla finestra di lockout (15 minuti)
+      await pool.query(
+        `UPDATE tentativi_login_backoffice SET avvenuto_il = now() - interval '20 minutes' WHERE email_tentata = $1`,
+        [email],
+      );
+
+      const esito = await eseguiLogin(pool, email, 'password-corretta-scaduto', '127.0.0.1');
+      assert.ok(esito.accessToken);
+    });
+
     await t.test('lockout: sotto soglia il login con password corretta funziona ancora', async () => {
       const email = `login-sotto-soglia-${runId}@test.local`;
       await creaUtenteTest(pool, { email, password: 'password-corretta-sottosoglia' });
