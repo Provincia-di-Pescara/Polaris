@@ -3316,6 +3316,16 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         });
         res.status(201).json(utilizzo);
       } catch (err) {
+        // I2 (final review): utilizzi_effettivi_occorrenza_uq — la stessa occorrenza non può
+        // essere rilevata due volte (conterebbe due volte verso le soglie B.35).
+        if (err instanceof ErroreValoreDuplicato) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
         if (erroreRiferimento) {
           res.status(400).json({ errore: erroreRiferimento.message });
@@ -3465,14 +3475,22 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       }
       try {
         const provvedimento = await eseguiInTransazione(pool, async (client) => {
-          const riga = await client.query<{ associazione_id: string }>(
-            `SELECT associazione_id FROM assegnazioni WHERE id = $1`,
+          const riga = await client.query<{ associazione_id: string; stato: string }>(
+            `SELECT associazione_id, stato FROM assegnazioni WHERE id = $1`,
             [assegnazioneId],
           );
           if ((riga.rowCount ?? 0) === 0) {
             throw new ErroreNonTrovato('assegnazione non trovata');
           }
           const associazioneId = riga.rows[0]!.associazione_id;
+          // M3 (final review): la guardia di stato esisteva solo per 'decadenza' (dentro
+          // applicaDecadenza, che scrive assegnazioni.stato). Una diffida su un'assegnazione
+          // già decaduta/sostituita è un atto senza oggetto — 409, senza scrivere nulla.
+          if (!['provvisoria', 'validata'].includes(riga.rows[0]!.stato)) {
+            throw new ErroreStatoNonValidoPerTransizione(
+              `l'assegnazione non è più in uno stato su cui emettere provvedimenti (stato '${riga.rows[0]!.stato}')`,
+            );
+          }
           if (parsed.data.tipo === 'decadenza') {
             await applicaDecadenza(client, assegnazioneId, parsed.data.motivazione);
           }

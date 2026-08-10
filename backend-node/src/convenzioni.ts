@@ -40,20 +40,42 @@ function daRiga(r: RigaConvenzione): Convenzione {
 // istituzioni non hanno accesso diretto alla piattaforma (iter delega manuale mai
 // implementato, residuo noto). Guardia atomica dentro la WHERE, stesso pattern di
 // ammettiDomanda/approvaAbilitazione.
+//
+// I3 (final review B.34-35): la guardia non può essere solo sullo stato della convenzione —
+// la decadenza (art. B.35) estingue il diritto scrivendo assegnazioni.stato='decaduta', e
+// senza il controllo sull'assegnazione collegata un operatore poteva ancora perfezionare la
+// convenzione di un diritto già estinto. Stesso motivo per 'sostituita' (riassegnazione).
+const STATI_ASSEGNAZIONE_ATTIVI = ['provvisoria', 'validata'];
+
 export async function confermaConvenzione(db: Db, id: string, confermataDa: string): Promise<Convenzione> {
   const r = await db.query<RigaConvenzione>(
     `UPDATE convenzioni SET stato = 'perfezionata', confermata_il = now(), confermata_da_utente_backoffice_id = $2
      WHERE id = $1 AND stato = 'in_attesa'
+       AND EXISTS (
+         SELECT 1 FROM assegnazioni a
+         WHERE a.id = convenzioni.assegnazione_id AND a.stato = ANY($3::text[])
+       )
      RETURNING ${COLONNE_SELECT}`,
-    [id, confermataDa],
+    [id, confermataDa, STATI_ASSEGNAZIONE_ATTIVI],
   );
   const riga = r.rows[0];
   if (riga) {
     return daRiga(riga);
   }
-  const check = await db.query(`SELECT 1 FROM convenzioni WHERE id = $1`, [id]);
-  if ((check.rowCount ?? 0) === 0) {
+  const check = await db.query<{ stato: string; stato_assegnazione: string }>(
+    `SELECT c.stato, a.stato AS stato_assegnazione
+     FROM convenzioni c JOIN assegnazioni a ON a.id = c.assegnazione_id
+     WHERE c.id = $1`,
+    [id],
+  );
+  const attuale = check.rows[0];
+  if (!attuale) {
     throw new ErroreNonTrovato('convenzione non trovata');
+  }
+  if (!STATI_ASSEGNAZIONE_ATTIVI.includes(attuale.stato_assegnazione)) {
+    throw new ErroreStatoNonValidoPerTransizione(
+      `l'assegnazione collegata non è più attiva (stato '${attuale.stato_assegnazione}'): la convenzione non può essere perfezionata`,
+    );
   }
   throw new ErroreStatoNonValidoPerTransizione('la convenzione è già perfezionata');
 }
@@ -101,7 +123,10 @@ const COLONNE_SELECT_C = `c.id, c.assegnazione_id, c.istituzione_scolastica_id, 
   to_char(st.orario_inizio, 'HH24:MI') AS orario_inizio,
   to_char(st.orario_fine, 'HH24:MI') AS orario_fine`;
 
-const JOIN_DETTAGLI_C = `JOIN assegnazioni a ON a.id = c.assegnazione_id
+// I3 (final review): il JOIN su assegnazioni è filtrato sugli stati attivi — una convenzione
+// la cui assegnazione è decaduta (art. B.35) o sostituita non è più materia di lavoro per il
+// backoffice e non deve comparire nella coda (né in quella filtrata per stato).
+const JOIN_DETTAGLI_C = `JOIN assegnazioni a ON a.id = c.assegnazione_id AND a.stato IN ('provvisoria', 'validata')
          JOIN slot_settimana_tipo st ON st.id = a.slot_id
          JOIN associazioni ass ON ass.id = a.associazione_id
          JOIN istituzioni_scolastiche ist ON ist.id = c.istituzione_scolastica_id`;

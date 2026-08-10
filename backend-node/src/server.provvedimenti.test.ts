@@ -138,6 +138,35 @@ test('POST .../provvedimenti tipo decadenza: 201, assegnazioni.stato passa a dec
   assert.equal(rRipetuto.status, 409);
 });
 
+// M3 final review: la guardia di stato esisteva solo per 'decadenza' (dentro
+// applicaDecadenza). Una diffida su un'assegnazione già decaduta è un atto senza oggetto.
+test('POST .../provvedimenti tipo diffida su assegnazione già decaduta: 409, nessun provvedimento creato', async (t) => {
+  if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(chiudi);
+  const admin = await creaAdmin(pool);
+  const fx = await creaFixtureAssegnazione(pool);
+  await pool.query(
+    `UPDATE assegnazioni SET stato = 'decaduta', decaduta_il = now(), decaduta_motivazione = 'x' WHERE id = $1`,
+    [fx.assegnazioneId],
+  );
+
+  const r = await fetch(`${base}/backoffice/assegnazioni/${fx.assegnazioneId}/provvedimenti`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${admin.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tipo: 'diffida', motivazione: 'diffida tardiva' }),
+  });
+  assert.equal(r.status, 409);
+
+  const conteggio = await pool.query<{ n: string }>(
+    `SELECT count(*) AS n FROM provvedimenti_mancato_utilizzo WHERE assegnazione_id = $1`,
+    [fx.assegnazioneId],
+  );
+  assert.equal(conteggio.rows[0]!.n, '0');
+});
+
 test('GET .../provvedimenti: 400 su UUID malformato', async (t) => {
   if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
   const pool = new Pool({ connectionString: dsn });

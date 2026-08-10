@@ -116,6 +116,28 @@ test('listaConvenzioniPerStagione filtra per stato', { skip: dsn ? false : 'TEST
   assert.equal(ancoraInAttesa.length, 0);
 });
 
+// I3 final review (blocco B.34-35): la decadenza (art. B.35) estingue il diritto — la
+// convenzione collegata non deve poter essere perfezionata dopo, né restare nella coda di
+// lavoro del backoffice.
+test('I3: dopo la decadenza dell\'assegnazione la convenzione non è più perfezionabile né in coda', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixtureConConvenzione(pool);
+
+  await pool.query(
+    `UPDATE assegnazioni SET stato = 'decaduta', decaduta_il = now(), decaduta_motivazione = 'mancati utilizzi'
+     WHERE id = (SELECT assegnazione_id FROM convenzioni WHERE id = $1)`,
+    [fx.convenzioneId],
+  );
+
+  await assert.rejects(() => confermaConvenzione(pool, fx.convenzioneId, fx.adminId), ErroreStatoNonValidoPerTransizione);
+  assert.deepEqual(await listaConvenzioniPerStagione(pool, fx.stagioneId), []);
+  assert.deepEqual(await listaConvenzioniPerStagione(pool, fx.stagioneId, 'in_attesa'), []);
+
+  const riga = await pool.query<{ stato: string }>(`SELECT stato FROM convenzioni WHERE id = $1`, [fx.convenzioneId]);
+  assert.equal(riga.rows[0]!.stato, 'in_attesa');
+});
+
 test('listaConvenzioniPerStagione popola i dettagli per la coda di lavoro (I3 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
   const pool = new Pool({ connectionString: dsn });
   t.after(() => pool.end());

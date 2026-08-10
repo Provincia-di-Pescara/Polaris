@@ -121,6 +121,27 @@ test('POST .../utilizzi: 400 su UUID malformato nel path, 400 su data inesistent
   assert.equal(rDataInvalida.status, 400);
 });
 
+// I2 final review: utilizzi_effettivi_occorrenza_uq — la seconda rilevazione sulla stessa
+// occorrenza è un 409 leggibile, non un 500 con il vincolo Postgres grezzo.
+test('POST .../utilizzi: 409 sulla seconda rilevazione della stessa occorrenza', async (t) => {
+  if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(chiudi);
+  const admin = await creaAdmin(pool);
+  const fx = await creaFixtureAssegnazione(pool);
+
+  const invia = () => fetch(`${base}/backoffice/assegnazioni/${fx.assegnazioneId}/utilizzi`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${admin.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: '2030-10-07', esito: 'utilizzato' }),
+  });
+
+  assert.equal((await invia()).status, 201);
+  assert.equal((await invia()).status, 409);
+});
+
 test('flusso giustificazione: presenta (via repository, la route pubblica è nel Task 8) → accogli → 200', async (t) => {
   if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
   const pool = new Pool({ connectionString: dsn });
