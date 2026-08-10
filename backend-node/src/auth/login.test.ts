@@ -82,6 +82,38 @@ test(
       );
     });
 
+    await t.test('lockout: 5 password errate consecutive bloccano il 6° tentativo anche con password corretta', async () => {
+      const email = `login-lockout-${runId}@test.local`;
+      await creaUtenteTest(pool, { email, password: 'password-corretta-lockout' });
+
+      for (let i = 0; i < 5; i++) {
+        await assert.rejects(() => eseguiLogin(pool, email, 'password-sbagliata', '127.0.0.1'), ErroreCredenzialiNonValide);
+      }
+
+      await assert.rejects(
+        () => eseguiLogin(pool, email, 'password-corretta-lockout', '127.0.0.1'),
+        ErroreCredenzialiNonValide,
+      );
+
+      const tentativo = await pool.query(
+        `SELECT esito FROM tentativi_login_backoffice WHERE email_tentata = $1 ORDER BY avvenuto_il DESC LIMIT 1`,
+        [email],
+      );
+      assert.equal(tentativo.rows[0]?.esito, 'account_bloccato');
+    });
+
+    await t.test('lockout: sotto soglia il login con password corretta funziona ancora', async () => {
+      const email = `login-sotto-soglia-${runId}@test.local`;
+      await creaUtenteTest(pool, { email, password: 'password-corretta-sottosoglia' });
+
+      for (let i = 0; i < 4; i++) {
+        await assert.rejects(() => eseguiLogin(pool, email, 'password-sbagliata', '127.0.0.1'), ErroreCredenzialiNonValide);
+      }
+
+      const esito = await eseguiLogin(pool, email, 'password-corretta-sottosoglia', '127.0.0.1');
+      assert.ok(esito.accessToken);
+    });
+
     await t.test('refresh valido emette nuovi token e invalida il vecchio refresh token (rotation)', async () => {
       await creaUtenteTest(pool, { email: `login-refresh-${runId}@test.local`, password: 'password-refresh' });
       const primoLogin = await eseguiLogin(pool, `login-refresh-${runId}@test.local`, 'password-refresh', '127.0.0.1');

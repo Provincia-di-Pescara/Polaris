@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { trovaUtentePerEmail, trovaUtentePerId } from '../repository/utentiBackoffice.ts';
 import { creaSessione, revocaSessione, trovaSessionePerHash } from '../repository/sessioni.ts';
-import { registraTentativoLogin } from '../repository/tentativiLogin.ts';
+import { registraTentativoLogin, contaTentativiFallitiRecenti } from '../repository/tentativiLogin.ts';
 import { registraOperazione } from '../repository/logOperazioni.ts';
 import { verificaPassword } from './password.ts';
 import { generaAccessToken } from './jwt.ts';
@@ -9,6 +9,8 @@ import { generaRefreshToken, hashRefreshToken } from './refreshToken.ts';
 import { ErroreCredenzialiNonValide, ErroreRefreshTokenNonValido, ErroreUtenteDisattivato } from './errori.ts';
 
 const DURATA_REFRESH_TOKEN_MS = 7 * 24 * 60 * 60 * 1000; // 7 giorni
+const SOGLIA_LOCKOUT = 5;
+const FINESTRA_LOCKOUT_MS = 15 * 60 * 1000; // 15 minuti, stessa finestra di limitatoreLogin (server.ts)
 
 export interface EsitoAutenticazione {
   accessToken: string;
@@ -37,6 +39,12 @@ export async function eseguiLogin(
   password: string,
   ipAddress: string | null,
 ): Promise<EsitoAutenticazione> {
+  const tentativiFalliti = await contaTentativiFallitiRecenti(pool, email, FINESTRA_LOCKOUT_MS);
+  if (tentativiFalliti >= SOGLIA_LOCKOUT) {
+    await registraTentativoLogin(pool, { emailTentata: email, esito: 'account_bloccato', ipAddress });
+    throw new ErroreCredenzialiNonValide();
+  }
+
   const utente = await trovaUtentePerEmail(pool, email);
 
   if (!utente) {
