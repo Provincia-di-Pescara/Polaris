@@ -243,6 +243,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
   const app = express();
 
   if (process.env.TRUST_PROXY) {
+    if (/^(true|false)$/i.test(process.env.TRUST_PROXY.trim())) {
+      throw new Error(
+        "TRUST_PROXY='true'/'false' non è supportato: usa un numero di hop, un IP/subnet, o un nome speciale Express come 'loopback' — vedi .env.example",
+      );
+    }
     const valoreNumerico = Number(process.env.TRUST_PROXY);
     app.set('trust proxy', Number.isNaN(valoreNumerico) ? process.env.TRUST_PROXY : valoreNumerico);
   }
