@@ -5,7 +5,7 @@ const CHIAVE_REFRESH = 'polaris_refresh_token';
 // chiamate relative raggiungano il backend sulla stessa origin — nessuna base URL
 // assoluta necessaria. Nei test (backend reale su porta random, nessun proxy Vite
 // in gioco) il test inietta l'URL assoluto tramite questa variabile globale.
-function baseUrl(): string {
+export function baseUrl(): string {
   const override = (globalThis as { __API_BASE_URL__?: string }).__API_BASE_URL__;
   return override ?? '';
 }
