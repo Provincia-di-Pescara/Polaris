@@ -1,23 +1,22 @@
 import React from 'react';
-import { Season, Role } from '../types';
-import { Calendar, UserCheck, Bell, Shield, HelpCircle } from 'lucide-react';
+import { Season } from '../types.ts';
+import { Calendar, Bell } from 'lucide-react';
+import { useAuth } from '../auth/AuthContext.tsx';
 
 interface HeaderProps {
   seasons: Season[];
   selectedSeasonId: string;
   setSelectedSeasonId: (id: string) => void;
-  role: Role;
-  setRole: (role: Role) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   seasons,
   selectedSeasonId,
   setSelectedSeasonId,
-  role,
-  setRole
 }) => {
+  const { utente } = useAuth();
   const currentSeason = seasons.find(s => s.id === selectedSeasonId) || seasons[0];
+  const role = utente!.ruolo;
 
   return (
     <header style={{
@@ -62,51 +61,8 @@ export const Header: React.FC<HeaderProps> = ({
         </span>
       </div>
 
-      {/* Right: Role switcher & User profile */}
+      {/* Right: User profile */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
-        {/* Role Toggle Button */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          background: '#F1F5F9',
-          borderRadius: '20px',
-          padding: '2px',
-          border: '1px solid #E2E8F0'
-        }}>
-          <button
-            onClick={() => setRole('operatore')}
-            style={{
-              padding: '0.3rem 0.75rem',
-              borderRadius: '16px',
-              border: 'none',
-              fontSize: '0.775rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              backgroundColor: role === 'operatore' ? 'var(--pa-blue-primary)' : 'transparent',
-              color: role === 'operatore' ? 'white' : 'var(--pa-text-muted)',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            Operatore
-          </button>
-          <button
-            onClick={() => setRole('admin')}
-            style={{
-              padding: '0.3rem 0.75rem',
-              borderRadius: '16px',
-              border: 'none',
-              fontSize: '0.775rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              backgroundColor: role === 'admin' ? 'var(--pa-blue-dark)' : 'transparent',
-              color: role === 'admin' ? 'white' : 'var(--pa-text-muted)',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            Admin
-          </button>
-        </div>
-
         {/* Notifications Icon */}
         <div style={{ position: 'relative', cursor: 'pointer' }}>
           <Bell size={20} color="var(--pa-text-muted)" />
@@ -135,11 +91,11 @@ export const Header: React.FC<HeaderProps> = ({
             fontWeight: 700,
             fontSize: '0.85rem'
           }}>
-            MR
+            {utente!.email.slice(0, 2).toUpperCase()}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--pa-text-primary)', lineHeight: 1.1 }}>
-              Mario Rossi
+              {utente!.email}
             </span>
             <span style={{ fontSize: '0.725rem', color: 'var(--pa-text-muted)', marginTop: '2px' }}>
               {role === 'admin' ? 'Amministratore Sistema' : 'Funzionario Servizio Sport'}

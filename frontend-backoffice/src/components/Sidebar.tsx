@@ -1,22 +1,24 @@
 import React from 'react';
-import { 
-  Layers, 
-  Building2, 
-  FileCheck2, 
-  Settings2, 
-  ShieldCheck, 
-  BarChart3, 
+import { useLocation, useNavigate } from 'react-router';
+import {
+  Layers,
+  Building2,
+  FileCheck2,
+  Settings2,
+  ShieldCheck,
+  BarChart3,
   LogOut,
   Landmark
 } from 'lucide-react';
+import { useAuth } from '../auth/AuthContext.tsx';
 
-interface SidebarProps {
-  currentTab: string;
-  setCurrentTab: (tab: string) => void;
-  role: 'admin' | 'operatore';
-}
+export const Sidebar: React.FC = () => {
+  const { utente, logout } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const role = utente!.ruolo;
+  const currentTab = location.pathname === '/' ? 'control-room' : location.pathname.replace(/^\//, '');
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, role }) => {
   const menuItems = [
     { id: 'control-room', label: 'Control Room Procedura', icon: Layers, roles: ['admin', 'operatore'] },
     { id: 'impianti-spazi', label: 'Impianti & Spazi Sportivi', icon: Building2, roles: ['admin', 'operatore'] },
@@ -75,8 +77,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, rol
         fontSize: '0.8rem'
       }}>
         <span style={{ opacity: 0.8 }}>Ruolo Attivo:</span>
-        <span style={{ 
-          fontWeight: 700, 
+        <span style={{
+          fontWeight: 700,
           color: role === 'admin' ? 'var(--pa-accent)' : '#F1F5F9',
           textTransform: 'uppercase',
           fontSize: '0.75rem'
@@ -95,7 +97,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, rol
             return (
               <button
                 key={item.id}
-                onClick={() => setCurrentTab(item.id)}
+                onClick={() => navigate(`/${item.id}`)}
                 style={{
                   width: '100%',
                   display: 'flex',
@@ -147,7 +149,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, rol
           })}
       </nav>
 
-      {/* Footer / System Version */}
+      {/* Footer / System Version + Logout */}
       <div style={{
         padding: '1rem 1.25rem',
         borderTop: '1px solid rgba(255,255,255,0.1)',
@@ -165,6 +167,34 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, rol
           <span>Engine Go</span>
           <span style={{ color: '#2ECC71', fontWeight: 600 }}>Connected</span>
         </div>
+        <button
+          onClick={() => logout()}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            marginTop: '0.5rem',
+            padding: '0.5rem 0.6rem',
+            borderRadius: '6px',
+            border: 'none',
+            background: 'transparent',
+            color: 'rgba(255,255,255,0.75)',
+            cursor: 'pointer',
+            fontSize: '0.8rem',
+            textAlign: 'left'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.08)';
+            e.currentTarget.style.color = 'white';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = 'transparent';
+            e.currentTarget.style.color = 'rgba(255,255,255,0.75)';
+          }}
+        >
+          <LogOut size={16} />
+          <span>Esci</span>
+        </button>
       </div>
     </aside>
   );
