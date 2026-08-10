@@ -165,7 +165,11 @@ async function verificaStagioneAmmetteVariazioni(db: Db, stagioneId: string): Pr
 // fascia: fuori dal calendario della stagione, o in un giorno della settimana diverso da
 // quello del template (I7 final review — prima l'unico filtro era il regex del body, e una
 // data impossibile arrivava fino a Postgres come 22008 → 500 grezzo).
-async function verificaCoerenzaOccorrenza(db: Db, stagioneId: string, occ: Occorrenza): Promise<void> {
+// Esportata (I2 final review, blocco B.34-35): la stessa verifica serve a
+// utilizziEffettivi.ts::registraUtilizzo — una rilevazione di mancato utilizzo su una data
+// che non è nemmeno un'occorrenza reale di quella fascia non deve poter concorrere alle
+// soglie di decadenza. Nessun cambiamento di comportamento per i chiamanti interni.
+export async function verificaCoerenzaOccorrenza(db: Db, stagioneId: string, occ: Occorrenza): Promise<void> {
   const r = await db.query<{ nel_calendario: boolean; giorno_coerente: boolean }>(
     `SELECT ($2::date BETWEEN s.data_inizio AND s.data_fine) AS nel_calendario,
             (EXTRACT(ISODOW FROM $2::date) = st.giorno_settimana) AS giorno_coerente

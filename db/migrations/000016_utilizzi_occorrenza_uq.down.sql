@@ -1,0 +1,1 @@
+DROP INDEX utilizzi_effettivi_occorrenza_uq;

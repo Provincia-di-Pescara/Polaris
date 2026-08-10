@@ -1,6 +1,13 @@
+import { DatabaseError } from 'pg';
 import type { Db } from './db.ts';
 import { leggiVersioneAttiva } from './repository/parametrico.ts';
-import { ErroreNonTrovato, ErroreStatoNonValidoPerTransizione } from './erroriDominio.ts';
+import {
+  ErroreNonTrovato,
+  ErroreStatoNonValidoPerTransizione,
+  ErroreRiferimentoNonValido,
+  ErroreValoreDuplicato,
+} from './erroriDominio.ts';
+import { trovaProprietarioOccorrenza, verificaCoerenzaOccorrenza } from './variazioni.ts';
 
 export type EsitoUtilizzo = 'utilizzato' | 'non_utilizzato_giustificato' | 'non_utilizzato_non_giustificato' | 'indisponibilita_impianto';
 export type RilevatoTramite = 'registro_impianto' | 'autodichiarazione' | 'checkin_digitale';
@@ -66,26 +73,96 @@ export interface DatiRegistraUtilizzo {
   note?: string | undefined;
 }
 
+interface ContestoAssegnazione {
+  slot_id: string;
+  associazione_id: string;
+  stagione_id: string;
+}
+
 // art. B.34/B.35: la richiesta di giustificazione (primo passo della scala graduata) è
 // implicita nella registrazione stessa di un esito 'non_utilizzato_non_giustificato' — non
 // un atto separato. La finestra dura termine_giustificazione_giorni (parametrico attivo,
 // 🔺 default 7gg) a partire da ORA, non dalla data dell'occorrenza mancata.
+//
+// M1 (final review) — scelta di design esplicita, NON un residuo dimenticato: il tipo enum
+// 'richiesta_giustificazione' di provvedimenti_mancato_utilizzo.tipo non ha (e non deve
+// avere) alcun writer in questo blocco. Il primo gradino della scala graduata B.35 è
+// appunto implicito nella registrazione qui sopra — la finestra si apre da sé, l'atto
+// separato non esiste. Solo i due gradini successivi (diffida, decadenza) sono atti
+// amministrativi veri e passano da creaProvvedimento (provvedimenti.ts). Il valore enum
+// resta nello schema per non precludere un'eventuale futura formalizzazione del primo
+// gradino richiesta dall'Ente, senza migration.
+//
+// I1/I2 (final review) — un mancato utilizzo concorre a un atto che estingue un diritto
+// (decadenza, art. B.35): prima dell'INSERT va verificato che l'occorrenza (slot, data)
+// esista davvero nel calendario della stagione e che sia effettivamente imputabile
+// all'associazione titolare dell'assegnazione. La titolarità di una singola occorrenza è
+// MOBILE dal blocco B.32/B.33: una liberazione/scambio_temporaneo accettata la sposta,
+// un'indisponibilità sopravvenuta la rende inutilizzabile per chiunque.
 export async function registraUtilizzo(db: Db, dati: DatiRegistraUtilizzo): Promise<UtilizzoEffettivo> {
+  const contesto = await db.query<ContestoAssegnazione>(
+    `SELECT a.slot_id, a.associazione_id, st.stagione_id
+     FROM assegnazioni a
+     JOIN slot_settimana_tipo st ON st.id = a.slot_id
+     WHERE a.id = $1`,
+    [dati.assegnazioneId],
+  );
+  const ass = contesto.rows[0];
+  if (!ass) {
+    throw new ErroreNonTrovato('assegnazione non trovata');
+  }
+
+  // I2: la data deve essere un'occorrenza reale della fascia (dentro il calendario della
+  // stagione e nel giorno della settimana del template) — riusa la stessa verifica di
+  // variazioni.ts, un solo punto di verità.
+  await verificaCoerenzaOccorrenza(db, ass.stagione_id, { slotId: ass.slot_id, data: dati.data });
+
   let scadeIl: Date | null = null;
   if (dati.esito === 'non_utilizzato_non_giustificato') {
+    // I1(a): l'impianto era indisponibile per atto dell'Ente (art. B.33) — l'esito corretto
+    // è 'indisponibilita_impianto', non un mancato imputabile all'associazione. Non lo
+    // riscriviamo d'ufficio (sarebbe una decisione silenziosa su un atto sanzionatorio):
+    // rifiutiamo la registrazione con un messaggio che dice quale esito usare.
+    const indisponibile = await db.query(
+      `SELECT 1 FROM indisponibilita_sopravvenute WHERE slot_id = $1 AND $2::date BETWEEN dal AND al LIMIT 1`,
+      [ass.slot_id, dati.data],
+    );
+    if ((indisponibile.rowCount ?? 0) > 0) {
+      throw new ErroreRiferimentoNonValido(
+        `la fascia è coperta da un'indisponibilità sopravvenuta in data ${dati.data} (art. B.33): registrare l'esito 'indisponibilita_impianto', non un mancato utilizzo imputabile all'associazione`,
+      );
+    }
+    // I1(b): la titolarità dell'occorrenza in QUELLA data può essere stata ceduta a un'altra
+    // associazione (o liberata) da una variazione ordinaria accettata (art. B.32) — in quel
+    // caso il titolare dell'assegnazione non doveva essere lì, e il mancato non è suo.
+    const proprietario = await trovaProprietarioOccorrenza(db, ass.slot_id, dati.data);
+    if (proprietario !== ass.associazione_id) {
+      throw new ErroreRiferimentoNonValido(
+        `in data ${dati.data} l'associazione titolare dell'assegnazione non è titolare dell'occorrenza (variazione ordinaria accettata, art. B.32): un mancato utilizzo non le è imputabile`,
+      );
+    }
     const parametrico = await leggiVersioneAttiva(db);
     if (!parametrico) {
       throw new Error('nessuna versione parametrica attiva');
     }
     scadeIl = new Date(Date.now() + parametrico.termineGiustificazioneGiorni * 24 * 60 * 60 * 1000);
   }
-  const r = await db.query<RigaUtilizzo>(
-    `INSERT INTO utilizzi_effettivi (assegnazione_id, data, esito, rilevato_tramite, note, giustificazione_scade_il)
-     VALUES ($1, $2, $3, 'registro_impianto', $4, $5)
-     RETURNING ${COLONNE_SELECT}`,
-    [dati.assegnazioneId, dati.data, dati.esito, dati.note ?? null, scadeIl],
-  );
-  return daRiga(r.rows[0]!);
+  try {
+    const r = await db.query<RigaUtilizzo>(
+      `INSERT INTO utilizzi_effettivi (assegnazione_id, data, esito, rilevato_tramite, note, giustificazione_scade_il)
+       VALUES ($1, $2, $3, 'registro_impianto', $4, $5)
+       RETURNING ${COLONNE_SELECT}`,
+      [dati.assegnazioneId, dati.data, dati.esito, dati.note ?? null, scadeIl],
+    );
+    return daRiga(r.rows[0]!);
+  } catch (err) {
+    // I2: utilizzi_effettivi_occorrenza_uq (migration 000016) — senza, la stessa occorrenza
+    // poteva essere registrata N volte come mancato e contata N volte verso le soglie.
+    if (err instanceof DatabaseError && err.code === '23505') {
+      throw new ErroreValoreDuplicato('utilizzo già registrato per questa assegnazione in questa data');
+    }
+    throw err;
+  }
 }
 
 export async function trovaUtilizzoPerId(db: Db, id: string): Promise<UtilizzoEffettivo | null> {

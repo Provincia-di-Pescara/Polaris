@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { creaProvvedimento, listaProvvedimentiPerAssegnazione, codaMancatiUtilizzi, applicaDecadenza } from './provvedimenti.ts';
 import { registraUtilizzo } from './utilizziEffettivi.ts';
+import { trovaProprietarioOccorrenza } from './variazioni.ts';
 import { ErroreStatoNonValidoPerTransizione } from './erroriDominio.ts';
 import { creaDisciplina } from './discipline.ts';
 import { creaIstituzione } from './istituzioni.ts';
@@ -49,7 +50,7 @@ async function creaFixture(pool: Pool) {
     `INSERT INTO assegnazioni (slot_id, domanda_id, associazione_id, tipo, valore_minuti, stato) VALUES ($1, $2, $3, 'singola', 60, 'provvisoria') RETURNING id`,
     [slot.id, domanda.id, associazione.rows[0]!.id],
   );
-  return { stagioneId, assegnazioneId: assegnazione.rows[0]!.id, associazioneId: associazione.rows[0]!.id };
+  return { stagioneId, slotId: slot.id, assegnazioneId: assegnazione.rows[0]!.id, associazioneId: associazione.rows[0]!.id };
 }
 
 // Registra N utilizzi 'non_utilizzato_non_giustificato' già scaduti senza presentazione
@@ -132,4 +133,42 @@ test('applicaDecadenza: assegnazione passa a decaduta, guardia su doppia decaden
   assert.equal(riga.rows[0]!.decaduta_motivazione, 'decadenza per mancati utilizzi ripetuti');
 
   await assert.rejects(() => applicaDecadenza(pool, fx.assegnazioneId, 'seconda decadenza'), ErroreStatoNonValidoPerTransizione);
+});
+
+// M4(b) final review: la decadenza deve liberare davvero l'occorrenza — trovaProprietarioOccorrenza
+// (variazioni.ts) legge assegnazioni WHERE stato IN ('provvisoria','validata'), quindi una riga
+// 'decaduta' non deve più risultare proprietaria di nessuna data. È l'invariante che rende vera
+// l'affermazione di B.35 "lo spazio torna a disposizione quale fascia libera".
+test('applicaDecadenza: l\'occorrenza torna senza proprietario (fascia libera, art. B.35)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+
+  assert.equal(await trovaProprietarioOccorrenza(pool, fx.slotId, '2030-10-07'), fx.associazioneId);
+
+  await applicaDecadenza(pool, fx.assegnazioneId, 'decadenza per mancati utilizzi ripetuti');
+
+  assert.equal(await trovaProprietarioOccorrenza(pool, fx.slotId, '2030-10-07'), null);
+});
+
+// I1 final review (difesa in profondità): righe già registrate prima del fix a monte, o
+// un'indisponibilità deliberata dall'Ente dopo la rilevazione, non devono concorrere alle soglie.
+test('codaMancatiUtilizzi: esclude i mancati su occorrenze coperte da indisponibilità sopravvenuta (art. B.33)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  await registraMancatiDefinitivi(pool, fx.assegnazioneId, 2, '2030-10-07'); // 2030-10-07 e 2030-10-14
+
+  assert.equal((await codaMancatiUtilizzi(pool, fx.associazioneId, fx.stagioneId))[0]!.mancatiDefinitivi, 2);
+
+  // indisponibilità deliberata a posteriori su una delle due date
+  await pool.query(
+    `INSERT INTO indisponibilita_sopravvenute (slot_id, dal, al, motivo, comunicata_da)
+     VALUES ($1, '2030-10-14', '2030-10-14', 'lavori straordinari', 'ente')`,
+    [fx.slotId],
+  );
+
+  const coda = await codaMancatiUtilizzi(pool, fx.associazioneId, fx.stagioneId);
+  assert.equal(coda[0]!.mancatiDefinitivi, 1);
+  assert.equal(coda[0]!.diffidaRaggiunta, false);
 });

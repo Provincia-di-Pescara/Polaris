@@ -86,6 +86,12 @@ interface RigaConteggio {
 // sposta esito a 'non_utilizzato_giustificato' e la riga esce da questo filtro da sé).
 // Le finestre ancora aperte non contano: l'associazione ha ancora la possibilità di
 // giustificare, contarle già ora anticiperebbe l'escalation.
+//
+// I1 (final review) — difesa in profondità: registraUtilizzo (utilizziEffettivi.ts) rifiuta
+// già a monte un mancato su un'occorrenza coperta da un'indisponibilità sopravvenuta (art.
+// B.33), ma righe registrate PRIMA di quel fix (o un'indisponibilità deliberata dall'Ente
+// dopo la rilevazione) possono comunque esistere: il NOT EXISTS qui sotto le esclude dal
+// conteggio che alimenta diffida/decadenza. Stessa condizione usata in variazioni.ts.
 export async function codaMancatiUtilizzi(db: Db, associazioneId: string, stagioneId: string): Promise<VoceCodaMancatiUtilizzi[]> {
   const parametrico = await leggiVersioneAttiva(db);
   if (!parametrico) {
@@ -100,6 +106,10 @@ export async function codaMancatiUtilizzi(db: Db, associazioneId: string, stagio
        AND ue.esito = 'non_utilizzato_non_giustificato'
        AND ((ue.giustificazione_presentata_il IS NULL AND ue.giustificazione_scade_il < now())
             OR ue.giustificazione_decisa_il IS NOT NULL)
+       AND NOT EXISTS (
+         SELECT 1 FROM indisponibilita_sopravvenute i
+         WHERE i.slot_id = a.slot_id AND ue.data BETWEEN i.dal AND i.al
+       )
      GROUP BY a.id`,
     [associazioneId, stagioneId],
   );

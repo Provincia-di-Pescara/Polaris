@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { registraUtilizzo, trovaUtilizzoPerId, listaUtilizziPerAssegnazione, listaUtilizziPerAssociazione, presentaGiustificazione, accogliGiustificazione, rigettaGiustificazione } from './utilizziEffettivi.ts';
-import { ErroreNonTrovato, ErroreStatoNonValidoPerTransizione } from './erroriDominio.ts';
+import { ErroreNonTrovato, ErroreStatoNonValidoPerTransizione, ErroreRiferimentoNonValido, ErroreValoreDuplicato } from './erroriDominio.ts';
 import { creaDisciplina } from './discipline.ts';
 import { creaIstituzione } from './istituzioni.ts';
 import { creaImpianto } from './impianti.ts';
@@ -52,8 +52,91 @@ async function creaFixture(pool: Pool) {
     `INSERT INTO utenti_backoffice (email, password_hash, nome, cognome, ruolo, stato, ultimo_accesso_il) VALUES ($1, 'test', 'Test', 'Operatore', 'operatore', 'attivo', now()) RETURNING id`,
     [`operatore-${randomUUID()}@test.local`],
   );
-  return { stagioneId, assegnazioneId: assegnazione.rows[0]!.id, associazioneId: associazione.rows[0]!.id, operatoreId: utente.rows[0]!.id };
+  return {
+    stagioneId, slotId: slot.id, assegnazioneId: assegnazione.rows[0]!.id,
+    associazioneId: associazione.rows[0]!.id, operatoreId: utente.rows[0]!.id,
+  };
 }
+
+// --- Guardie I1/I2 (final review): imputabilità e unicità dell'occorrenza rilevata ---
+
+test('registraUtilizzo: 404 se l\'assegnazione non esiste', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  await assert.rejects(
+    () => registraUtilizzo(pool, { assegnazioneId: randomUUID(), data: '2030-10-07', esito: 'utilizzato' }),
+    ErroreNonTrovato,
+  );
+});
+
+test('I2: registraUtilizzo rifiuta una data fuori dal calendario della stagione', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  await assert.rejects(
+    () => registraUtilizzo(pool, { assegnazioneId: fx.assegnazioneId, data: '2029-10-01', esito: 'utilizzato' }),
+    ErroreRiferimentoNonValido,
+  );
+});
+
+test('I2: registraUtilizzo rifiuta una data nel giorno della settimana sbagliato', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  // la fascia è di lunedì (giornoSettimana 1); 2030-10-08 è un martedì
+  await assert.rejects(
+    () => registraUtilizzo(pool, { assegnazioneId: fx.assegnazioneId, data: '2030-10-08', esito: 'utilizzato' }),
+    ErroreRiferimentoNonValido,
+  );
+});
+
+test('I2: registraUtilizzo rifiuta la seconda rilevazione sulla stessa occorrenza', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  await registraUtilizzo(pool, { assegnazioneId: fx.assegnazioneId, data: '2030-10-07', esito: 'non_utilizzato_non_giustificato' });
+  await assert.rejects(
+    () => registraUtilizzo(pool, { assegnazioneId: fx.assegnazioneId, data: '2030-10-07', esito: 'non_utilizzato_non_giustificato' }),
+    ErroreValoreDuplicato,
+  );
+});
+
+test('I1(a): mancato non registrabile su un\'occorrenza coperta da indisponibilità sopravvenuta', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  await pool.query(
+    `INSERT INTO indisponibilita_sopravvenute (slot_id, dal, al, motivo, comunicata_da)
+     VALUES ($1, '2030-10-07', '2030-10-07', 'seggio elettorale', 'istituzione_scolastica')`,
+    [fx.slotId],
+  );
+
+  await assert.rejects(
+    () => registraUtilizzo(pool, { assegnazioneId: fx.assegnazioneId, data: '2030-10-07', esito: 'non_utilizzato_non_giustificato' }),
+    ErroreRiferimentoNonValido,
+  );
+  // l'esito corretto per quella data resta registrabile
+  const ok = await registraUtilizzo(pool, { assegnazioneId: fx.assegnazioneId, data: '2030-10-07', esito: 'indisponibilita_impianto' });
+  assert.equal(ok.esito, 'indisponibilita_impianto');
+});
+
+test('I1(b): mancato non registrabile su un\'occorrenza ceduta con variazione ordinaria accettata (art. B.32)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const fx = await creaFixture(pool);
+  // liberazione accettata: in quella data l'occorrenza non ha più un titolare
+  await pool.query(
+    `INSERT INTO variazioni_ordinarie (tipo, slot_id, data, richiesta_da_associazione_id, richiesta_da_persona_fisica_id, stato)
+     VALUES ('liberazione', $1, '2030-10-07', $2,
+             (SELECT id FROM persone_fisiche LIMIT 1), 'accettata')`,
+    [fx.slotId, fx.associazioneId],
+  );
+
+  await assert.rejects(
+    () => registraUtilizzo(pool, { assegnazioneId: fx.assegnazioneId, data: '2030-10-07', esito: 'non_utilizzato_non_giustificato' }),
+    ErroreRiferimentoNonValido,
+  );
+});
 
 test('registraUtilizzo con esito utilizzato: nessuna finestra di giustificazione', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
   const pool = new Pool({ connectionString: dsn });
