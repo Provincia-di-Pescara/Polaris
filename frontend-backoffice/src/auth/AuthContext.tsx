@@ -16,6 +16,14 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// Lanciato da login() quando il backend risponde ma rifiuta le credenziali (401).
+export class ErroreCredenzialiNonValide extends Error {}
+
+// Lanciato da login() quando il backend non risponde affatto (rete, DNS, servizio
+// giù) o risponde con un errore diverso da 401 — distinto da ErroreCredenzialiNonValide
+// perché il messaggio utente corretto è diverso ("riprova" vs "controlla le credenziali").
+export class ErroreServizioNonRaggiungibile extends Error {}
+
 async function chiediUtenteCorrente(): Promise<Utente | null> {
   try {
     const r = await apiFetch('/auth/me');
@@ -43,6 +51,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
           setUtente(u);
         }
       })
+      .catch(() => {
+        // Bootstrap non deve mai propagare un unhandled rejection: un errore di
+        // rete (backend irraggiungibile) equivale a "nessuna sessione", non a un
+        // crash dell'app — l'utente vedrà semplicemente la schermata di login.
+        if (!annullato) {
+          setUtente(null);
+        }
+      })
       .finally(() => {
         if (!annullato) {
           setCaricamento(false);
@@ -54,13 +70,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   }, []);
 
   const login = useCallback(async (email: string, password: string): Promise<void> => {
-    const r = await fetch(`${baseUrl()}/auth/login`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
+    let r: Response;
+    try {
+      r = await fetch(`${baseUrl()}/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+    } catch {
+      throw new ErroreServizioNonRaggiungibile('backend irraggiungibile');
+    }
+    if (r.status === 401) {
+      throw new ErroreCredenzialiNonValide('credenziali non valide');
+    }
     if (!r.ok) {
-      throw new Error('credenziali non valide');
+      throw new ErroreServizioNonRaggiungibile('risposta inattesa dal servizio di autenticazione');
     }
     const { accessToken, refreshToken } = await r.json();
     impostaTokens(accessToken, refreshToken);
