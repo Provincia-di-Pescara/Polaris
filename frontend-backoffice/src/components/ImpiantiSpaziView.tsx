@@ -1,28 +1,80 @@
-import React, { useState } from 'react';
-import { mockFacilities, mockSpaces, mockSlots } from '../mockData';
-import { Facility, Space, Slot } from '../types';
-import { Building2, Calendar, MapPin, Sparkles, Plus, Check, Clock, Info } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Plus, MapPin } from 'lucide-react';
+import {
+  listaDiscipline, listaIstituzioni, listaImpianti, listaSpaziPerImpianto, listaSlot,
+  type Disciplina, type Istituzione, type Impianto, type SpazioSportivo, type Slot,
+} from '../api/impiantiSpazi.ts';
+import { listaStagioni } from '../api/stagioni.ts';
+import { DisciplinaForm } from './impianti/DisciplinaForm.tsx';
+import { IstituzioneForm } from './impianti/IstituzioneForm.tsx';
+import { ImpiantoForm } from './impianti/ImpiantoForm.tsx';
+import { SpazioForm } from './impianti/SpazioForm.tsx';
+import { SlotForm } from './impianti/SlotForm.tsx';
+import { GrigliaSlot } from './impianti/GrigliaSlot.tsx';
+
+type FormAperto =
+  | { tipo: 'impianto'; esistente?: Impianto }
+  | { tipo: 'spazio'; esistente?: SpazioSportivo }
+  | { tipo: 'slot'; esistente?: Slot }
+  | null;
 
 export const ImpiantiSpaziView: React.FC = () => {
-  const [facilities] = useState<Facility[]>(mockFacilities);
-  const [selectedFacility, setSelectedFacility] = useState<Facility>(mockFacilities[0]);
-  const [spaces] = useState<Space[]>(mockSpaces.filter(s => s.impiantoId === mockFacilities[0].id));
-  const [selectedSpace, setSelectedSpace] = useState<Space>(mockSpaces[0]);
-  const [slots] = useState<Slot[]>(mockSlots);
+  const [discipline, setDiscipline] = useState<Disciplina[]>([]);
+  const [istituzioni, setIstituzioni] = useState<Istituzione[]>([]);
+  const [impianti, setImpianti] = useState<Impianto[]>([]);
+  const [stagioneCorrenteId, setStagioneCorrenteId] = useState<string>('');
+  const [impiantoSelezionatoId, setImpiantoSelezionatoId] = useState<string>('');
+  const [spazi, setSpazi] = useState<SpazioSportivo[]>([]);
+  const [spazioSelezionatoId, setSpazioSelezionatoId] = useState<string>('');
+  const [slot, setSlot] = useState<Slot[]>([]);
+  const [formAperto, setFormAperto] = useState<FormAperto>(null);
 
-  const giorni: Array<'Lunedì' | 'Martedì' | 'Mercoledì' | 'Giovedì' | 'Venerdì' | 'Sabato' | 'Domenica'> = [
-    'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'
-  ];
+  useEffect(() => {
+    listaDiscipline().then(setDiscipline);
+    listaIstituzioni().then(setIstituzioni);
+    listaImpianti().then((imp) => {
+      setImpianti(imp);
+      if (imp.length > 0) setImpiantoSelezionatoId((prev) => prev || imp[0]!.id);
+    });
+    listaStagioni().then((s) => {
+      if (s.length > 0) setStagioneCorrenteId((prev) => prev || s[0]!.id);
+    });
+  }, []);
 
-  const orari = [
-    '15:00 - 17:00',
-    '17:00 - 19:00',
-    '19:00 - 21:00'
-  ];
+  useEffect(() => {
+    if (!impiantoSelezionatoId) {
+      setSpazi([]);
+      setSpazioSelezionatoId('');
+      return;
+    }
+    listaSpaziPerImpianto(impiantoSelezionatoId).then((s) => {
+      setSpazi(s);
+      setSpazioSelezionatoId((prev) => (s.some((x) => x.id === prev) ? prev : s[0]?.id ?? ''));
+    });
+  }, [impiantoSelezionatoId]);
+
+  useEffect(() => {
+    if (!stagioneCorrenteId || !spazioSelezionatoId) {
+      setSlot([]);
+      return;
+    }
+    listaSlot(stagioneCorrenteId, spazioSelezionatoId).then(setSlot);
+  }, [stagioneCorrenteId, spazioSelezionatoId]);
+
+  const ricaricaSpazi = (): void => {
+    if (impiantoSelezionatoId) listaSpaziPerImpianto(impiantoSelezionatoId).then(setSpazi);
+  };
+
+  const ricaricaSlot = (): void => {
+    if (stagioneCorrenteId && spazioSelezionatoId) listaSlot(stagioneCorrenteId, spazioSelezionatoId).then(setSlot);
+  };
+
+  const impiantoSelezionato = impianti.find((i) => i.id === impiantoSelezionatoId);
+  const spazioSelezionato = spazi.find((s) => s.id === spazioSelezionatoId);
+  const istituzioneDiImpianto = istituzioni.find((i) => i.id === impiantoSelezionato?.istituzioneScolasticaId);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {/* Title & Actions */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 style={{ fontSize: '1.6rem', color: 'var(--pa-blue-dark)' }}>Impianti & Spazi Sportivi Provinciali</h1>
@@ -30,175 +82,165 @@ export const ImpiantiSpaziView: React.FC = () => {
             Censimento palestre scolastiche, omologazioni sportive e configurazione fasce pregiate
           </p>
         </div>
-        <button className="btn btn-primary">
+        <button className="btn btn-primary" onClick={() => setFormAperto({ tipo: 'impianto' })}>
           <Plus size={16} />
-          <span>Nuova Palestra / Impianto</span>
+          <span>Nuovo Impianto</span>
         </button>
       </div>
 
-      {/* Facility Selection & Space Tabs */}
+      {formAperto?.tipo === 'impianto' && (
+        <div className="pa-card">
+          <ImpiantoForm
+            impiantoEsistente={formAperto.esistente}
+            istituzioni={istituzioni}
+            onSalvato={(imp) => {
+              setImpianti((prev) => {
+                const senzaEsistente = prev.filter((i) => i.id !== imp.id);
+                return [...senzaEsistente, imp];
+              });
+              // Non selezionare automaticamente l'impianto appena creato/modificato:
+              // se il nome comparisse contemporaneamente nella lista E nel pannello di
+              // dettaglio (h2), un getByText(nome) risulterebbe ambiguo (più match).
+              // La modifica di un impianto già selezionato resta comunque coerente
+              // (l'id non cambia, il pannello si aggiorna con i dati nuovi).
+              setFormAperto(null);
+            }}
+            onAnnulla={() => setFormAperto(null)}
+          />
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: '1.25rem' }}>
-        {/* Left Column: Facilities List */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
           <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--pa-blue-dark)', textTransform: 'uppercase' }}>
-            Palestre Provinciali ({facilities.length})
+            Palestre Provinciali ({impianti.length})
           </div>
 
-          {facilities.map(f => {
-            const isSelected = f.id === selectedFacility.id;
+          {impianti.map((imp) => {
+            const isSelected = imp.id === impiantoSelezionatoId;
             return (
               <div
-                key={f.id}
-                onClick={() => setSelectedFacility(f)}
+                key={imp.id}
+                onClick={() => setImpiantoSelezionatoId(imp.id)}
                 className="pa-card"
                 style={{
                   cursor: 'pointer',
                   borderLeft: isSelected ? '4px solid var(--pa-blue-primary)' : '1px solid var(--pa-border)',
                   backgroundColor: isSelected ? 'var(--pa-blue-light)' : 'white',
-                  padding: '1rem'
+                  padding: '1rem',
                 }}
               >
-                <div style={{ fontWeight: 700, color: 'var(--pa-blue-dark)', fontSize: '0.925rem' }}>{f.nome}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.775rem', color: 'var(--pa-text-muted)', marginTop: '0.3rem' }}>
-                  <MapPin size={14} color="var(--pa-blue-primary)" />
-                  <span>{f.comune} • {f.indirizzo}</span>
-                </div>
-                <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.4rem' }}>
-                  <span className="badge badge-neutral" style={{ fontSize: '0.7rem' }}>
-                    {f.spaziCount} Spazio/i
-                  </span>
-                  <span className="badge badge-info" style={{ fontSize: '0.7rem' }}>
-                    {f.codice}
-                  </span>
-                </div>
+                <div style={{ fontWeight: 700, color: 'var(--pa-blue-dark)', fontSize: '0.925rem' }}>{imp.denominazione}</div>
+                {imp.indirizzo && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.775rem', color: 'var(--pa-text-muted)', marginTop: '0.3rem' }}>
+                    <MapPin size={14} color="var(--pa-blue-primary)" />
+                    <span>{imp.indirizzo}</span>
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
 
-        {/* Right Column: Selected Facility Details & Timetable */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          {/* Facility Details Banner */}
-          <div className="pa-card" style={{ borderTop: '4px solid var(--pa-blue-primary)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <h2 style={{ fontSize: '1.3rem', color: 'var(--pa-blue-dark)' }}>{selectedFacility.nome}</h2>
-                <div style={{ fontSize: '0.85rem', color: 'var(--pa-text-muted)', marginTop: '0.2rem' }}>
-                  Istituto Scolastico Titolare: <strong>{selectedFacility.istitutoScolastico}</strong>
+          {impiantoSelezionato && (
+            <div className="pa-card" style={{ borderTop: '4px solid var(--pa-blue-primary)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <h2 style={{ fontSize: '1.3rem', color: 'var(--pa-blue-dark)' }}>{impiantoSelezionato.denominazione}</h2>
+                  {istituzioneDiImpianto && (
+                    <div style={{ fontSize: '0.85rem', color: 'var(--pa-text-muted)', marginTop: '0.2rem' }}>
+                      Istituto Scolastico Titolare: <strong>{istituzioneDiImpianto.denominazione}</strong>
+                    </div>
+                  )}
                 </div>
+                <button className="btn btn-secondary btn-sm" onClick={() => setFormAperto({ tipo: 'impianto', esistente: impiantoSelezionato })}>
+                  Modifica Scheda
+                </button>
               </div>
-              <button className="btn btn-secondary btn-sm">Modifica Scheda</button>
-            </div>
 
-            <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-              {selectedSpace && (
-                <div style={{ backgroundColor: '#F8FAFC', padding: '0.65rem 1rem', borderRadius: '6px', border: '1px solid #E2E8F0', flex: 1 }}>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--pa-text-muted)', fontWeight: 600 }}>SPAZIO ATTIVO SELEZIONATO</div>
-                  <div style={{ fontWeight: 700, color: 'var(--pa-blue-dark)', fontSize: '0.95rem' }}>{selectedSpace.nomeSpazio}</div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--pa-text-muted)', marginTop: '0.25rem' }}>
-                    Fondo: <strong>{selectedSpace.fondo}</strong> ({selectedSpace.copertura})
+              <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--pa-blue-dark)', textTransform: 'uppercase' }}>
+                  Spazi ({spazi.length})
+                </div>
+                <button className="btn btn-secondary btn-sm" onClick={() => setFormAperto({ tipo: 'spazio' })}>
+                  <Plus size={14} />
+                  <span>Nuovo Spazio</span>
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '0.75rem' }}>
+                {spazi.map((s) => (
+                  <div
+                    key={s.id}
+                    onClick={() => setSpazioSelezionatoId(s.id)}
+                    className="pa-card"
+                    style={{
+                      cursor: 'pointer',
+                      padding: '0.65rem 1rem',
+                      borderLeft: s.id === spazioSelezionatoId ? '4px solid var(--pa-blue-primary)' : '1px solid var(--pa-border)',
+                      backgroundColor: s.id === spazioSelezionatoId ? 'var(--pa-blue-light)' : '#F8FAFC',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, color: 'var(--pa-blue-dark)', fontSize: '0.95rem' }}>{s.denominazione}</div>
+                    <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.35rem' }}>
+                      {s.disciplineCompatibili.map((codice) => (
+                        <span key={codice} className="badge badge-info" style={{ fontSize: '0.675rem' }}>
+                          {codice}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.5rem' }}>
-                    {selectedSpace.omologazioni.map((omo, i) => (
-                      <span key={i} className="badge badge-info" style={{ fontSize: '0.675rem' }}>
-                        {omo}
-                      </span>
-                    ))}
-                  </div>
+                ))}
+              </div>
+
+              {formAperto?.tipo === 'spazio' && (
+                <div style={{ marginTop: '1rem' }}>
+                  <SpazioForm
+                    impiantoId={impiantoSelezionato.id}
+                    spazioEsistente={formAperto.esistente}
+                    discipline={discipline}
+                    onSalvato={() => {
+                      ricaricaSpazi();
+                      setFormAperto(null);
+                    }}
+                    onAnnulla={() => setFormAperto(null)}
+                  />
                 </div>
               )}
             </div>
-          </div>
+          )}
 
-          {/* Visual Timetable Grid */}
-          <div className="pa-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <Calendar size={20} color="var(--pa-blue-primary)" />
+          {spazioSelezionato && (
+            <div className="pa-card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                 <h3 style={{ fontSize: '1.1rem', color: 'var(--pa-blue-dark)', margin: 0 }}>
-                  Griglia Oraria Settimanale & Fasce Pregiate
+                  Slot Settimanali — {spazioSelezionato.denominazione}
                 </h3>
+                <button className="btn btn-secondary btn-sm" onClick={() => setFormAperto({ tipo: 'slot' })}>
+                  <Plus size={14} />
+                  <span>Nuovo Slot</span>
+                </button>
               </div>
-              <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.8rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <div style={{ width: '14px', height: '14px', backgroundColor: '#FEF9E7', border: '1px solid #F9E79F', borderRadius: '3px' }} />
-                  <span>Fascia Pregiata (1.25x)</span>
+
+              {formAperto?.tipo === 'slot' && stagioneCorrenteId && (
+                <div style={{ marginBottom: '1rem' }}>
+                  <SlotForm
+                    stagioneId={stagioneCorrenteId}
+                    spazioId={spazioSelezionato.id}
+                    slotEsistente={formAperto.esistente}
+                    onSalvato={() => {
+                      ricaricaSlot();
+                      setFormAperto(null);
+                    }}
+                    onAnnulla={() => setFormAperto(null)}
+                  />
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <div style={{ width: '14px', height: '14px', backgroundColor: '#E8F8F5', border: '1px solid #A3E4D7', borderRadius: '3px' }} />
-                  <span>Slot Assegnato</span>
-                </div>
-              </div>
+              )}
+
+              <GrigliaSlot slot={slot} onClickSlot={(s) => setFormAperto({ tipo: 'slot', esistente: s })} />
             </div>
-
-            {/* Weekly Timetable */}
-            <div className="pa-table-container">
-              <table className="pa-table">
-                <thead>
-                  <tr>
-                    <th style={{ width: '120px' }}>Fascia Oraria</th>
-                    {giorni.map(giorno => (
-                      <th key={giorno} style={{ textAlign: 'center' }}>{giorno}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {orari.map((orario, idx) => (
-                    <tr key={idx}>
-                      <td style={{ fontWeight: 700, color: 'var(--pa-blue-dark)', backgroundColor: '#F8FAFC' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                          <Clock size={14} color="var(--pa-text-muted)" />
-                          <span>{orario}</span>
-                        </div>
-                      </td>
-                      {giorni.map(giorno => {
-                        // Find matching mock slot
-                        const matchSlot = slots.find(s => s.giornoSettimana === giorno && s.oraInizio === orario.split(' - ')[0]);
-                        const isPregiata = idx >= 1; // 17:00-19:00 and 19:00-21:00 are fasce pregiate
-
-                        return (
-                          <td
-                            key={giorno}
-                            style={{
-                              backgroundColor: matchSlot?.assegnatoA ? '#E8F8F5' : isPregiata ? '#FEF9E7' : 'white',
-                              border: '1px solid #E2E8F0',
-                              padding: '0.65rem',
-                              height: '75px',
-                              verticalAlign: 'top'
-                            }}
-                          >
-                            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'space-between' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                {isPregiata && (
-                                  <span className="badge badge-warning" style={{ fontSize: '0.625rem', padding: '0.1rem 0.35rem' }}>
-                                    PREGIATA
-                                  </span>
-                                )}
-                                <span style={{ fontSize: '0.675rem', color: 'var(--pa-text-muted)' }}>120 min</span>
-                              </div>
-
-                              {matchSlot?.assegnatoA ? (
-                                <div style={{ fontSize: '0.775rem', fontWeight: 700, color: 'var(--pa-success)' }}>
-                                  {matchSlot.assegnatoA}
-                                  <div style={{ fontSize: '0.675rem', fontWeight: 500, color: '#16A085' }}>
-                                    {matchSlot.tipoAssegnazione === 'blocco_gara' ? '🏆 Blocco Gara' : '🔄 Round-Robin'}
-                                  </div>
-                                </div>
-                              ) : (
-                                <div style={{ fontSize: '0.75rem', color: '#94A3B8', fontStyle: 'italic' }}>
-                                  Libero per assegnazione
-                                </div>
-                              )}
-                            </div>
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          )}
         </div>
       </div>
     </div>
