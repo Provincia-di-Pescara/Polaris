@@ -30,21 +30,47 @@ export async function avviaBackendReale(): Promise<BackendReale> {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
+  let stderrAccumulato = '';
+  child.stderr?.on('data', (chunk: Buffer) => {
+    stderrAccumulato += chunk.toString('utf8');
+  });
+
   await new Promise<void>((resolve, reject) => {
+    // Ferma definitivamente il polling non appena la promise si risolve in un modo
+    // o nell'altro — senza, un successo tardivo dopo un timeout/reject continuava
+    // a schedulare setTimeout all'infinito (nessuno li cancellava più).
+    let fermo = false;
+
     const timeoutId = setTimeout(() => {
+      if (fermo) return;
+      fermo = true;
       child.kill('SIGKILL');
-      reject(new Error('backend reale non avviato entro 15s'));
+      reject(new Error(`backend reale non avviato entro 15s\n--- stderr ---\n${stderrAccumulato}`));
     }, 15000);
 
     child.once('error', (err) => {
+      if (fermo) return;
+      fermo = true;
       clearTimeout(timeoutId);
       reject(err);
     });
 
+    // Intercetta un'uscita anticipata (es. crash all'avvio per un errore di
+    // configurazione) — l'evento 'error' sopra copre solo il fallimento dello
+    // spawn stesso, non un processo che parte e poi muore con exit code != 0.
+    child.once('exit', (code) => {
+      if (fermo) return;
+      fermo = true;
+      clearTimeout(timeoutId);
+      reject(new Error(`backend reale uscito precocemente (code ${code})\n--- stderr ---\n${stderrAccumulato}`));
+    });
+
     const provaConnessione = async (): Promise<void> => {
+      if (fermo) return;
       try {
         const r = await fetch(`${baseUrl}/healthz`);
         if (r.ok) {
+          fermo = true;
           clearTimeout(timeoutId);
           resolve();
           return;
@@ -52,9 +78,11 @@ export async function avviaBackendReale(): Promise<BackendReale> {
       } catch {
         // backend non ancora in ascolto, riprova
       }
-      setTimeout(() => {
-        provaConnessione();
-      }, 200);
+      if (!fermo) {
+        setTimeout(() => {
+          provaConnessione();
+        }, 200);
+      }
     };
     provaConnessione();
   });
