@@ -113,6 +113,58 @@ jobs:
         # gestisce ** correttamente. Bug reale: CI verde con 2 file di test mai eseguiti.
         run: node --test "src/**/*.test.ts"
 
+  frontend-backoffice:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: palestre
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      # Installa a livello di workspace root (non solo frontend-backoffice): i test
+      # spawnano il backend-node reale come processo figlio (testUtil/backendReale.ts,
+      # stesso pattern usato in locale), quindi serve anche node_modules di quel
+      # pacchetto pronto nello stesso checkout.
+      - name: Installa dipendenze (workspace root)
+        run: pnpm install --frozen-lockfile
+
+      - name: Applica le migration
+        env:
+          PGPASSWORD: test
+        run: |
+          for f in db/migrations/*.up.sql; do
+            echo "-- $f"
+            psql -h localhost -U postgres -d palestre -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Typecheck
+        working-directory: frontend-backoffice
+        run: pnpm exec tsc --noEmit
+
+      - name: Test (backend reale spawnato per-file, ciclo login/refresh/routing contro Postgres reale)
+        working-directory: frontend-backoffice
+        env:
+          TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/palestre?sslmode=disable
+          JWT_SECRET: ci-test-secret-non-per-produzione
+        run: pnpm test
+
   compose-config:
     runs-on: ubuntu-latest
     steps:
