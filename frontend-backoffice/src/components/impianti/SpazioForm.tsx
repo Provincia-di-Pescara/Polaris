@@ -15,6 +15,27 @@ export function SpazioForm({ impiantoId, spazioEsistente, discipline, onSalvato,
   const [disciplineSelezionate, setDisciplineSelezionate] = useState<string[]>(spazioEsistente?.disciplineCompatibili ?? []);
   const [errore, setErrore] = useState<string | null>(null);
   const [inCorso, setInCorso] = useState(false);
+  const [filtroDiscipline, setFiltroDiscipline] = useState('');
+
+  // Stesso motivo del tetto in ImpiantiSpaziView (Anagrafiche): il Postgres di
+  // sviluppo condiviso ha accumulato migliaia di discipline fixture mai
+  // ripulite — renderizzare un checkbox per ognuna qui rende il form
+  // inutilizzabile (sia per un operatore reale sia in jsdom nei test). Le
+  // discipline già selezionate restano SEMPRE visibili (anche se non passano
+  // il filtro/il taglio), altrimenti aprire in modifica uno spazio con
+  // discipline "fuori dalle prime 50" le farebbe sembrare deselezionate.
+  // Le selezionate vanno prima e MAI tagliate dallo slice (non basta includerle
+  // nel filtro: se finissero oltre la posizione 50 nell'array originale uno
+  // slice naive le taglierebbe comunque fuori) — solo lo spazio restante fino
+  // al tetto è riempito con le corrispondenze del filtro tra le non selezionate.
+  const MAX_DISCIPLINE_VISIBILI = 50;
+  const disciplineGiaSelezionate = discipline.filter((d) => disciplineSelezionate.includes(d.codice));
+  const disciplineNonSelezionateFiltrate = discipline.filter(
+    (d) =>
+      !disciplineSelezionate.includes(d.codice) &&
+      `${d.codice} ${d.denominazione}`.toLowerCase().includes(filtroDiscipline.toLowerCase()),
+  );
+  const disciplineVisibili = [...disciplineGiaSelezionate, ...disciplineNonSelezionateFiltrate].slice(0, MAX_DISCIPLINE_VISIBILI);
 
   const toggleDisciplina = (codice: string): void => {
     setDisciplineSelezionate((prev) =>
@@ -27,10 +48,20 @@ export function SpazioForm({ impiantoId, spazioEsistente, discipline, onSalvato,
     setErrore(null);
     setInCorso(true);
     try {
+      // In modifica il campo va sempre inviato, anche vuoto: il backend tratta
+      // un `disciplineCompatibili` OMESSO come "preserva il valore esistente"
+      // (non come "svuota"), quindi deselezionare tutto e salvare deve mandare
+      // esplicitamente `[]`, altrimenti l'azione fallisce silenziosamente (le
+      // discipline restano quelle di prima). In creazione non c'è nulla da
+      // svuotare: omettere se vuoto resta accettabile lì.
       const datiComuni = {
         denominazione,
         ...(note ? { note } : {}),
-        ...(disciplineSelezionate.length > 0 ? { disciplineCompatibili: disciplineSelezionate } : {}),
+        ...(spazioEsistente
+          ? { disciplineCompatibili: disciplineSelezionate }
+          : disciplineSelezionate.length > 0
+            ? { disciplineCompatibili: disciplineSelezionate }
+            : {}),
       };
 
       const risultato = spazioEsistente
@@ -74,15 +105,24 @@ export function SpazioForm({ impiantoId, spazioEsistente, discipline, onSalvato,
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
         <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--pa-text-primary)' }}>Discipline compatibili</span>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-          {discipline.map((d) => (
+        <input
+          type="text"
+          className="form-control"
+          placeholder="Cerca per codice o nome..."
+          aria-label="Cerca disciplina compatibile"
+          value={filtroDiscipline}
+          onChange={(e) => setFiltroDiscipline(e.target.value)}
+          style={{ fontSize: '0.85rem' }}
+        />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '220px', overflowY: 'auto' }}>
+          {disciplineVisibili.map((d) => (
             <label key={d.codice} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem' }}>
               <input
                 type="checkbox"
                 checked={disciplineSelezionate.includes(d.codice)}
                 onChange={() => toggleDisciplina(d.codice)}
               />
-              {d.denominazione}
+              <strong>{d.codice}</strong> — {d.denominazione}
             </label>
           ))}
         </div>

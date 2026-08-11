@@ -20,7 +20,7 @@ describe('SpazioForm', () => {
     render(<SpazioForm impiantoId="imp-1" discipline={DISCIPLINE} onSalvato={onSalvato} onAnnulla={() => {}} />);
 
     await userEvent.type(screen.getByLabelText(/denominazione/i), 'Campo A');
-    await userEvent.click(screen.getByLabelText('Pallavolo'));
+    await userEvent.click(screen.getByLabelText(/pallavolo/i));
     await userEvent.click(screen.getByRole('button', { name: /salva/i }));
 
     expect(creaSpy).toHaveBeenCalledWith({
@@ -46,8 +46,37 @@ describe('SpazioForm', () => {
 
     expect((screen.getByLabelText(/denominazione/i) as HTMLInputElement).value).toBe('Campo A');
     expect((screen.getByLabelText(/note/i) as HTMLTextAreaElement).value).toBe('Nota test');
-    expect((screen.getByLabelText('Pallacanestro') as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText('Pallavolo') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText(/pallacanestro/i) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText(/pallavolo/i) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('tetto sulle discipline renderizzate: quelle già selezionate restano visibili anche oltre il taglio', () => {
+    // Regressione: il Postgres di sviluppo condiviso ha accumulato migliaia di
+    // discipline fixture — renderizzare un checkbox per ognuna rende il form
+    // inutilizzabile, quindi la lista è tagliata a 50. Un taglio naive
+    // (discipline.filter(...).slice(0,50) senza dare priorità alle già
+    // selezionate) avrebbe fatto sparire dalla vista — pur restando selezionata
+    // nello stato — una disciplina già assegnata allo spazio se capitava oltre
+    // la posizione 50 nell'elenco originale.
+    const moltissime = Array.from({ length: 60 }, (_, i) => ({ codice: `D${i}`, denominazione: `Disciplina ${i}` }));
+    const fuoriDalTaglio = { codice: 'FUORI-TAGLIO', denominazione: 'Disciplina Fuori Dal Taglio' };
+    const discipline = [...moltissime, fuoriDalTaglio]; // posizione 60, oltre il tetto di 50
+
+    render(
+      <SpazioForm
+        impiantoId="imp-1"
+        spazioEsistente={{
+          id: 'spa-1', impiantoId: 'imp-1', denominazione: 'Campo A', omologazioni: [], note: null,
+          disciplineCompatibili: ['FUORI-TAGLIO'],
+        }}
+        discipline={discipline}
+        onSalvato={() => {}}
+        onAnnulla={() => {}}
+      />,
+    );
+
+    const checkbox = screen.getByLabelText(/fuori dal taglio/i) as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
   });
 
   it('errore dal backend mostrato nel form', async () => {
