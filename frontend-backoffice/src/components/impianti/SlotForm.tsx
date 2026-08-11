@@ -19,6 +19,14 @@ const GIORNI = [
   { valore: 7, etichetta: 'Domenica' },
 ];
 
+// Stessa regex del backend (backend-node/src/backofficeSchema.ts) — un input
+// come '9:00' (senza zero iniziale) è testo libero valido lessicograficamente
+// ma non un HH:MM a due cifre: senza questo controllo il confronto
+// orarioInizio >= orarioFine sotto lo tratterebbe come stringa e produrrebbe
+// l'errore sbagliato ("inizio deve precedere fine") invece di un errore di
+// formato.
+const REGEX_ORARIO = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 export function SlotForm({ stagioneId, spazioId, slotEsistente, onSalvato, onAnnulla }: SlotFormProps): React.ReactElement {
   const [giornoSettimana, setGiornoSettimana] = useState(slotEsistente?.giornoSettimana ?? 1);
   const [orarioInizio, setOrarioInizio] = useState(slotEsistente?.orarioInizio ?? '');
@@ -32,6 +40,11 @@ export function SlotForm({ stagioneId, spazioId, slotEsistente, onSalvato, onAnn
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
     setErrore(null);
+
+    if (!REGEX_ORARIO.test(orarioInizio) || !REGEX_ORARIO.test(orarioFine)) {
+      setErrore('Formato orario non valido, usa HH:MM.');
+      return;
+    }
 
     if (orarioInizio >= orarioFine) {
       setErrore('L\'ora di inizio deve precedere l\'ora di fine.');

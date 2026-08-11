@@ -68,6 +68,25 @@ describe('SlotForm', () => {
     expect(creaSpy).not.toHaveBeenCalled();
   });
 
+  it('orario senza zero iniziale (es. "9:00"): mostra errore di formato, non chiama l\'API', async () => {
+    // Regressione: '9:00' >= '10:00' è true in confronto lessicografico di stringhe
+    // (non numerico), quindi senza una validazione di formato esplicita PRIMA del
+    // confronto orarioInizio>=orarioFine, un utente che scrive 9:00->10:00 vedeva
+    // l'errore sbagliato ("l'ora di inizio deve precedere l'ora di fine") invece di
+    // un errore di formato — pur avendo inserito un intervallo valido.
+    const creaSpy = vi.spyOn(api, 'creaSlot');
+
+    render(<SlotForm stagioneId="stag-1" spazioId="spa-1" onSalvato={() => {}} onAnnulla={() => {}} />);
+
+    await userEvent.selectOptions(screen.getByLabelText(/giorno/i), '1');
+    await userEvent.type(screen.getByLabelText(/ora inizio/i), '9:00');
+    await userEvent.type(screen.getByLabelText(/ora fine/i), '10:00');
+    await userEvent.click(screen.getByRole('button', { name: /salva/i }));
+
+    expect(await screen.findByText(/formato orario non valido/i)).toBeInTheDocument();
+    expect(creaSpy).not.toHaveBeenCalled();
+  });
+
   it('errore dal backend (409, sovrapposizione) mostrato nel form', async () => {
     vi.spyOn(api, 'creaSlot').mockRejectedValue(new api.ErroreRichiestaApi(409, 'slot sovrapposto a uno esistente'));
 
