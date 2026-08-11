@@ -57,6 +57,23 @@ async function provaRefresh(refreshToken: string): Promise<string> {
   return accessToken;
 }
 
+// Il refresh token ha rotation: un secondo refresh concorrente sullo STESSO token
+// (es. due montaggi di React.StrictMode, o due apiFetch in parallelo che scadono
+// insieme) troverebbe il primo già ruotato e fallirebbe con ErroreSessioneScaduta,
+// anche se la sessione è in realtà ancora valida. Questa promise condivisa a
+// livello di modulo fa sì che tutte le chiamate concorrenti attendano lo stesso,
+// unico tentativo di refresh invece di ognuna scatenarne uno proprio.
+let refreshInCorso: Promise<string> | null = null;
+
+async function provaRefreshCondiviso(refreshToken: string): Promise<string> {
+  if (!refreshInCorso) {
+    refreshInCorso = provaRefresh(refreshToken).finally(() => {
+      refreshInCorso = null;
+    });
+  }
+  return refreshInCorso;
+}
+
 // Wrapper unico su fetch per tutte le chiamate autenticate al backend. Allega il
 // Bearer token se presente; su 401 tenta UN SOLO refresh (solo se esiste un refresh
 // token in storage) e ripete la richiesta originale una volta. Se non esiste alcun
@@ -75,6 +92,6 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     return primaRisposta;
   }
 
-  const nuovoAccessToken = await provaRefresh(refreshToken);
+  const nuovoAccessToken = await provaRefreshCondiviso(refreshToken);
   return fetchConToken(path, init, nuovoAccessToken);
 }

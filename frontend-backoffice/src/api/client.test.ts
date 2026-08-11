@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { avviaBackendReale, type BackendReale } from '../testUtil/backendReale.ts';
-import { creaUtenteTest } from '../testUtil/creaUtenteTest.ts';
+import { creaUtenteTest, type UtenteTest } from '../testUtil/creaUtenteTest.ts';
 import { apiFetch, impostaTokens, rimuoviTokens, ErroreSessioneScaduta } from './client.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
@@ -8,6 +8,19 @@ const descrivi = dsn ? describe : describe.skip;
 
 descrivi('apiFetch', () => {
   let backend: BackendReale;
+  // Utenti creati dai singoli test di questo file, ripuliti in afterAll. Un
+  // DELETE per-pattern condiviso tra file di test (che girano in worker
+  // paralleli) creerebbe un race reale: l'afterAll di un altro file potrebbe
+  // cancellare l'utente di test usato da un login ancora in corso qui — visto
+  // accadere davvero durante lo sviluppo di questo fix (login falliva con
+  // "credenziali non valide" solo quando la suite intera girava in parallelo).
+  const utentiCreati: UtenteTest[] = [];
+
+  async function nuovoUtenteTest(ruolo: 'admin' | 'operatore'): Promise<UtenteTest> {
+    const u = await creaUtenteTest(dsn!, ruolo);
+    utentiCreati.push(u);
+    return u;
+  }
 
   beforeAll(async () => {
     backend = await avviaBackendReale();
@@ -17,6 +30,7 @@ descrivi('apiFetch', () => {
 
   afterAll(async () => {
     await backend.chiudi();
+    await Promise.all(utentiCreati.map((u) => u.elimina()));
   });
 
   beforeEach(() => {
@@ -25,7 +39,7 @@ descrivi('apiFetch', () => {
   });
 
   it('allega Authorization: Bearer quando un access token è presente', async () => {
-    const utente = await creaUtenteTest(dsn!, 'admin');
+    const utente = await nuovoUtenteTest('admin');
     const loginRes = await fetch(`${backend.baseUrl}/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -46,7 +60,7 @@ descrivi('apiFetch', () => {
   });
 
   it('su 401 con refresh token valido, rinnova e ripete la richiesta con successo', async () => {
-    const utente = await creaUtenteTest(dsn!, 'admin');
+    const utente = await nuovoUtenteTest('admin');
     const loginRes = await fetch(`${backend.baseUrl}/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -60,6 +74,25 @@ descrivi('apiFetch', () => {
     expect(r.status).toBe(200);
     const body = await r.json();
     expect(body.email).toBe(utente.email);
+  });
+
+  it('due apiFetch concorrenti con lo stesso access token scaduto condividono un solo refresh (nessuna va in ErroreSessioneScaduta)', async () => {
+    const utente = await nuovoUtenteTest('admin');
+    const loginRes = await fetch(`${backend.baseUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: utente.email, password: utente.password }),
+    });
+    const { refreshToken } = await loginRes.json();
+    // Access token invalido: entrambe le chiamate concorrenti prendono un 401 e
+    // tentano il refresh. Senza single-flight, la seconda userebbe il refresh
+    // token già ruotato dalla prima e fallirebbe con ErroreSessioneScaduta.
+    impostaTokens('token-invalido', refreshToken);
+
+    const [r1, r2] = await Promise.all([apiFetch('/auth/me'), apiFetch('/auth/me')]);
+
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
   });
 
   it('su 401 con refresh token invalido, lancia ErroreSessioneScaduta e ripulisce i token', async () => {
