@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
+import { useOutletContext } from 'react-router';
 import { Plus, MapPin } from 'lucide-react';
 import {
   listaDiscipline, listaIstituzioni, listaImpianti, listaSpaziPerImpianto, listaSlot,
   type Disciplina, type Istituzione, type Impianto, type SpazioSportivo, type Slot,
 } from '../api/impiantiSpazi.ts';
-import { listaStagioni } from '../api/stagioni.ts';
 import { DisciplinaForm } from './impianti/DisciplinaForm.tsx';
 import { IstituzioneForm } from './impianti/IstituzioneForm.tsx';
 import { ImpiantoForm } from './impianti/ImpiantoForm.tsx';
@@ -16,29 +16,44 @@ type FormAperto =
   | { tipo: 'impianto'; esistente?: Impianto }
   | { tipo: 'spazio'; esistente?: SpazioSportivo }
   | { tipo: 'slot'; esistente?: Slot }
+  | { tipo: 'disciplina'; esistente?: Disciplina }
+  | { tipo: 'istituzione'; esistente?: Istituzione }
   | null;
 
 export const ImpiantiSpaziView: React.FC = () => {
+  // Stagione selezionata nell'Header (BackofficeLayout), propagata via context
+  // di react-router — MAI un secondo listaStagioni() qui: prima di questo fix
+  // la vista chiamava la propria listaStagioni() e usava sempre la più recente,
+  // ignorando la selezione dell'utente in alto (creaSlot scriveva silenziosamente
+  // nella stagione sbagliata quando l'operatore ne aveva scelta una diversa).
+  const selectedSeasonId = useOutletContext<string>();
+  const stagioneCorrenteId = selectedSeasonId ?? '';
+
   const [discipline, setDiscipline] = useState<Disciplina[]>([]);
   const [istituzioni, setIstituzioni] = useState<Istituzione[]>([]);
   const [impianti, setImpianti] = useState<Impianto[]>([]);
-  const [stagioneCorrenteId, setStagioneCorrenteId] = useState<string>('');
   const [impiantoSelezionatoId, setImpiantoSelezionatoId] = useState<string>('');
   const [spazi, setSpazi] = useState<SpazioSportivo[]>([]);
   const [spazioSelezionatoId, setSpazioSelezionatoId] = useState<string>('');
   const [slot, setSlot] = useState<Slot[]>([]);
   const [formAperto, setFormAperto] = useState<FormAperto>(null);
+  const [erroreCaricamento, setErroreCaricamento] = useState<string | null>(null);
+  const [filtroDiscipline, setFiltroDiscipline] = useState('');
+  const [filtroIstituzioni, setFiltroIstituzioni] = useState('');
 
   useEffect(() => {
-    listaDiscipline().then(setDiscipline);
-    listaIstituzioni().then(setIstituzioni);
-    listaImpianti().then((imp) => {
-      setImpianti(imp);
-      if (imp.length > 0) setImpiantoSelezionatoId((prev) => prev || imp[0]!.id);
-    });
-    listaStagioni().then((s) => {
-      if (s.length > 0) setStagioneCorrenteId((prev) => prev || s[0]!.id);
-    });
+    listaDiscipline()
+      .then(setDiscipline)
+      .catch(() => setErroreCaricamento('Impossibile caricare le discipline sportive.'));
+    listaIstituzioni()
+      .then(setIstituzioni)
+      .catch(() => setErroreCaricamento('Impossibile caricare le istituzioni scolastiche.'));
+    listaImpianti()
+      .then((imp) => {
+        setImpianti(imp);
+        if (imp.length > 0) setImpiantoSelezionatoId((prev) => prev || imp[0]!.id);
+      })
+      .catch(() => setErroreCaricamento('Impossibile caricare gli impianti.'));
   }, []);
 
   useEffect(() => {
@@ -47,10 +62,12 @@ export const ImpiantiSpaziView: React.FC = () => {
       setSpazioSelezionatoId('');
       return;
     }
-    listaSpaziPerImpianto(impiantoSelezionatoId).then((s) => {
-      setSpazi(s);
-      setSpazioSelezionatoId((prev) => (s.some((x) => x.id === prev) ? prev : s[0]?.id ?? ''));
-    });
+    listaSpaziPerImpianto(impiantoSelezionatoId)
+      .then((s) => {
+        setSpazi(s);
+        setSpazioSelezionatoId((prev) => (s.some((x) => x.id === prev) ? prev : s[0]?.id ?? ''));
+      })
+      .catch(() => setErroreCaricamento('Impossibile caricare gli spazi sportivi.'));
   }, [impiantoSelezionatoId]);
 
   useEffect(() => {
@@ -58,16 +75,55 @@ export const ImpiantiSpaziView: React.FC = () => {
       setSlot([]);
       return;
     }
-    listaSlot(stagioneCorrenteId, spazioSelezionatoId).then(setSlot);
+    listaSlot(stagioneCorrenteId, spazioSelezionatoId)
+      .then(setSlot)
+      .catch(() => setErroreCaricamento('Impossibile caricare gli slot settimanali.'));
   }, [stagioneCorrenteId, spazioSelezionatoId]);
 
   const ricaricaSpazi = (): void => {
-    if (impiantoSelezionatoId) listaSpaziPerImpianto(impiantoSelezionatoId).then(setSpazi);
+    if (impiantoSelezionatoId) {
+      listaSpaziPerImpianto(impiantoSelezionatoId)
+        .then(setSpazi)
+        .catch(() => setErroreCaricamento('Impossibile ricaricare gli spazi sportivi.'));
+    }
   };
 
   const ricaricaSlot = (): void => {
-    if (stagioneCorrenteId && spazioSelezionatoId) listaSlot(stagioneCorrenteId, spazioSelezionatoId).then(setSlot);
+    if (stagioneCorrenteId && spazioSelezionatoId) {
+      listaSlot(stagioneCorrenteId, spazioSelezionatoId)
+        .then(setSlot)
+        .catch(() => setErroreCaricamento('Impossibile ricaricare gli slot settimanali.'));
+    }
   };
+
+  const ricaricaDiscipline = (): void => {
+    listaDiscipline()
+      .then(setDiscipline)
+      .catch(() => setErroreCaricamento('Impossibile ricaricare le discipline sportive.'));
+  };
+
+  const ricaricaIstituzioni = (): void => {
+    listaIstituzioni()
+      .then(setIstituzioni)
+      .catch(() => setErroreCaricamento('Impossibile ricaricare le istituzioni scolastiche.'));
+  };
+
+  // Il Postgres di sviluppo condiviso ha accumulato migliaia di righe disposable
+  // in `discipline_sportive`/`istituzioni_scolastiche` (fixture di test precedenti
+  // mai ripulite — stesso fenomeno già documentato per `impianti`). Renderizzare
+  // l'intera lista senza filtro/tetto in jsdom degrada la UI reale e, nei test,
+  // rallenta il resto della pagina abbastanza da far scadere interazioni non
+  // correlate (es. il click su "Salva" dell'ImpiantoForm) — quindi qui SEMPRE un
+  // tetto fisso (50) sul numero di righe renderizzate, con una ricerca testuale
+  // che filtra sull'intero set prima del taglio (non solo sulle prime 50 già
+  // tagliate), così un elemento cercato per nome/codice resta raggiungibile.
+  const MAX_RIGHE_ANAGRAFICA = 50;
+  const disciplineVisibili = discipline
+    .filter((d) => `${d.codice} ${d.denominazione}`.toLowerCase().includes(filtroDiscipline.toLowerCase()))
+    .slice(0, MAX_RIGHE_ANAGRAFICA);
+  const istituzioniVisibili = istituzioni
+    .filter((i) => i.denominazione.toLowerCase().includes(filtroIstituzioni.toLowerCase()))
+    .slice(0, MAX_RIGHE_ANAGRAFICA);
 
   const impiantoSelezionato = impianti.find((i) => i.id === impiantoSelezionatoId);
   const spazioSelezionato = spazi.find((s) => s.id === spazioSelezionatoId);
@@ -87,6 +143,12 @@ export const ImpiantiSpaziView: React.FC = () => {
           <span>Nuovo Impianto</span>
         </button>
       </div>
+
+      {erroreCaricamento && (
+        <div style={{ backgroundColor: 'var(--pa-danger-bg)', color: 'var(--pa-danger)', padding: '0.75rem 1rem', borderRadius: '6px', fontSize: '0.875rem' }}>
+          {erroreCaricamento}
+        </div>
+      )}
 
       {formAperto?.tipo === 'impianto' && (
         <div className="pa-card">
@@ -109,6 +171,99 @@ export const ImpiantiSpaziView: React.FC = () => {
           />
         </div>
       )}
+
+      <div className="pa-card">
+        <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--pa-blue-dark)', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
+          Anagrafiche
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--pa-text-muted)' }}>Discipline sportive ({discipline.length})</span>
+              <button className="btn btn-secondary btn-sm" onClick={() => setFormAperto({ tipo: 'disciplina' })}>
+                <Plus size={14} />
+                <span>Nuova Disciplina</span>
+              </button>
+            </div>
+            <input
+              type="text"
+              className="form-control"
+              placeholder="Cerca per codice o nome..."
+              aria-label="Cerca disciplina"
+              value={filtroDiscipline}
+              onChange={(e) => setFiltroDiscipline(e.target.value)}
+              style={{ marginBottom: '0.5rem', fontSize: '0.85rem' }}
+            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: '220px', overflowY: 'auto' }}>
+              {disciplineVisibili.map((d) => (
+                <div
+                  key={d.codice}
+                  onClick={() => setFormAperto({ tipo: 'disciplina', esistente: d })}
+                  className="pa-card"
+                  style={{ cursor: 'pointer', padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}
+                >
+                  <strong>{d.codice}</strong> — {d.denominazione}
+                </div>
+              ))}
+            </div>
+            {formAperto?.tipo === 'disciplina' && (
+              <div style={{ marginTop: '0.75rem' }}>
+                <DisciplinaForm
+                  disciplinaEsistente={formAperto.esistente}
+                  onSalvata={() => {
+                    ricaricaDiscipline();
+                    setFormAperto(null);
+                  }}
+                  onAnnulla={() => setFormAperto(null)}
+                />
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--pa-text-muted)' }}>Istituzioni scolastiche ({istituzioni.length})</span>
+              <button className="btn btn-secondary btn-sm" onClick={() => setFormAperto({ tipo: 'istituzione' })}>
+                <Plus size={14} />
+                <span>Nuova Istituzione</span>
+              </button>
+            </div>
+            <input
+              type="text"
+              className="form-control"
+              placeholder="Cerca per denominazione..."
+              aria-label="Cerca istituzione"
+              value={filtroIstituzioni}
+              onChange={(e) => setFiltroIstituzioni(e.target.value)}
+              style={{ marginBottom: '0.5rem', fontSize: '0.85rem' }}
+            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: '220px', overflowY: 'auto' }}>
+              {istituzioniVisibili.map((i) => (
+                <div
+                  key={i.id}
+                  onClick={() => setFormAperto({ tipo: 'istituzione', esistente: i })}
+                  className="pa-card"
+                  style={{ cursor: 'pointer', padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}
+                >
+                  {i.denominazione}
+                </div>
+              ))}
+            </div>
+            {formAperto?.tipo === 'istituzione' && (
+              <div style={{ marginTop: '0.75rem' }}>
+                <IstituzioneForm
+                  istituzioneEsistente={formAperto.esistente}
+                  onSalvata={() => {
+                    ricaricaIstituzioni();
+                    setFormAperto(null);
+                  }}
+                  onAnnulla={() => setFormAperto(null)}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: '1.25rem' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
@@ -163,10 +318,20 @@ export const ImpiantiSpaziView: React.FC = () => {
                 <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--pa-blue-dark)', textTransform: 'uppercase' }}>
                   Spazi ({spazi.length})
                 </div>
-                <button className="btn btn-secondary btn-sm" onClick={() => setFormAperto({ tipo: 'spazio' })}>
-                  <Plus size={14} />
-                  <span>Nuovo Spazio</span>
-                </button>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  {spazioSelezionato && (
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setFormAperto({ tipo: 'spazio', esistente: spazioSelezionato })}
+                    >
+                      Modifica
+                    </button>
+                  )}
+                  <button className="btn btn-secondary btn-sm" onClick={() => setFormAperto({ tipo: 'spazio' })}>
+                    <Plus size={14} />
+                    <span>Nuovo Spazio</span>
+                  </button>
+                </div>
               </div>
 
               <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '0.75rem' }}>
@@ -217,7 +382,14 @@ export const ImpiantiSpaziView: React.FC = () => {
                 <h3 style={{ fontSize: '1.1rem', color: 'var(--pa-blue-dark)', margin: 0 }}>
                   Slot Settimanali — {spazioSelezionato.denominazione}
                 </h3>
-                <button className="btn btn-secondary btn-sm" onClick={() => setFormAperto({ tipo: 'slot' })}>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  disabled={!stagioneCorrenteId}
+                  onClick={() => {
+                    if (!stagioneCorrenteId) return;
+                    setFormAperto({ tipo: 'slot' });
+                  }}
+                >
                   <Plus size={14} />
                   <span>Nuovo Slot</span>
                 </button>

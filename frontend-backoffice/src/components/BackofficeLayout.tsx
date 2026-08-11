@@ -33,7 +33,12 @@ export function BackofficeLayout(): React.ReactElement {
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <Header seasons={seasons} selectedSeasonId={selectedSeasonId} setSelectedSeasonId={setSelectedSeasonId} />
         <main style={{ flex: 1, padding: '1.75rem', overflowY: 'auto' }}>
-          <Outlet />
+          {/* Stagione selezionata dall'operatore in Header, propagata alle viste
+              figlie via context di react-router (non un secondo fetch/stato locale
+              duplicato — vedi ImpiantiSpaziView, che consuma questo stesso valore
+              con useOutletContext invece di richiamare listaStagioni() per conto
+              proprio). */}
+          <Outlet context={selectedSeasonId} />
         </main>
       </div>
     </div>
