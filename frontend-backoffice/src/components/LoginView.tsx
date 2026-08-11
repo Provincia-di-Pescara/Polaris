@@ -1,13 +1,18 @@
 import React, { useState } from 'react';
+import { Navigate } from 'react-router';
 import { Landmark } from 'lucide-react';
-import { useAuth } from '../auth/AuthContext.tsx';
+import { useAuth, ErroreServizioNonRaggiungibile } from '../auth/AuthContext.tsx';
 
 export function LoginView(): React.ReactElement {
-  const { login } = useAuth();
+  const { login, utente } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [errore, setErrore] = useState<string | null>(null);
   const [inCorso, setInCorso] = useState(false);
+
+  if (utente) {
+    return <Navigate to="/" replace />;
+  }
 
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
@@ -15,8 +20,12 @@ export function LoginView(): React.ReactElement {
     setInCorso(true);
     try {
       await login(email, password);
-    } catch {
-      setErrore('Credenziali non valide.');
+    } catch (err) {
+      if (err instanceof ErroreServizioNonRaggiungibile) {
+        setErrore('Servizio non raggiungibile, riprovare.');
+      } else {
+        setErrore('Credenziali non valide.');
+      }
     } finally {
       setInCorso(false);
     }
