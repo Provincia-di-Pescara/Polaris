@@ -1,10 +1,10 @@
 import React from 'react';
-import { Season } from '../types.ts';
+import type { Stagione } from '../api/stagioni.ts';
 import { Calendar, Bell } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.tsx';
 
 interface HeaderProps {
-  seasons: Season[];
+  seasons: Stagione[];
   selectedSeasonId: string;
   setSelectedSeasonId: (id: string) => void;
 }
@@ -15,7 +15,6 @@ export const Header: React.FC<HeaderProps> = ({
   setSelectedSeasonId,
 }) => {
   const { utente } = useAuth();
-  const currentSeason = seasons.find(s => s.id === selectedSeasonId) || seasons[0];
   const role = utente!.ruolo;
 
   return (
@@ -56,9 +55,6 @@ export const Header: React.FC<HeaderProps> = ({
             </option>
           ))}
         </select>
-        <span className="badge badge-info" style={{ textTransform: 'uppercase', fontSize: '0.725rem' }}>
-          Fase {currentSeason.faseCorrenteNum} di 16
-        </span>
       </div>
 
       {/* Right: User profile */}
