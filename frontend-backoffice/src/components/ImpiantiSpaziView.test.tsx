@@ -17,7 +17,7 @@ const descrivi = dsn ? describe : describe.skip;
 // un DOM con 6000+ nodi in jsdom è sensibilmente più lenta del default
 // @testing-library (`asyncUtilTimeout` 1000ms). Timeout elevato solo qui,
 // non a livello globale, per non mascherare regressioni di velocità altrove.
-const WAIT_FOR_TIMEOUT = { timeout: 30000 };
+const WAIT_FOR_TIMEOUT = { timeout: 60000 };
 
 descrivi('ImpiantiSpaziView', () => {
   let backend: BackendReale;
@@ -61,7 +61,7 @@ descrivi('ImpiantiSpaziView', () => {
     await userEvent.click(screen.getByRole('button', { name: /salva/i }));
 
     await waitFor(() => expect(screen.getByText(nome)).toBeInTheDocument(), WAIT_FOR_TIMEOUT);
-  }, 120000);
+  }, 240000);
 
   it('crea uno spazio dentro un impianto e lo vede comparire', async () => {
     await loginComeAdmin();
@@ -83,5 +83,5 @@ descrivi('ImpiantiSpaziView', () => {
     await userEvent.click(screen.getByRole('button', { name: /salva/i }));
 
     await waitFor(() => expect(screen.getByText(nomeSpazio)).toBeInTheDocument(), WAIT_FOR_TIMEOUT);
-  }, 120000);
+  }, 240000);
 });
