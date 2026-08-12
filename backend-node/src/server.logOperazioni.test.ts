@@ -71,3 +71,49 @@ test(
     assert.equal(senzaAuth.status, 401);
   },
 );
+
+test(
+  'GET /backoffice/log-operazioni nasconde dettaglio/ipAddress a operatore ma non ad admin',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const { pool, distruggi } = await creaDatabaseDedicato(dsn!);
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return distruggi();
+    });
+
+    const admin = await creaUtenteTest(pool, 'admin');
+    const operatore = await creaUtenteTest(pool, 'operatore');
+    const entitaId = randomUUID();
+    await registraOperazione(pool, {
+      attore: { tipo: 'backoffice', utenteBackofficeId: admin.id, ruolo: 'admin' },
+      azione: 'azione_http_test_dettaglio',
+      entitaTipo: 'entita_http_test_dettaglio',
+      entitaId,
+      dettaglio: { segreto: 'valore-admin-only' },
+    });
+
+    const comeAdmin = await fetch(`${base}/backoffice/log-operazioni?entitaTipo=entita_http_test_dettaglio`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    assert.equal(comeAdmin.status, 200);
+    const corpoAdmin = (await comeAdmin.json()) as Array<{ entitaId: string; dettaglio: unknown; ipAddress: unknown }>;
+    const rigaAdmin = corpoAdmin.find((o) => o.entitaId === entitaId);
+    assert.ok(rigaAdmin);
+    assert.deepEqual(rigaAdmin!.dettaglio, { segreto: 'valore-admin-only' });
+    assert.ok('ipAddress' in rigaAdmin!);
+
+    const comeOperatore = await fetch(`${base}/backoffice/log-operazioni?entitaTipo=entita_http_test_dettaglio`, {
+      headers: { Authorization: `Bearer ${operatore.token}` },
+    });
+    assert.equal(comeOperatore.status, 200);
+    const corpoOperatore = (await comeOperatore.json()) as Array<Record<string, unknown>>;
+    const rigaOperatore = corpoOperatore.find((o) => o.entitaId === entitaId);
+    assert.ok(rigaOperatore);
+    assert.equal('dettaglio' in rigaOperatore!, false);
+    assert.equal('ipAddress' in rigaOperatore!, false);
+    // Gli altri campi restano visibili (azione/entitaTipo/attoreNome ecc.)
+    assert.equal(rigaOperatore!.azione, 'azione_http_test_dettaglio');
+  },
+);

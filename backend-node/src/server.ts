@@ -2129,7 +2129,7 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     },
   );
 
-  app.get('/backoffice/log-operazioni', richiedeAutenticazione, richiedeRuolo('admin', 'operatore'), async (req, res) => {
+  app.get('/backoffice/log-operazioni', richiedeAutenticazione, richiedeRuolo('admin', 'operatore'), async (req: RequestAutenticata, res) => {
     const parsed = schemaQueryListaLogOperazioni.safeParse(req.query);
     if (!parsed.success) {
       res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
@@ -2144,7 +2144,15 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         limit: parsed.data.limit ?? 50,
         offset: parsed.data.offset ?? 0,
       });
-      res.status(200).json(righe);
+      // `dettaglio` può portare payload di operazioni admin-only (es.
+      // crea_utente_backoffice, crea_versione_parametrico) a cui un operatore
+      // non ha accesso a livello di route; `ipAddress` è dato personale (GDPR).
+      // Un operatore vede la lista/azioni/entità ma non questi due campi.
+      const righePerRuolo =
+        req.utente!.ruolo === 'admin'
+          ? righe
+          : righe.map(({ dettaglio, ipAddress, ...resto }) => resto);
+      res.status(200).json(righePerRuolo);
     } catch (err) {
       res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
     }
