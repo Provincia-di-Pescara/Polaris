@@ -35,7 +35,7 @@ import {
 import { costruisciUrlAutorizzazione, ErroreOidcNonConfigurato, ErroreScambioCode, ErroreStatoNonValido } from './oidc/flow.ts';
 import { leggiConfigOidcPubblica, scriviConfigOidc, ErroreClientSecretMancante } from './oidc/config.ts';
 import { richiedeRuolo } from './auth/middleware.ts';
-import { registraOperazione } from './repository/logOperazioni.ts';
+import { registraOperazione, listaOperazioni } from './repository/logOperazioni.ts';
 import {
   creaClientMotore,
   type ClientMotore,
@@ -62,7 +62,7 @@ import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } fro
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
 import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaQueryListaDeleghe, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione, schemaCreaProvvedimento } from './backofficeSchema.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaQueryListaDeleghe, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione, schemaCreaProvvedimento, schemaQueryListaLogOperazioni } from './backofficeSchema.ts';
 import { registraUtilizzo, trovaUtilizzoPerId, listaUtilizziPerAssegnazione, accogliGiustificazione, rigettaGiustificazione, presentaGiustificazione, listaUtilizziPerAssociazione } from './utilizziEffettivi.ts';
 import { codaMancatiUtilizzi, creaProvvedimento, listaProvvedimentiPerAssegnazione, applicaDecadenza } from './provvedimenti.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione, listaDocumentiPerAssociazione, trovaDocumentoPerId } from './associazioni.ts';
@@ -2127,6 +2127,27 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       }
     },
   );
+
+  app.get('/backoffice/log-operazioni', richiedeAutenticazione, richiedeRuolo('admin', 'operatore'), async (req, res) => {
+    const parsed = schemaQueryListaLogOperazioni.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+      return;
+    }
+    try {
+      const righe = await listaOperazioni(pool, {
+        entitaTipo: parsed.data.entitaTipo,
+        azione: parsed.data.azione,
+        dataDa: parsed.data.dataDa,
+        dataA: parsed.data.dataA,
+        limit: parsed.data.limit ?? 50,
+        offset: parsed.data.offset ?? 0,
+      });
+      res.status(200).json(righe);
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
 
   // --- Approvazione settimana tipo definitiva (art. B.30) ---
 

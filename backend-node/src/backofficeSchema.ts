@@ -321,3 +321,12 @@ export const schemaCreaProvvedimento = z.object({
   motivazione: z.string().min(1),
 });
 export type CreaProvvedimentoRequest = z.infer<typeof schemaCreaProvvedimento>;
+
+export const schemaQueryListaLogOperazioni = z.object({
+  entitaTipo: z.string().min(1).optional(),
+  azione: z.string().min(1).optional(),
+  dataDa: zDataIso.optional(),
+  dataA: zDataIso.optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
