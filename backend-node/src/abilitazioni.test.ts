@@ -12,8 +12,10 @@ import {
   approvaAbilitazione,
   respingiAbilitazione,
   revocaAbilitazioneConCascata,
+  listaAbilitazioni,
 } from './abilitazioni.ts';
 import { ErroreValoreDuplicato, ErroreNonTrovato } from './erroriDominio.ts';
+import { creaDatabaseDedicato } from './testutil/dbDedicato.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 
@@ -248,5 +250,42 @@ test(
     } finally {
       await pool.end();
     }
+  },
+);
+
+test(
+  'listaAbilitazioni filtra per stato e include dati persona/associazione',
+  { skip: process.env.TEST_DATABASE_URL ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const { pool, distruggi } = await creaDatabaseDedicato(process.env.TEST_DATABASE_URL!);
+    t.after(distruggi);
+
+    const persona = await pool.query<{ id: string }>(
+      `INSERT INTO persone_fisiche (codice_fiscale, nome, cognome, oidc_subject, oidc_provider)
+       VALUES ($1, 'Mario', 'Rossi', $2, 'spid') RETURNING id`,
+      [`RSSMRA80A01H501U-${randomUUID()}`, randomUUID()],
+    );
+    const stagione = await pool.query<{ id: string }>(
+      `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2026-09-01', '2027-06-30') RETURNING id`,
+      [`Stagione test deleghe ${randomUUID()}`],
+    );
+    const associazione = await pool.query<{ id: string }>(
+      `INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ('ASD Test', $1) RETURNING id`,
+      [randomUUID()],
+    );
+    await creaAbilitazionePrincipale(pool, {
+      personaFisicaId: persona.rows[0]!.id,
+      associazioneId: associazione.rows[0]!.id,
+      stagioneId: stagione.rows[0]!.id,
+    });
+
+    const tutte = await listaAbilitazioni(pool, {});
+    assert.ok(tutte.some((a) => a.personaFisicaCognome === 'Rossi' && a.associazioneDenominazione === 'ASD Test'));
+
+    const inAttesa = await listaAbilitazioni(pool, { stato: 'in_attesa' });
+    assert.ok(inAttesa.every((a) => a.stato === 'in_attesa'));
+
+    const approvate = await listaAbilitazioni(pool, { stato: 'approvata' });
+    assert.ok(!approvate.some((a) => a.associazioneDenominazione === 'ASD Test'));
   },
 );

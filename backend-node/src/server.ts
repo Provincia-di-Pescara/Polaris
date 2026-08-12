@@ -62,7 +62,7 @@ import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } fro
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
 import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione, schemaCreaProvvedimento } from './backofficeSchema.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaQueryListaDeleghe, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione, schemaCreaProvvedimento } from './backofficeSchema.ts';
 import { registraUtilizzo, trovaUtilizzoPerId, listaUtilizziPerAssegnazione, accogliGiustificazione, rigettaGiustificazione, presentaGiustificazione, listaUtilizziPerAssociazione } from './utilizziEffettivi.ts';
 import { codaMancatiUtilizzi, creaProvvedimento, listaProvvedimentiPerAssegnazione, applicaDecadenza } from './provvedimenti.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
@@ -77,6 +77,7 @@ import {
   approvaAbilitazione,
   respingiAbilitazione,
   revocaAbilitazioneConCascata,
+  listaAbilitazioni,
 } from './abilitazioni.ts';
 import {
   creaDomanda,
@@ -1173,6 +1174,24 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       }
     },
   );
+
+  app.get('/backoffice/deleghe', richiedeAutenticazione, richiedeRuolo('admin', 'operatore'), async (req, res) => {
+    const parsed = schemaQueryListaDeleghe.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+      return;
+    }
+    try {
+      res.status(200).json(await listaAbilitazioni(pool, parsed.data));
+    } catch (err) {
+      const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+      if (erroreRiferimento) {
+        res.status(400).json({ errore: erroreRiferimento.message });
+        return;
+      }
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
 
   app.post(
     '/pubblico/deleghe',

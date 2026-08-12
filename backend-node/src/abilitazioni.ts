@@ -156,3 +156,60 @@ export async function revocaAbilitazioneConCascata(db: Db, id: string): Promise<
   );
   return r.rows.map(daRiga);
 }
+
+export interface AbilitazioneConDettagli extends Abilitazione {
+  personaFisicaNome: string;
+  personaFisicaCognome: string;
+  personaFisicaCodiceFiscale: string;
+  associazioneDenominazione: string | null;
+  associazioneCodiceFiscalePartitaIva: string | null;
+}
+
+interface RigaAbilitazioneConDettagli extends RigaAbilitazione {
+  persona_nome: string;
+  persona_cognome: string;
+  persona_codice_fiscale: string;
+  associazione_denominazione: string | null;
+  associazione_cf_piva: string | null;
+}
+
+function daRigaConDettagli(r: RigaAbilitazioneConDettagli): AbilitazioneConDettagli {
+  return {
+    ...daRiga(r),
+    personaFisicaNome: r.persona_nome,
+    personaFisicaCognome: r.persona_cognome,
+    personaFisicaCodiceFiscale: r.persona_codice_fiscale,
+    associazioneDenominazione: r.associazione_denominazione,
+    associazioneCodiceFiscalePartitaIva: r.associazione_cf_piva,
+  };
+}
+
+export async function listaAbilitazioni(
+  db: Db,
+  filtri: { stato?: string | undefined; stagioneId?: string | undefined },
+): Promise<AbilitazioneConDettagli[]> {
+  const condizioni: string[] = [];
+  const parametri: unknown[] = [];
+  if (filtri.stato) {
+    parametri.push(filtri.stato);
+    condizioni.push(`a.stato = $${parametri.length}`);
+  }
+  if (filtri.stagioneId) {
+    parametri.push(filtri.stagioneId);
+    condizioni.push(`a.stagione_id = $${parametri.length}`);
+  }
+  const whereClause = condizioni.length > 0 ? `WHERE ${condizioni.join(' AND ')}` : '';
+  const r = await db.query<RigaAbilitazioneConDettagli>(
+    `SELECT a.id, a.persona_fisica_id, a.associazione_id, a.istituzione_scolastica_id, a.stagione_id,
+            a.titolo, a.ruolo, a.stato, a.motivazione, a.creata_da_abilitazione_id,
+            p.nome AS persona_nome, p.cognome AS persona_cognome, p.codice_fiscale AS persona_codice_fiscale,
+            ass.denominazione AS associazione_denominazione, ass.codice_fiscale_partita_iva AS associazione_cf_piva
+     FROM abilitazioni a
+     JOIN persone_fisiche p ON p.id = a.persona_fisica_id
+     LEFT JOIN associazioni ass ON ass.id = a.associazione_id
+     ${whereClause}
+     ORDER BY a.richiesta_il DESC`,
+    parametri,
+  );
+  return r.rows.map(daRigaConDettagli);
+}

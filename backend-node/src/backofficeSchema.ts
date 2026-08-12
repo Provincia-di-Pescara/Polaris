@@ -114,6 +114,11 @@ export const schemaRespingiDelega = z.object({
 });
 export type RespingiDelegaRequest = z.infer<typeof schemaRespingiDelega>;
 
+export const schemaQueryListaDeleghe = z.object({
+  stato: z.enum(['in_attesa', 'approvata', 'respinta', 'revocata']).optional(),
+  stagioneId: z.string().uuid().optional(),
+});
+
 // clientSecret opzionale: merge-on-omit gestito da scriviConfigOidc (Task 1) — un PUT
 // senza clientSecret preserva quello già salvato, tranne al primo salvataggio in assoluto
 // (ErroreClientSecretMancante, mappato a 400 dalla route).
