@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione } from './associazioni.ts';
+import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione, listaDocumentiPerAssociazione, trovaDocumentoPerId } from './associazioni.ts';
 import { ErroreValoreDuplicato } from './erroriDominio.ts';
+import { creaDatabaseDedicato } from './testutil/dbDedicato.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 
@@ -72,5 +73,35 @@ test(
     } finally {
       await pool.end();
     }
+  },
+);
+
+test(
+  'listaDocumentiPerAssociazione e trovaDocumentoPerId',
+  { skip: process.env.TEST_DATABASE_URL ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const { pool, distruggi } = await creaDatabaseDedicato(process.env.TEST_DATABASE_URL!);
+    t.after(distruggi);
+
+    const associazione = await creaAssociazione(pool, {
+      denominazione: 'ASD Documenti Test',
+      codiceFiscalePartitaIva: randomUUID(),
+    });
+    const doc = await creaDocumentoAssociazione(pool, {
+      associazioneId: associazione.id,
+      tipo: 'statuto',
+      filePath: 'file-di-test.pdf',
+    });
+
+    const lista = await listaDocumentiPerAssociazione(pool, associazione.id);
+    assert.equal(lista.length, 1);
+    assert.equal(lista[0]!.tipo, 'statuto');
+    assert.ok(!('filePath' in lista[0]!));
+
+    const trovato = await trovaDocumentoPerId(pool, doc.id);
+    assert.equal(trovato?.filePath, 'file-di-test.pdf');
+
+    const inesistente = await trovaDocumentoPerId(pool, randomUUID());
+    assert.equal(inesistente, null);
   },
 );

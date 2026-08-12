@@ -91,3 +91,26 @@ export async function creaDocumentoAssociazione(
   );
   return daRigaDocumento(r.rows[0]!);
 }
+
+export interface DocumentoAssociazioneMeta {
+  id: string;
+  associazioneId: string;
+  tipo: string;
+  caricatoIl: string;
+}
+
+export async function listaDocumentiPerAssociazione(db: Db, associazioneId: string): Promise<DocumentoAssociazioneMeta[]> {
+  const r = await db.query<{ id: string; associazione_id: string; tipo: string; caricato_il: string }>(
+    `SELECT id, associazione_id, tipo, caricato_il FROM associazioni_documenti WHERE associazione_id = $1 ORDER BY caricato_il DESC`,
+    [associazioneId],
+  );
+  return r.rows.map((row) => ({ id: row.id, associazioneId: row.associazione_id, tipo: row.tipo, caricatoIl: row.caricato_il }));
+}
+
+export async function trovaDocumentoPerId(db: Db, id: string): Promise<DocumentoAssociazione | null> {
+  const r = await db.query<RigaDocumento>(
+    `SELECT id, associazione_id, tipo, file_path, caricato_il FROM associazioni_documenti WHERE id = $1`,
+    [id],
+  );
+  return r.rows[0] ? daRigaDocumento(r.rows[0]) : null;
+}
