@@ -56,4 +56,21 @@ describe('DelegheAccreditamentiView', () => {
 
     expect(respingiSpy).toHaveBeenCalledWith('del-1', 'documentazione incompleta');
   });
+
+  it('revoca chiede conferma prima di chiamare revocaDelega (azione irreversibile, Finding 7)', async () => {
+    const revocaSpy = vi.spyOn(api, 'revocaDelega').mockResolvedValue([{ ...DELEGA_IN_ATTESA, stato: 'revocata' }]);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    render(<DelegheAccreditamentiView />);
+    await screen.findByText('Rossi Mario');
+
+    await userEvent.click(screen.getByRole('button', { name: /valuta delega/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^revoca$/i }));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(revocaSpy).not.toHaveBeenCalled();
+
+    confirmSpy.mockReturnValue(true);
+    await userEvent.click(screen.getByRole('button', { name: /^revoca$/i }));
+    expect(revocaSpy).toHaveBeenCalledWith('del-1');
+  });
 });

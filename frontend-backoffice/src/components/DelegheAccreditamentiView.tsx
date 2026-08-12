@@ -82,6 +82,10 @@ export const DelegheAccreditamentiView: React.FC = () => {
   };
 
   const handleRevoca = async (id: string): Promise<void> => {
+    const confermato = window.confirm(
+      "Revocare questa delega? La revoca si propaga a tutte le sub-deleghe collegate e non è annullabile (le abilitazioni sono append-only).",
+    );
+    if (!confermato) return;
     setInCorso(true);
     setErroreAzione(null);
     try {
