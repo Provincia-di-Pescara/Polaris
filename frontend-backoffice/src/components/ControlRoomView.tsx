@@ -10,11 +10,14 @@ import {
   type Elaborazione,
   ErroreRichiestaApi,
 } from '../api/motore.ts';
+import { useAuth } from '../auth/AuthContext.tsx';
 import { Cpu, Calculator, ShieldCheck, Play, CheckCircle2, Clock, AlertCircle } from 'lucide-react';
 
 type TipoAzione = 'istruttoria' | 'blocchi_gara' | 'prima_assegnazione' | 'riassegnazione_residua' | 'approva_definitiva';
 
 export const ControlRoomView: React.FC = () => {
+  const { utente } = useAuth();
+  const puoEseguireAzioni = utente?.ruolo === 'admin';
   const stagioneId = useOutletContext<string>() ?? '';
   const [elaborazioni, setElaborazioni] = useState<Elaborazione[]>([]);
   const [erroreCaricamento, setErroreCaricamento] = useState<string | null>(null);
@@ -32,6 +35,12 @@ export const ControlRoomView: React.FC = () => {
   useEffect(ricarica, [stagioneId]);
 
   const eseguiAzione = async (tipo: TipoAzione): Promise<void> => {
+    if (tipo === 'approva_definitiva') {
+      const confermato = window.confirm(
+        'Approvare la settimana tipo definitiva? Questa operazione transiziona la stagione a uno stato terminale e non è ri-eseguibile.',
+      );
+      if (!confermato) return;
+    }
     setAzioneInCorso(tipo);
     setErroreAzione(null);
     setUltimoRisultato(null);
@@ -82,35 +91,37 @@ export const ControlRoomView: React.FC = () => {
 
       {stagioneId && (
         <>
-          <div className="pa-card" style={{ background: 'linear-gradient(135deg, #002B55 0%, #0056B3 100%)', color: 'white' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-              <Cpu size={20} />
-              <h3 style={{ color: 'white', margin: 0 }}>Azioni di Avanzamento Algoritmico</h3>
-            </div>
-            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-              <button onClick={() => eseguiAzione('istruttoria')} disabled={azioneInCorso !== null} className="btn btn-sm">
-                <Calculator size={16} /><span>Istruttoria</span>
-              </button>
-              <button onClick={() => eseguiAzione('blocchi_gara')} disabled={azioneInCorso !== null} className="btn btn-sm">
-                <ShieldCheck size={16} /><span>Blocchi Gara</span>
-              </button>
-              <button onClick={() => eseguiAzione('prima_assegnazione')} disabled={azioneInCorso !== null} className="btn btn-success btn-sm">
-                <Play size={16} /><span>{azioneInCorso === 'prima_assegnazione' ? 'Esecuzione...' : 'Prima Assegnazione'}</span>
-              </button>
-              <button onClick={() => eseguiAzione('riassegnazione_residua')} disabled={azioneInCorso !== null} className="btn btn-sm">
-                <Play size={16} /><span>Riassegnazione Residua</span>
-              </button>
-              <button onClick={() => eseguiAzione('approva_definitiva')} disabled={azioneInCorso !== null} className="btn btn-sm">
-                <CheckCircle2 size={16} /><span>Approva Definitiva</span>
-              </button>
-            </div>
-            {ultimoRisultato && <div style={{ marginTop: '0.75rem', fontSize: '0.85rem' }}>{ultimoRisultato}</div>}
-            {erroreAzione && (
-              <div style={{ marginTop: '0.75rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <AlertCircle size={16} /><span>{erroreAzione}</span>
+          {puoEseguireAzioni && (
+            <div className="pa-card" style={{ background: 'linear-gradient(135deg, #002B55 0%, #0056B3 100%)', color: 'white' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                <Cpu size={20} />
+                <h3 style={{ color: 'white', margin: 0 }}>Azioni di Avanzamento Algoritmico</h3>
               </div>
-            )}
-          </div>
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <button onClick={() => eseguiAzione('istruttoria')} disabled={azioneInCorso !== null} className="btn btn-sm">
+                  <Calculator size={16} /><span>Istruttoria</span>
+                </button>
+                <button onClick={() => eseguiAzione('blocchi_gara')} disabled={azioneInCorso !== null} className="btn btn-sm">
+                  <ShieldCheck size={16} /><span>Blocchi Gara</span>
+                </button>
+                <button onClick={() => eseguiAzione('prima_assegnazione')} disabled={azioneInCorso !== null} className="btn btn-success btn-sm">
+                  <Play size={16} /><span>{azioneInCorso === 'prima_assegnazione' ? 'Esecuzione...' : 'Prima Assegnazione'}</span>
+                </button>
+                <button onClick={() => eseguiAzione('riassegnazione_residua')} disabled={azioneInCorso !== null} className="btn btn-sm">
+                  <Play size={16} /><span>Riassegnazione Residua</span>
+                </button>
+                <button onClick={() => eseguiAzione('approva_definitiva')} disabled={azioneInCorso !== null} className="btn btn-sm">
+                  <CheckCircle2 size={16} /><span>Approva Definitiva</span>
+                </button>
+              </div>
+              {ultimoRisultato && <div style={{ marginTop: '0.75rem', fontSize: '0.85rem' }}>{ultimoRisultato}</div>}
+              {erroreAzione && (
+                <div style={{ marginTop: '0.75rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <AlertCircle size={16} /><span>{erroreAzione}</span>
+                </div>
+              )}
+            </div>
+          )}
 
           {erroreCaricamento && (
             <div style={{ backgroundColor: 'var(--pa-danger-bg)', color: 'var(--pa-danger)', padding: '0.6rem 0.85rem', borderRadius: '6px' }}>
