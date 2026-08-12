@@ -1,4 +1,23 @@
-import { apiFetch } from './client.ts';
+import { apiFetch, ErroreRichiestaApi, richiedi } from './client.ts';
+
+export { ErroreRichiestaApi };
+
+// Shape base restituita dalle route PUT approva/respingi/revoca (backend-node
+// src/abilitazioni.ts, interfaccia `Abilitazione`) — a differenza di
+// AbilitazioneConDettagli sotto, NON include i campi arricchiti con JOIN
+// (persona fisica/associazione), che solo `GET /backoffice/deleghe` restituisce.
+export interface Abilitazione {
+  id: string;
+  personaFisicaId: string;
+  associazioneId: string | null;
+  istituzioneScolasticaId: string | null;
+  stagioneId: string;
+  titolo: 'legale_rappresentante' | 'delegato';
+  ruolo: 'rappresentante' | 'operatore';
+  stato: 'in_attesa' | 'approvata' | 'respinta' | 'revocata';
+  motivazione: string | null;
+  creataDaAbilitazioneId: string | null;
+}
 
 export interface AbilitazioneConDettagli {
   id: string;
@@ -25,31 +44,6 @@ export interface DocumentoAssociazioneMeta {
   caricatoIl: string;
 }
 
-export class ErroreRichiestaApi extends Error {
-  status: number;
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
-
-async function richiedi<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await apiFetch(path, init);
-  if (!r.ok) {
-    let messaggio = r.statusText || `HTTP ${r.status}`;
-    try {
-      const corpo = (await r.json()) as { errore?: unknown };
-      if (typeof corpo.errore === 'string') {
-        messaggio = corpo.errore;
-      }
-    } catch {
-      // body non JSON: resta lo status text
-    }
-    throw new ErroreRichiestaApi(r.status, messaggio);
-  }
-  return (await r.json()) as T;
-}
-
 function corpoJsonPut(dati: unknown): RequestInit {
   return { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(dati) };
 }
@@ -59,15 +53,15 @@ export function listaDeleghe(filtri: { stato?: string } = {}): Promise<Abilitazi
   return richiedi(`/backoffice/deleghe${query}`);
 }
 
-export function approvaDelega(id: string): Promise<AbilitazioneConDettagli> {
+export function approvaDelega(id: string): Promise<Abilitazione> {
   return richiedi(`/backoffice/deleghe/${encodeURIComponent(id)}/approva`, corpoJsonPut({}));
 }
 
-export function respingiDelega(id: string, motivazione: string): Promise<AbilitazioneConDettagli> {
+export function respingiDelega(id: string, motivazione: string): Promise<Abilitazione> {
   return richiedi(`/backoffice/deleghe/${encodeURIComponent(id)}/respingi`, corpoJsonPut({ motivazione }));
 }
 
-export function revocaDelega(id: string): Promise<AbilitazioneConDettagli[]> {
+export function revocaDelega(id: string): Promise<Abilitazione[]> {
   return richiedi(`/backoffice/deleghe/${encodeURIComponent(id)}/revoca`, corpoJsonPut({}));
 }
 

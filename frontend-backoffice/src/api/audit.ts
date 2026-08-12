@@ -1,4 +1,6 @@
-import { apiFetch } from './client.ts';
+import { ErroreRichiestaApi, richiedi } from './client.ts';
+
+export { ErroreRichiestaApi };
 
 export interface OperazioneConAttore {
   id: string;
@@ -35,31 +37,6 @@ export interface SorteggioDettaglio extends SorteggioSintetico {
   algoritmoVersione: string;
   hashVerbale: string;
   candidati: CandidatoSorteggio[];
-}
-
-export class ErroreRichiestaApi extends Error {
-  status: number;
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
-
-async function richiedi<T>(path: string): Promise<T> {
-  const r = await apiFetch(path);
-  if (!r.ok) {
-    let messaggio = r.statusText || `HTTP ${r.status}`;
-    try {
-      const corpo = (await r.json()) as { errore?: unknown };
-      if (typeof corpo.errore === 'string') {
-        messaggio = corpo.errore;
-      }
-    } catch {
-      // body non JSON: resta lo status text
-    }
-    throw new ErroreRichiestaApi(r.status, messaggio);
-  }
-  return (await r.json()) as T;
 }
 
 export interface FiltriLogOperazioni {

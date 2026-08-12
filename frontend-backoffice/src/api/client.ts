@@ -14,6 +14,41 @@ export function baseUrl(): string {
 // (AuthContext) deve trattarla come un logout locale e reindirizzare al login.
 export class ErroreSessioneScaduta extends Error {}
 
+// Classe unica condivisa: prima di questo, ogni modulo `api/*.ts` (impiantiSpazi,
+// deleghe, motore, parametrico, audit) dichiarava una PROPRIA `ErroreRichiestaApi`
+// omonima ma distinta a livello di identità di classe — un `instanceof` in un
+// componente che importava l'errore da un modulo diverso da quello che l'aveva
+// lanciato falliva silenziosamente, degradando a un messaggio generico "Errore
+// imprevisto" invece del vero messaggio del backend. Ora esiste una sola classe,
+// qui, e ogni modulo la ri-esporta.
+export class ErroreRichiestaApi extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+// Wrapper condiviso: esegue una apiFetch autenticata, mappa una risposta non-ok
+// in ErroreRichiestaApi (leggendo `{errore: string}` dal corpo se presente,
+// altrimenti lo status text), altrimenti fa il parse JSON della risposta.
+export async function richiedi<T>(path: string, init?: RequestInit): Promise<T> {
+  const r = await apiFetch(path, init);
+  if (!r.ok) {
+    let messaggio = r.statusText || `HTTP ${r.status}`;
+    try {
+      const corpo = (await r.json()) as { errore?: unknown };
+      if (typeof corpo.errore === 'string') {
+        messaggio = corpo.errore;
+      }
+    } catch {
+      // body non JSON: resta lo status text
+    }
+    throw new ErroreRichiestaApi(r.status, messaggio);
+  }
+  return (await r.json()) as T;
+}
+
 export function impostaTokens(accessToken: string, refreshToken: string): void {
   localStorage.setItem(CHIAVE_ACCESS, accessToken);
   localStorage.setItem(CHIAVE_REFRESH, refreshToken);

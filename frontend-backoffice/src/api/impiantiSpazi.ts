@@ -1,4 +1,4 @@
-import { apiFetch } from './client.ts';
+import { apiFetch, ErroreRichiestaApi } from './client.ts';
 
 export interface Disciplina {
   codice: string;
@@ -91,13 +91,9 @@ export interface DatiAggiornaSlot {
 // Errore uniforme per ogni chiamata crea*/aggiorna*: `status` distingue 400
 // (validazione/riferimento non valido), 404 (non trovato), 409 (duplicato) nei
 // form chiamanti, `message` è il campo `errore` del corpo JSON del backend.
-export class ErroreRichiestaApi extends Error {
-  status: number;
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
+// Classe unica condivisa (definita in client.ts), ri-esportata qui perché ogni
+// componente di questo modulo la importa da `../../api/impiantiSpazi.ts`.
+export { ErroreRichiestaApi };
 
 async function richiedi<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await apiFetch(path, init);
