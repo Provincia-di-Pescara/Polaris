@@ -108,6 +108,7 @@ import { confermaConvenzione, listaConvenzioniPerStagione } from './convenzioni.
 import { creaIndisponibilita, listaIndisponibilitaPerAssociazione } from './indisponibilita.ts';
 import { creaVariazione, accettaVariazione, annullaVariazione, listaVariazioniPerStagione, trovaVariazionePerId, type TipoVariazione, type StatoVariazione } from './variazioni.ts';
 import { listaSorteggiPerStagione, trovaSorteggioConCandidati } from './sorteggi.ts';
+import { calcolaStatisticheStagione } from './statistiche.ts';
 
 const COOKIE_STATE_OIDC = 'oidc_state';
 const COOKIE_PATH_OIDC = '/auth/oidc';
@@ -2197,6 +2198,32 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         }
         res.status(200).json(sorteggio);
       } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/backoffice/stagioni/:id/statistiche',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req, res) => {
+      const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        validaStagioneIdUuid(stagioneId);
+        await verificaStagioneEsiste(pool, stagioneId);
+        const statistiche = await calcolaStatisticheStagione(pool, stagioneId);
+        res.status(200).json(statistiche);
+      } catch (err) {
+        if (err instanceof ErroreNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
         if (erroreRiferimento) {
           res.status(400).json({ errore: erroreRiferimento.message });
