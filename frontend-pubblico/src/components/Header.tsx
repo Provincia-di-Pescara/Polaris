@@ -1,25 +1,30 @@
 import React from 'react';
-import { RepresentedEntity } from '../types';
-import { Landmark, ShieldCheck, User, Building, FileCheck2, Calculator, BarChart2, RefreshCw, Calendar } from 'lucide-react';
+import type { PersonaAutenticata } from '../api/auth.ts';
+import type { EntitaRappresentata } from '../api/deleghe.ts';
+import { Landmark, ShieldCheck, User, Building, FileCheck2, Calculator, BarChart2, RefreshCw, Calendar, LogOut } from 'lucide-react';
 
 interface HeaderProps {
-  entities: RepresentedEntity[];
-  activeEntity: RepresentedEntity;
-  setActiveEntity: (e: RepresentedEntity) => void;
+  persona: PersonaAutenticata;
+  entities: EntitaRappresentata[];
+  activeEntity: EntitaRappresentata | null;
+  setActiveEntity: (e: EntitaRappresentata) => void;
   activeTab: string;
   setActiveTab: (t: string) => void;
+  onLogout: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
+  persona,
   entities,
   activeEntity,
   setActiveEntity,
   activeTab,
-  setActiveTab
+  setActiveTab,
+  onLogout
 }) => {
   return (
     <header style={{ backgroundColor: 'var(--pa-blue-dark)', color: 'white' }}>
-      {/* Top SPID Identity Bar */}
+      {/* Top Identity Bar */}
       <div style={{
         backgroundColor: '#001E3D',
         padding: '0.4rem 1.5rem',
@@ -34,12 +39,20 @@ export const Header: React.FC<HeaderProps> = ({
           <span>Provincia di Pescara — Piattaforma Telematici Spazi Sportivi POLARIS</span>
         </div>
 
-        {/* Authenticated SPID User Pill */}
+        {/* Authenticated User Pill */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
           <span className="badge badge-info" style={{ backgroundColor: 'rgba(0, 197, 202, 0.2)', color: 'var(--pa-accent)', border: '1px solid var(--pa-accent)' }}>
-            <ShieldCheck size={12} /> Autenticato via SPID (L2)
+            <ShieldCheck size={12} /> Identità Digitale Verificata
           </span>
-          <span style={{ fontWeight: 600 }}>Marco Rossi (CF: RSSMRC80A01G482X)</span>
+          <span style={{ fontWeight: 600 }}>{persona.nome} {persona.cognome} (CF: {persona.codiceFiscale})</span>
+          <button
+            onClick={onLogout}
+            className="btn btn-secondary btn-sm"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+          >
+            <LogOut size={14} />
+            <span>Esci</span>
+          </button>
         </div>
       </div>
 
@@ -66,7 +79,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Active Represented ASD Switcher */}
+        {/* Active Represented Entity Switcher */}
         <div style={{
           backgroundColor: 'rgba(255,255,255,0.08)',
           border: '1px solid rgba(255,255,255,0.2)',
@@ -79,28 +92,32 @@ export const Header: React.FC<HeaderProps> = ({
           <Building size={20} color="var(--pa-accent)" />
           <div>
             <div style={{ fontSize: '0.7rem', opacity: 0.75, textTransform: 'uppercase', fontWeight: 600 }}>Stai Operando per:</div>
-            <select
-              value={activeEntity.id}
-              onChange={(e) => {
-                const found = entities.find(ent => ent.id === e.target.value);
-                if (found) setActiveEntity(found);
-              }}
-              style={{
-                backgroundColor: 'transparent',
-                border: 'none',
-                color: 'white',
-                fontWeight: 700,
-                fontSize: '0.925rem',
-                cursor: 'pointer',
-                outline: 'none'
-              }}
-            >
-              {entities.map(ent => (
-                <option key={ent.id} value={ent.id} style={{ color: 'black' }}>
-                  {ent.nome} ({ent.tipo})
-                </option>
-              ))}
-            </select>
+            {entities.length === 0 ? (
+              <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>Nessuna associazione accreditata</div>
+            ) : activeEntity ? (
+              <select
+                value={activeEntity.id}
+                onChange={(e) => {
+                  const found = entities.find(ent => ent.id === e.target.value);
+                  if (found) setActiveEntity(found);
+                }}
+                style={{
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  color: 'white',
+                  fontWeight: 700,
+                  fontSize: '0.925rem',
+                  cursor: 'pointer',
+                  outline: 'none'
+                }}
+              >
+                {entities.map(ent => (
+                  <option key={ent.id} value={ent.id} style={{ color: 'black' }}>
+                    {ent.associazioneDenominazione ?? '—'} ({ent.stato})
+                  </option>
+                ))}
+              </select>
+            ) : null}
           </div>
         </div>
       </div>

@@ -1,25 +1,4 @@
-import { RepresentedEntity, ConcertazioneProposal } from './types';
-
-export const mockRepresentedEntities: RepresentedEntity[] = [
-  {
-    id: 'ass-01',
-    nome: 'ASD Pescara Volley',
-    codiceFiscale: '92012340681',
-    tipo: 'ASD',
-    ruoloPersona: 'Legale Rappresentante',
-    statoAccreditamento: 'approvato',
-    isAttiva: true
-  },
-  {
-    id: 'ass-02',
-    nome: 'ASD Basket Pescara 1976',
-    codiceFiscale: '92098760682',
-    tipo: 'ASD',
-    ruoloPersona: 'Delegato',
-    statoAccreditamento: 'approvato',
-    isAttiva: false
-  }
-];
+import { ConcertazioneProposal } from './types';
 
 export const mockConcertazioneProposals: ConcertazioneProposal[] = [
   {

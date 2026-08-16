@@ -1,65 +1,82 @@
-import React, { useState } from 'react';
-import { Header } from './components/Header';
+import React, { useEffect, useState } from 'react';
+import { AuthProvider, useAuth } from './auth/AuthContext.tsx';
+import { LoginView } from './components/LoginView.tsx';
+import { OidcCallbackView } from './components/OidcCallbackView.tsx';
+import { Header } from './components/Header.tsx';
 import { AccreditamentoDelegaView } from './components/AccreditamentoDelegaView';
 import { WizardDomandaView } from './components/WizardDomandaView';
 import { EsitiIsfView } from './components/EsitiIsfView';
 import { ConcertazioneView } from './components/ConcertazioneView';
 import { CalendarioDefinitivoView } from './components/CalendarioDefinitivoView';
-import { mockRepresentedEntities } from './mockData';
-import { RepresentedEntity } from './types';
+import type { EntitaRappresentata } from './api/deleghe.ts';
 
-export const App: React.FC = () => {
-  const [entities, setEntities] = useState<RepresentedEntity[]>(mockRepresentedEntities);
-  const [activeEntity, setActiveEntity] = useState<RepresentedEntity>(mockRepresentedEntities[0]);
+const AppAutenticata: React.FC = () => {
+  const { persona, entities, caricamento, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<string>('accreditamento');
+  const [activeEntity, setActiveEntity] = useState<EntitaRappresentata | null>(null);
 
-  const handleAddNewEntity = (newEnt: RepresentedEntity) => {
-    setEntities(prev => [newEnt, ...prev]);
-  };
+  useEffect(() => {
+    if (entities.length > 0 && !activeEntity) {
+      setActiveEntity(entities[0]!);
+    }
+  }, [entities, activeEntity]);
+
+  if (caricamento) {
+    return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Caricamento…</div>;
+  }
+
+  if (!persona) {
+    return <LoginView />;
+  }
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: 'var(--pa-bg-gray)', display: 'flex', flexDirection: 'column' }}>
-      {/* Italia PA Banner Header */}
       <Header
+        persona={persona}
         entities={entities}
         activeEntity={activeEntity}
         setActiveEntity={setActiveEntity}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
+        onLogout={logout}
       />
 
-      {/* Main Container */}
       <main style={{ flex: 1, paddingBottom: '3rem' }}>
-        {activeTab === 'accreditamento' && (
-          <AccreditamentoDelegaView
-            entities={entities}
-            onAddNewEntity={handleAddNewEntity}
-          />
-        )}
+        {activeTab === 'accreditamento' && <AccreditamentoDelegaView entities={[]} onAddNewEntity={() => {}} />}
         {activeTab === 'domanda-wizard' && <WizardDomandaView />}
         {activeTab === 'esiti-isf' && <EsitiIsfView />}
         {activeTab === 'concertazione' && <ConcertazioneView />}
         {activeTab === 'calendario-definitivo' && <CalendarioDefinitivoView />}
       </main>
 
-      {/* Institutional Footer */}
       <footer style={{
         backgroundColor: 'var(--pa-blue-dark)',
         color: 'rgba(255,255,255,0.7)',
         padding: '1.5rem',
         fontSize: '0.8rem',
         textAlign: 'center',
-        borderTop: '1px solid rgba(255,255,255,0.1)'
+        borderTop: '1px solid rgba(255,255,255,0.1)',
       }}>
         <div style={{ maxWidth: '1200px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <div>
-            <strong>POLARIS</strong> — Provincia di Pescara • Servizio Pubblico Spazi Sportivi Scolastici
-          </div>
-          <div>
-            Conforme Linee Guida AgID & Italia Design System • Accessibilità WCAG 2.1 AA
-          </div>
+          <div><strong>POLARIS</strong> — Provincia di Pescara • Servizio Pubblico Spazi Sportivi Scolastici</div>
+          <div>Conforme Linee Guida AgID & Italia Design System • Accessibilità WCAG 2.1 AA</div>
         </div>
       </footer>
     </div>
+  );
+};
+
+export const App: React.FC = () => {
+  const [inCallback] = useState(window.location.pathname === '/oidc/callback');
+  const [callbackCompletato, setCallbackCompletato] = useState(false);
+
+  if (inCallback && !callbackCompletato) {
+    return <OidcCallbackView onCompletato={() => setCallbackCompletato(true)} />;
+  }
+
+  return (
+    <AuthProvider>
+      <AppAutenticata />
+    </AuthProvider>
   );
 };
