@@ -24,6 +24,7 @@ export const Sidebar: React.FC = () => {
     { id: 'impianti-spazi', label: 'Impianti & Spazi Sportivi', icon: Building2, roles: ['admin', 'operatore'] },
     { id: 'deleghe-accreditamenti', label: 'Deleghe & Accreditamenti', icon: FileCheck2, roles: ['admin', 'operatore'], badge: '2' },
     { id: 'parametri-sistema', label: 'Parametri di Sistema', icon: Settings2, roles: ['admin'] },
+    { id: 'impostazioni-oidc', label: 'Impostazioni OIDC', icon: ShieldCheck, roles: ['admin'] },
     { id: 'audit-sorteggio', label: 'Audit Log & Sorteggi HMAC', icon: ShieldCheck, roles: ['admin', 'operatore'] },
     { id: 'statistiche', label: 'Analisi & Statistiche', icon: BarChart3, roles: ['admin', 'operatore'] }
   ];

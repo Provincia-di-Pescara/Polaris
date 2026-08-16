@@ -6,6 +6,7 @@ import { ControlRoomView } from './components/ControlRoomView.tsx';
 import { ImpiantiSpaziView } from './components/ImpiantiSpaziView.tsx';
 import { DelegheAccreditamentiView } from './components/DelegheAccreditamentiView.tsx';
 import { ParametriSistemaView } from './components/ParametriSistemaView.tsx';
+import { ImpostazioniOidcView } from './components/ImpostazioniOidcView.tsx';
 import { AuditSorteggioView } from './components/AuditSorteggioView.tsx';
 import { StatisticheView } from './components/StatisticheView.tsx';
 
@@ -28,7 +29,10 @@ export const routes: RouteObject[] = [
             // Guardia di ruolo aggiuntiva: solo admin (coerente con Sidebar.tsx,
             // che nasconde questa voce di menu agli operatori).
             element: <ProtectedRoute ruoliAmmessi={['admin']} />,
-            children: [{ path: 'parametri-sistema', element: <ParametriSistemaView /> }],
+            children: [
+              { path: 'parametri-sistema', element: <ParametriSistemaView /> },
+              { path: 'impostazioni-oidc', element: <ImpostazioniOidcView /> },
+            ],
           },
           { path: 'audit-sorteggio', element: <AuditSorteggioView /> },
           { path: 'statistiche', element: <StatisticheView /> },
