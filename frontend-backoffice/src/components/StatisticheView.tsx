@@ -28,6 +28,7 @@ export const StatisticheView: React.FC = () => {
     if (!stagioneId) return;
     setCaricamento(true);
     setErroreCaricamento(null);
+    setStatistiche(null);
     leggiStatisticheStagione(stagioneId)
       .then(setStatistiche)
       .catch((err) => setErroreCaricamento(err instanceof ErroreRichiestaApi ? err.message : 'Impossibile caricare le statistiche.'))
@@ -49,7 +50,11 @@ export const StatisticheView: React.FC = () => {
 
       {!stagioneId && <div style={{ color: 'var(--pa-text-muted)' }}>Seleziona una stagione nell'Header per iniziare.</div>}
       {stagioneId && caricamento && <div style={{ color: 'var(--pa-text-muted)' }}>Caricamento statistiche...</div>}
-      {erroreCaricamento && <div style={{ color: 'var(--pa-error, #C0392B)' }}>{erroreCaricamento}</div>}
+      {erroreCaricamento && (
+        <div style={{ backgroundColor: 'var(--pa-danger-bg)', color: 'var(--pa-danger)', padding: '0.6rem 0.85rem', borderRadius: '6px' }}>
+          {erroreCaricamento}
+        </div>
+      )}
 
       {stagioneId && statistiche && (
         <>
