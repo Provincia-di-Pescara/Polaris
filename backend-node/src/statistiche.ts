@@ -82,6 +82,10 @@ async function leggiUtilizzoGlobale(db: Db, stagioneId: string): Promise<RigaUti
 // dato valido che deve contribuire alla media — partire da `assegnazioni`
 // la farebbe sparire dalla query, gonfiando artificialmente la media verso
 // l'alto. FR=0 resta N/A (mai nel denominatore), regola di dominio consolidata.
+// La media è per-riga di `domande` (una per associazione/stagione, vincolo
+// `domande_associazione_stagione_uq` in db/migrations/000001_init.up.sql) trattata
+// come se fosse per-associazione: se quel vincolo di unicità venisse mai
+// allentato, questa query andrebbe rivista (rischio di doppio conteggio).
 async function leggiIsfMedio(db: Db, stagioneId: string): Promise<RigaIsfMedio> {
   const r = await db.query<RigaIsfMedio>(
     `SELECT ROUND(AVG(

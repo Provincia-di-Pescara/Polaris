@@ -102,7 +102,7 @@ test(
       },
       personaA,
     );
-    // FR finale = 100: VA cumulativa (slot1=60 + slot2=60) = 120 -> ISF = 1.200
+    // FR finale = 100: VA cumulativa (slot1=60 + slot2=75 ponderata) = 135 -> ISF = 1.350
     await ammettiDomandaConFr(pool, domandaA.id, 100);
     await creaAssegnazioneAttiva(pool, slot1.id, domandaA.id, assocA, 60);
     await creaAssegnazioneAttiva(pool, slot2.id, domandaA.id, assocA, 75); // ponderata (pregiata), MAI usata nei KPI 1/2

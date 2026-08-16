@@ -74,7 +74,12 @@ descrivi('StatisticheView (backend reale)', () => {
 
     // Stagione appena creata, nessuna domanda -> sociAtletiCoinvolti reale = 0,
     // valore che deve attraversare Postgres->backend->frontend intatto.
-    await waitFor(() => expect(screen.getByText('Soci & Atleti Coinvolti')).toBeInTheDocument(), { timeout: 15000 });
-    await waitFor(() => expect(screen.getByText('0')).toBeInTheDocument(), { timeout: 15000 });
+    // Scoped alla card "Soci & Atleti Coinvolti" (non screen intero): un futuro
+    // stato-vuoto altrove che renderizza anch'esso uno '0' nudo produrrebbe
+    // altrimenti un match ambiguo su getByText('0').
+    const etichettaCard = await waitFor(() => screen.getByText('Soci & Atleti Coinvolti'), { timeout: 15000 });
+    const card = etichettaCard.closest('.pa-card') as HTMLElement;
+    expect(card).not.toBeNull();
+    await waitFor(() => expect(within(card).getByText('0')).toBeInTheDocument(), { timeout: 15000 });
   }, 30000);
 });

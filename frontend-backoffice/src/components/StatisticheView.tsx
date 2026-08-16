@@ -25,14 +25,28 @@ export const StatisticheView: React.FC = () => {
   const [caricamento, setCaricamento] = useState(false);
 
   useEffect(() => {
-    if (!stagioneId) return;
+    if (!stagioneId) {
+      setErroreCaricamento(null);
+      setStatistiche(null);
+      return;
+    }
+    let scartata = false;
     setCaricamento(true);
     setErroreCaricamento(null);
     setStatistiche(null);
     leggiStatisticheStagione(stagioneId)
-      .then(setStatistiche)
-      .catch((err) => setErroreCaricamento(err instanceof ErroreRichiestaApi ? err.message : 'Impossibile caricare le statistiche.'))
-      .finally(() => setCaricamento(false));
+      .then((dati) => {
+        if (!scartata) setStatistiche(dati);
+      })
+      .catch((err) => {
+        if (!scartata) setErroreCaricamento(err instanceof ErroreRichiestaApi ? err.message : 'Impossibile caricare le statistiche.');
+      })
+      .finally(() => {
+        if (!scartata) setCaricamento(false);
+      });
+    return () => {
+      scartata = true;
+    };
   }, [stagioneId]);
 
   const totaleMinutiDisciplina = statistiche
