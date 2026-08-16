@@ -5,6 +5,16 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5174,
-    host: true
-  }
+    host: true,
+    proxy: {
+      '/auth': 'http://localhost:3000',
+      '/pubblico': 'http://localhost:3000',
+    },
+  },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/testUtil/setup.ts'],
+    globals: true,
+    restoreMocks: true,
+  },
 });
