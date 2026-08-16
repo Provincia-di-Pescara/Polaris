@@ -1319,7 +1319,16 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
   // non solo approvata).
   app.get('/pubblico/deleghe/mie', richiedeAutenticazionePubblico, async (req: RequestAutenticataPubblico, res) => {
     try {
-      res.status(200).json(await listaAbilitazioni(pool, { personaFisicaId: req.persona!.sub }));
+      // Belt-and-braces: verificaAccessTokenPubblico garantisce già che `sub` sia
+      // una stringa non vuota, ma questo filtro è un confine di autorizzazione
+      // (vedi listaAbilitazioni) — meglio un 401 esplicito che affidarsi solo a
+      // quella garanzia a monte.
+      const personaFisicaId = req.persona!.sub;
+      if (!personaFisicaId) {
+        res.status(401).json({ errore: 'Sessione non riconosciuta.' });
+        return;
+      }
+      res.status(200).json(await listaAbilitazioni(pool, { personaFisicaId }));
     } catch (err) {
       res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
     }

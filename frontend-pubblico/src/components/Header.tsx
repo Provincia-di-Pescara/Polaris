@@ -22,6 +22,10 @@ export const Header: React.FC<HeaderProps> = ({
   setActiveTab,
   onLogout
 }) => {
+  // Lo switcher lascia scegliere solo tra le entità con delega approvata: una
+  // delega in_attesa/respinta/revocata non deve mai poter diventare il contesto
+  // operativo attivo (vedi finding 5 review finale).
+  const entitaApprovate = entities.filter(e => e.stato === 'approvata');
   return (
     <header style={{ backgroundColor: 'var(--pa-blue-dark)', color: 'white' }}>
       {/* Top Identity Bar */}
@@ -92,13 +96,13 @@ export const Header: React.FC<HeaderProps> = ({
           <Building size={20} color="var(--pa-accent)" />
           <div>
             <div style={{ fontSize: '0.7rem', opacity: 0.75, textTransform: 'uppercase', fontWeight: 600 }}>Stai Operando per:</div>
-            {entities.length === 0 ? (
+            {entitaApprovate.length === 0 ? (
               <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>Nessuna associazione accreditata</div>
             ) : activeEntity ? (
               <select
                 value={activeEntity.id}
                 onChange={(e) => {
-                  const found = entities.find(ent => ent.id === e.target.value);
+                  const found = entitaApprovate.find(ent => ent.id === e.target.value);
                   if (found) setActiveEntity(found);
                 }}
                 style={{
@@ -111,7 +115,7 @@ export const Header: React.FC<HeaderProps> = ({
                   outline: 'none'
                 }}
               >
-                {entities.map(ent => (
+                {entitaApprovate.map(ent => (
                   <option key={ent.id} value={ent.id} style={{ color: 'black' }}>
                     {ent.associazioneDenominazione ?? '—'} ({ent.stato})
                   </option>

@@ -16,8 +16,12 @@ const AppAutenticata: React.FC = () => {
   const [activeEntity, setActiveEntity] = useState<EntitaRappresentata | null>(null);
 
   useEffect(() => {
-    if (entities.length > 0 && !activeEntity) {
-      setActiveEntity(entities[0]!);
+    // Auto-seleziona solo tra le entità con delega approvata: una entità
+    // in_attesa/respinta/revocata non deve mai diventare il contesto operativo
+    // attivo di default (vedi anche il filtro nello switcher in Header.tsx).
+    const entitaApprovate = entities.filter((e) => e.stato === 'approvata');
+    if (entitaApprovate.length > 0 && !activeEntity) {
+      setActiveEntity(entitaApprovate[0]!);
     }
   }, [entities, activeEntity]);
 
@@ -42,6 +46,11 @@ const AppAutenticata: React.FC = () => {
       />
 
       <main style={{ flex: 1, paddingBottom: '3rem' }}>
+        {/* entities={[]}/onAddNewEntity no-op sono placeholder deliberati: la
+            forma di RepresentedEntity (mock interno alla view) è incompatibile
+            con EntitaRappresentata reale — un blocco futuro adatterà la view ai
+            dati reali di AuthContext. Per ora la view resta sul proprio mock
+            interno. */}
         {activeTab === 'accreditamento' && <AccreditamentoDelegaView entities={[]} onAddNewEntity={() => {}} />}
         {activeTab === 'domanda-wizard' && <WizardDomandaView />}
         {activeTab === 'esiti-isf' && <EsitiIsfView />}

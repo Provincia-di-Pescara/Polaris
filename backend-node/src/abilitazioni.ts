@@ -198,7 +198,7 @@ export async function listaAbilitazioni(
     parametri.push(filtri.stagioneId);
     condizioni.push(`a.stagione_id = $${parametri.length}`);
   }
-  if (filtri.personaFisicaId) {
+  if (filtri.personaFisicaId !== undefined) {
     parametri.push(filtri.personaFisicaId);
     condizioni.push(`a.persona_fisica_id = $${parametri.length}`);
   }

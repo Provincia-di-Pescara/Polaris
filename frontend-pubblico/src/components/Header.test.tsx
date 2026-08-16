@@ -30,6 +30,26 @@ describe('Header', () => {
     expect(screen.getByText(/nessuna associazione accreditata/i)).toBeInTheDocument();
   });
 
+  it('entità non approvata (es. revocata): non selezionabile nello switcher, stato vuoto mostrato', () => {
+    const entitaRevocata: EntitaRappresentata = { ...ENTITA, id: 'a2', stato: 'revocata' };
+    render(
+      <Header persona={PERSONA} entities={[entitaRevocata]} activeEntity={null} setActiveEntity={vi.fn()}
+        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()} />,
+    );
+    expect(screen.getByText(/nessuna associazione accreditata/i)).toBeInTheDocument();
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  });
+
+  it('entità mista (approvata + revocata): lo switcher offre solo quella approvata', () => {
+    const entitaRevocata: EntitaRappresentata = { ...ENTITA, id: 'a2', associazioneDenominazione: 'ASD Revocata', stato: 'revocata' };
+    render(
+      <Header persona={PERSONA} entities={[ENTITA, entitaRevocata]} activeEntity={ENTITA} setActiveEntity={vi.fn()}
+        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()} />,
+    );
+    expect(screen.getByText(/ASD Test/)).toBeInTheDocument();
+    expect(screen.queryByText(/ASD Revocata/)).not.toBeInTheDocument();
+  });
+
   it('bottone logout chiama onLogout', async () => {
     const onLogout = vi.fn();
     render(

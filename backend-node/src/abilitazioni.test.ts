@@ -331,3 +331,47 @@ test(
     assert.equal(soloA[0]!.personaFisicaCognome, 'Uno');
   },
 );
+
+test(
+  'listaAbilitazioni con personaFisicaId stringa vuota non restituisce le abilitazioni di altre persone',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    // Regressione: il guard usava `if (filtri.personaFisicaId)`, una verifica di
+    // truthiness. Con personaFisicaId === '' la condizione era falsa, la clausola
+    // WHERE veniva silenziosamente omessa e la query tornava TUTTE le
+    // abilitazioni — un confine di autorizzazione, non un dettaglio cosmetico
+    // (GET /pubblico/deleghe/mie). Il guard corretto verifica `!== undefined`.
+    const { pool, distruggi } = await creaDatabaseDedicato(dsn!);
+    t.after(distruggi);
+
+    const stagione = await pool.query<{ id: string }>(
+      `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2026-09-01', '2027-06-30') RETURNING id`,
+      [`Stagione filtro vuoto ${randomUUID()}`],
+    );
+    const associazione = await pool.query<{ id: string }>(
+      `INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ('ASD Filtro Vuoto', $1) RETURNING id`,
+      [randomUUID()],
+    );
+    const personaC = await pool.query<{ id: string }>(
+      `INSERT INTO persone_fisiche (codice_fiscale, nome, cognome, oidc_subject, oidc_provider)
+       VALUES ($1, 'Carla', 'Tre', $2, 'spid') RETURNING id`,
+      [`CCCTRE80A01H501U-${randomUUID()}`, randomUUID()],
+    );
+    await creaAbilitazionePrincipale(pool, {
+      personaFisicaId: personaC.rows[0]!.id,
+      associazioneId: associazione.rows[0]!.id,
+      stagioneId: stagione.rows[0]!.id,
+    });
+
+    // La colonna persona_fisica_id è uuid: con il guard corretto (!== undefined)
+    // il filtro viene applicato davvero e Postgres rifiuta '' come uuid non
+    // valido, invece di degradare silenziosamente a "nessun filtro" e tornare
+    // tutte le righe (il comportamento pre-fix, con `if (filtri.personaFisicaId)`
+    // falso su stringa vuota).
+    await assert.rejects(
+      () => listaAbilitazioni(pool, { personaFisicaId: '' }),
+      /invalid input syntax for type uuid/,
+      'il guard deve applicare il filtro anche con stringa vuota, non ometterlo silenziosamente',
+    );
+  },
+);
