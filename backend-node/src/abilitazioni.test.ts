@@ -289,3 +289,45 @@ test(
     assert.ok(!approvate.some((a) => a.associazioneDenominazione === 'ASD Test'));
   },
 );
+
+test(
+  'listaAbilitazioni filtra per personaFisicaId, escludendo le abilitazioni di altre persone',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const { pool, distruggi } = await creaDatabaseDedicato(dsn!);
+    t.after(distruggi);
+
+    const stagione = await pool.query<{ id: string }>(
+      `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2026-09-01', '2027-06-30') RETURNING id`,
+      [`Stagione filtro persona ${randomUUID()}`],
+    );
+    const associazione = await pool.query<{ id: string }>(
+      `INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ('ASD Filtro Persona', $1) RETURNING id`,
+      [randomUUID()],
+    );
+    const personaA = await pool.query<{ id: string }>(
+      `INSERT INTO persone_fisiche (codice_fiscale, nome, cognome, oidc_subject, oidc_provider)
+       VALUES ($1, 'Anna', 'Uno', $2, 'spid') RETURNING id`,
+      [`AAAUNO80A01H501U-${randomUUID()}`, randomUUID()],
+    );
+    const personaB = await pool.query<{ id: string }>(
+      `INSERT INTO persone_fisiche (codice_fiscale, nome, cognome, oidc_subject, oidc_provider)
+       VALUES ($1, 'Bruno', 'Due', $2, 'spid') RETURNING id`,
+      [`BBBDUE80A01H501U-${randomUUID()}`, randomUUID()],
+    );
+    await creaAbilitazionePrincipale(pool, {
+      personaFisicaId: personaA.rows[0]!.id,
+      associazioneId: associazione.rows[0]!.id,
+      stagioneId: stagione.rows[0]!.id,
+    });
+    await creaAbilitazionePrincipale(pool, {
+      personaFisicaId: personaB.rows[0]!.id,
+      associazioneId: associazione.rows[0]!.id,
+      stagioneId: stagione.rows[0]!.id,
+    });
+
+    const soloA = await listaAbilitazioni(pool, { personaFisicaId: personaA.rows[0]!.id });
+    assert.equal(soloA.length, 1);
+    assert.equal(soloA[0]!.personaFisicaCognome, 'Uno');
+  },
+);

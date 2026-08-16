@@ -1314,6 +1314,17 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     },
   );
 
+  // Le proprie deleghe: nessun filtro stagione (una persona può averne su stagioni
+  // diverse), tutti gli stati (la UI deve poter mostrare anche in_attesa/respinta,
+  // non solo approvata).
+  app.get('/pubblico/deleghe/mie', richiedeAutenticazionePubblico, async (req: RequestAutenticataPubblico, res) => {
+    try {
+      res.status(200).json(await listaAbilitazioni(pool, { personaFisicaId: req.persona!.sub }));
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   app.put(
     '/backoffice/deleghe/:id/approva',
     richiedeAutenticazione,

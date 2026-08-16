@@ -186,7 +186,7 @@ function daRigaConDettagli(r: RigaAbilitazioneConDettagli): AbilitazioneConDetta
 
 export async function listaAbilitazioni(
   db: Db,
-  filtri: { stato?: string | undefined; stagioneId?: string | undefined },
+  filtri: { stato?: string | undefined; stagioneId?: string | undefined; personaFisicaId?: string | undefined },
 ): Promise<AbilitazioneConDettagli[]> {
   const condizioni: string[] = [];
   const parametri: unknown[] = [];
@@ -197,6 +197,10 @@ export async function listaAbilitazioni(
   if (filtri.stagioneId) {
     parametri.push(filtri.stagioneId);
     condizioni.push(`a.stagione_id = $${parametri.length}`);
+  }
+  if (filtri.personaFisicaId) {
+    parametri.push(filtri.personaFisicaId);
+    condizioni.push(`a.persona_fisica_id = $${parametri.length}`);
   }
   const whereClause = condizioni.length > 0 ? `WHERE ${condizioni.join(' AND ')}` : '';
   const r = await db.query<RigaAbilitazioneConDettagli>(

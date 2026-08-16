@@ -6,6 +6,7 @@ import { creaDatabaseDedicato } from './testutil/dbDedicato.ts';
 import { generaAccessToken } from './auth/jwt.ts';
 import { hashPassword } from './auth/password.ts';
 import { creaAbilitazionePrincipale } from './abilitazioni.ts';
+import { generaAccessTokenPubblico } from './auth/jwtPubblico.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 process.env.JWT_SECRET ??= 'segreto-di-test-non-usare-in-produzione';
@@ -80,5 +81,64 @@ test(
       headers: { Authorization: `Bearer ${operatore.token}` },
     });
     assert.equal(statoInvalido.status, 400);
+  },
+);
+
+test(
+  'GET /pubblico/deleghe/mie',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const { pool, distruggi } = await creaDatabaseDedicato(dsn!);
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return distruggi();
+    });
+
+    const stagione = await pool.query<{ id: string }>(
+      `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2026-09-01', '2027-06-30') RETURNING id`,
+      [`Stagione mie deleghe HTTP ${randomUUID()}`],
+    );
+    const associazione = await pool.query<{ id: string }>(
+      `INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ('ASD Mie Deleghe HTTP', $1) RETURNING id`,
+      [randomUUID()],
+    );
+    const cfMia = `MIEDLG80A01H501U-${randomUUID()}`;
+    const persona = await pool.query<{ id: string }>(
+      `INSERT INTO persone_fisiche (codice_fiscale, nome, cognome, oidc_subject, oidc_provider)
+       VALUES ($1, 'Mia', 'Delega', $2, 'spid') RETURNING id`,
+      [cfMia, randomUUID()],
+    );
+    const altraPersona = await pool.query<{ id: string }>(
+      `INSERT INTO persone_fisiche (codice_fiscale, nome, cognome, oidc_subject, oidc_provider)
+       VALUES ($1, 'Altra', 'Persona', $2, 'spid') RETURNING id`,
+      [`ALTPRS80A01H501U-${randomUUID()}`, randomUUID()],
+    );
+    await creaAbilitazionePrincipale(pool, {
+      personaFisicaId: persona.rows[0]!.id,
+      associazioneId: associazione.rows[0]!.id,
+      stagioneId: stagione.rows[0]!.id,
+    });
+    await creaAbilitazionePrincipale(pool, {
+      personaFisicaId: altraPersona.rows[0]!.id,
+      associazioneId: associazione.rows[0]!.id,
+      stagioneId: stagione.rows[0]!.id,
+    });
+
+    const token = generaAccessTokenPubblico({
+      sub: persona.rows[0]!.id,
+      codiceFiscale: cfMia,
+      nome: 'Mia',
+      cognome: 'Delega',
+    });
+
+    const r = await fetch(`${base}/pubblico/deleghe/mie`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(r.status, 200);
+    const body = (await r.json()) as Array<{ personaFisicaCognome: string }>;
+    assert.equal(body.length, 1);
+    assert.equal(body[0]!.personaFisicaCognome, 'Delega');
+
+    const senzaAuth = await fetch(`${base}/pubblico/deleghe/mie`);
+    assert.equal(senzaAuth.status, 401);
   },
 );
