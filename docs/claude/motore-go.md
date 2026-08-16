@@ -1,0 +1,78 @@
+# Motore Go (Fase 2 — completata)
+
+`engine-go/`, modulo `github.com/provincia/palestre-engine`, Go 1.26. Nessuna installazione Go locale in questo ambiente di sviluppo: build/test/format/vet vanno eseguiti via Docker (`golang:1.26-alpine`), come per Postgres. Sviluppato rigorosamente in TDD (skill `superpowers:test-driven-development`): ogni funzione ha test scritto e verificato RED prima dell'implementazione. In Go il RED spesso è un errore di compilazione (`undefined: NomeFunzione`), non un'asserzione a runtime — è comunque RED valido (fallisce perché manca la feature, non per typo).
+
+Fatto: `internal/calc/` — calcolatori puri, nessuna dipendenza da DB/HTTP (coerente col vincolo di isolamento del motore), arrotondamento sempre con `github.com/shopspring/decimal` (mai float, mai `math`):
+- `IncrementoSquadre` — lookup scaglioni art. A.4
+- `LookupCRS` / `LookupCAA` / `LookupCSD` — lookup scaglioni art. A.6/A.7/A.11 (CSD su placeholder, valori da tarare)
+- `CalcolaCP` — art. A.12 (CRS×CAA×CSD, round 3 cifre)
+- `CalcolaFR` — art. A.5 (FR calcolato + FR finale = min(FD, calcolato))
+- `CalcolaISF`, `ISFMinore`, `ISFInTolleranza` — art. A.13/B.16/B.20, incluso il caso FR=0 (ISF non definito, decisione stakeholder)
+
+Fatto: `internal/sorteggio/` — sorteggio tracciato art. B.38 (HMAC-SHA256 rank-asc), formato `hash_verbale` finalizzato (vedi specifica sotto). Testato con test basati su proprietà (determinismo, indipendenza dall'ordine input, ranking valido, sensibilità a seme/candidati) invece di hash hardcoded — verificare a mano un digest SHA-256 non è affidabile, la logica sopra la stdlib crypto è quello che va testato.
+
+Fatto: `internal/roundrobin/` — Fase 8-9 completa (art. B.17-22):
+- `OrdineEsameFasce` — ordine di esame (decrescente richiedenti, poi pregiate, poi cronologico), determinato una sola volta
+- `RispettaLimiti` / `RispettaLimiteGiornateGara` — limiti di concentrazione (minuti grezzi, slot per impianto, fasce pregiate, giornate gara)
+- `SceglieVincitore` — catena di priorità completa art. B.20-21 (ISF→contiguità/presenza impianto→preferenza→CP→sorteggio), narrowing progressivo per criterio
+- `SceglieVincitoreBloccoGara` — catena **diversa** art. B.14 per i blocchi gara (CRS→CP→sorteggio, niente ISF)
+- `Esegui` — loop round completo: una assegnazione per round per associazione, blocco allenamento assegnato/atomico su tutte le sue fasce se disponibile (decisione Q17), rottura blocco + ricandidatura individuale automatica sulle fasce libere se una fascia del blocco va ad altri (decisione Q18), chiusura su B.22.1/.2/.3, tetto di sicurezza = numero totale fasce
+
+Testato con scenari comportamentali end-to-end (non solo unità isolate): distribuzione bilanciata tra associazioni pari, vincolo "una assegnazione per round", blocco vinto intero, blocco rotto e ricandidatura, tutte e 3 le condizioni di chiusura.
+
+Fatto: `internal/istruttoria/` — Fase 4 (art. B.8): orchestra i calcolatori di `calc/` per calcolare FR e coefficienti (CRS/CAA/CSD/CP) di una singola domanda, applicando i valori neutri di prima stagione (incremento squadre e CAA neutri, non il CRS — dipende solo dalla classe dichiarata quest'anno). **Assunzione esplicita da confermare con l'Ente**: Allegato A/B parlano di un unico "fabbisogno dichiarato (FD)" ma la domanda raccoglie sia un minimo che un ottimale (Doc Principale art. 5) — implementato FD = fabbisogno_ottimale_minuti, non il minimo. Vedi commento doc del package.
+
+Fatto: **quota nuove associazioni** (art. 12 Doc Principale, parametro 🔧 `quota_nuove_associazioni_pct`, default 0 = disattivata — migration `000006`): `Associazione.PrimaStagione` (dato riusato da `coefficienti_associazione.prima_stagione`, già calcolato in istruttoria) e `InputEsecuzione.QuotaNuoveAssociazioniPct` in `internal/roundrobin`. Meccanismo (documentato in `docs/SPEC.md` §7-bis.1, **assunzione da confermare con l'Ente**: il testo normativo non specifica un meccanismo, solo la facoltà): N = floor(pct × fasce totali); finché le fasce vinte da associazioni prima-stagione sono < N, il pool di candidati di una fascia contesa si restringe alle sole prima-stagione **se almeno una è candidata** (altrimenti pool intero — la quota non spreca fasce che nessuna nuova richiede), poi la catena B.20 normale decide tra loro. Un blocco allenamento vinto da una prima-stagione conta tutte le sue fasce nel contatore. **Gotcha di test scoperto**: il loader Postgres prende sempre la versione parametrica con `valida_dal` più recente a livello globale — un test che inserisce una nuova versione (per testare un valore diverso da 0) inquina lo stato di *ogni* altro uso di quel DB persistente finché non viene ripulita esplicitamente; nessuna FK verso `stagioni_sportive`/`parametrico_versioni` ha `ON DELETE CASCADE` (a differenza degli slot), quindi il cleanup va scritto a mano nell'ordine giusto (assegnazioni→elaborazioni→domande→scaglioni CSD→versione parametrica→stagione) — verificato che dopo il cleanup non resti alcuna versione con la quota non-zero.
+
+Fatto: `internal/gara/` — Fase 6 (art. B.12-14): blocco gara = coppia MINIMA di 2 slot consecutivi (stesso spazio+giorno, fine==inizio — Doc Principale art. 9 "almeno due slot consecutivi"; **assunzione da confermare con l'Ente**: i "requisiti tecnici" testuali della richiesta non sono modellabili come vincolo automatico, eventuali fasce attigue extra si gestiranno in concertazione). L'ammissibilità slot per richiesta (disciplina compatibile + omologazione impianto) arriva dal chiamante come set precalcolato in SQL — il package resta puro. Loop deterministico: ordine canonico dei blocchi, concorrenza per blocco risolta con la catena B.14 (CRS→CP→sorteggio, riusa `SceglieVincitoreBloccoGara`), chi perde ripiega sul blocco successivo nell'iterazione dopo, limite giornate gara per associazione. Gotcha di dominio: la concorrenza B.14 è tra ASSOCIAZIONI — due richieste della stessa associazione sullo stesso blocco vanno deduplicate prima del sorteggio (candidati duplicati = errore in `sorteggio.Esegui`).
+
+Fatto: `internal/postgres/` — layer di persistenza (driver `jackc/pgx/v5`, nessun ORM, coerente con lo stile SQL puro dello schema):
+- `CaricaParametricoAttivo` — ultima versione parametrica pubblicata (`ORDER BY valida_dal DESC LIMIT 1`) + tutti gli scaglioni collegati (CSD versionati, CRS/CAA/incremento-squadre normativi globali). Valori NUMERIC sempre letti via `::text` + `decimal.NewFromString`, mai binding diretto — pgx v5 non ha supporto nativo per `shopspring/decimal` senza un pacchetto ponte aggiuntivo, e il cast testuale evita quella dipendenza in più.
+- `EseguiIstruttoria` — Fase 4 (art. B.8): carica le domande ammesse di una stagione (incluso il calcolo SQL di "prima stagione": nessuna domanda ammessa della stessa associazione in una stagione con `data_inizio` precedente), chiama `istruttoria.Calcola` per ciascuna, upserta `fabbisogni_riconosciuti`+`coefficienti_associazione` in un'unica transazione (`ON CONFLICT (domanda_id) DO UPDATE`).
+- `EseguiRoundRobin` — Fase 8 end-to-end: carica fasce/richieste/blocchi allenamento/associazioni (richiede istruttoria già eseguita, legge FR/CP da lì), chiama `roundrobin.Esegui`, persiste `elaborazioni`+`assegnazioni`+(se necessario)`sorteggi`+`sorteggio_candidati` in un'unica transazione. Esclude gli slot con assegnazione attiva (blocchi gara) e ricostruisce da quelle VA iniziale (art. B.15, minuti grezzi come da B.14) e stato di concentrazione iniziale (`roundrobin.InputEsecuzione.StatoIniziale`: i minuti gara contano nei limiti B.19 e l'impianto gara conta nel tie-break di contiguità B.20).
+- `EseguiBlocchiGara` — Fase 6 end-to-end: carica richieste `in_esame` con CRS/CP (richiede istruttoria), ammissibilità slot in SQL (spazio compatibile con una disciplina della domanda; se `necessita_impianto_omologato`, disciplina ∈ `spazi_sportivi.omologazioni`), chiama `gara.Esegui`, persiste elaborazione tipo `blocchi_gara` + una riga `assegnazioni` PER SLOT del blocco (tipo `blocco_gara`, `valore_minuti` grezzi) + stato richieste (`assegnata`/`non_assegnata`) + verbali sorteggio con `articolo_riferimento='B.14'`.
+- Nota: `roundrobin.Assegnazione` non porta ancora l'ISF al momento dell'assegnazione — colonna `isf_al_momento` (nullable) lasciata NULL per ora, non blocca nulla ma andrà chiuso se serve in dashboard/audit.
+- Fixture dei test di integrazione: ogni valore UNIQUE (nomi, CF, PIVA, protocolli) con suffisso random per-esecuzione — il DB locale persiste tra i run, valori fissi = duplicate key al secondo run (stesso identico gotcha visto nei test Node).
+
+Validato con test di integrazione reale (non mockato): rete Docker dedicata, Postgres con schema+seed applicati, container Go connesso via rete, scenario end-to-end istruttoria→round-robin verificato sui dati effettivamente persistiti in DB (non solo sul valore di ritorno Go).
+
+Fatto: `internal/httpapi/` + `cmd/service/` — esposizione HTTP verso il backend Node. Niente router esterno: `http.ServeMux` con pattern nativi Go 1.22+ (`"POST /stagioni/{id}/istruttoria"`). Le dipendenze Postgres sono iniettate come funzioni (`Server.EseguiIstruttoria`, `Server.EseguiRoundRobin`), non un'interfaccia — i test della logica HTTP non richiedono un DB reale. `GeneraSeme` iniettabile per test deterministici; default `GeneraSemeCSPRNG` (`crypto/rand`, 32 byte hex, coerente col requisito CSPRNG dell'art. B.38).
+
+Endpoint:
+- `GET /healthz`
+- `POST /stagioni/{id}/istruttoria` → `{"domande_calcolate": N}`
+- `POST /stagioni/{id}/blocchi-gara` → genera il seme, esegue la Fase 6, `{"elaborazione_id", "numero_assegnazioni", "richieste_non_assegnate"}`
+- `POST /stagioni/{id}/prima-assegnazione` → genera il seme, esegue il round-robin, `{"elaborazione_id", "numero_assegnazioni", "round_eseguiti"}`
+
+`cmd/service/main.go` legge `DATABASE_URL`/`PORT`, shutdown pulito su SIGTERM. Verificato con smoke test reale (non solo `go build`): binario avviato con `go run` contro Postgres vero su rete Docker dedicata, tutti e 3 gli scenari chiamati via `curl` — healthz 200, istruttoria/prima-assegnazione su stagione vuota (0 domande, chiusura round-robin corretta con 0 fasce), stagione inesistente propaga correttamente il vincolo FK come errore 500 leggibile (non un crash).
+
+Da fare (Fase 3, resto): nessuna autenticazione/autorizzazione sull'HTTP del motore ancora (accettabile per ora: è un servizio interno, il backend Node farà da gatekeeper — da rivedere quando si disegna la rete tra i container). Riassegnazione finale (art. B.29) non ancora esposta (riuserà il round-robin sui soli slot liberi post-concertazione).
+
+Comandi (container Postgres e Go possono girare in parallelo, porte diverse):
+```
+docker volume create palestre-go-mod-cache   # una tantum, cache moduli persistente
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd)/engine-go:/app" -v palestre-go-mod-cache:/go/pkg/mod -w /app golang:1.26-alpine go test ./... -v
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd)/engine-go:/app" -v palestre-go-mod-cache:/go/pkg/mod -w /app golang:1.26-alpine sh -c "gofmt -w . && go vet ./..."
+```
+(`MSYS_NO_PATHCONV=1` necessario solo da Git Bash su Windows, vedi nota ambiente sopra — qui serve perché `-w /app` è un path del container, non dell'host.)
+
+Test di integrazione `internal/postgres` (skippato di default, serve `TEST_DATABASE_URL`):
+```
+docker network create palestre-integration-net
+docker run -d --name pg-integration --network palestre-integration-net -e POSTGRES_PASSWORD=test -e POSTGRES_DB=palestre postgres:18-alpine
+# attendere pg_isready, poi applicare db/migrations/000001 e 000002 con psql dentro il container (vedi docs/claude/schema-db.md)
+MSYS_NO_PATHCONV=1 docker run --rm --network palestre-integration-net \
+  -v "$(pwd)/engine-go:/app" -v palestre-go-mod-cache:/go/pkg/mod \
+  -e TEST_DATABASE_URL="postgres://postgres:test@pg-integration:5432/palestre?sslmode=disable" \
+  -w /app golang:1.26-alpine go test ./internal/postgres/... -v
+# poi: docker rm -f pg-integration && docker network rm palestre-integration-net
+```
+
+Variante contro il Postgres di sviluppo PERSISTENTE (`pg-palestre-dev`, non effimero — comodo per iterare senza spin-up/down ripetuto): `docker network connect palestre-it-net pg-palestre-dev` una tantum, poi lo stesso `docker run --network palestre-it-net ... -e TEST_DATABASE_URL="postgres://postgres:test@pg-palestre-dev:5432/palestre?sslmode=disable" ...`. Attenzione: inquina lo stato condiviso tra sessioni (es. `CaricaParametricoAttivo` prende sempre la versione più recente — un test che ne inserisce una nuova la rende "attiva" per tutti finché non viene ripulita esplicitamente) — cleanup nei test è obbligatorio, non opzionale, su questo Postgres. `pg-palestre-dev` è raggiungibile anche direttamente da host via porta mappata (`docker port pg-palestre-dev`, es. `5433:5432`) — comodo per `node --test` nativo su host (backend-node): `TEST_DATABASE_URL=postgres://postgres:test@localhost:<porta-mappata>/palestre?sslmode=disable`, nessun `docker network connect` necessario. La variante di rete Docker resta necessaria solo quando il test runner stesso gira in un container (Go). Subagent in auto mode possono venire bloccati nel mutare dati su questo Postgres condiviso (UPDATE/DELETE negati silenziosamente dal classificatore di permessi, anche se le SELECT passano) — se un subagent segnala questo blocco, far eseguire la mutazione al coordinator invece di insistere con retry/wrapper diversi.
+
+**Se `pg-palestre-dev` non esiste** (sessione fresca su macchina nuova, verificare con `docker ps -a | grep palestre`): ricrearlo con `docker run -d --name pg-palestre-dev -e POSTGRES_PASSWORD=test -e POSTGRES_DB=palestre -p 5433:5432 postgres:18-alpine`, poi applicare TUTTE le migration in ordine una per una (`docker cp db/migrations/NNNNNN_*.up.sql pg-palestre-dev:/tmp/m.sql && docker exec pg-palestre-dev psql -U postgres -d palestre -v ON_ERROR_STOP=1 -f /tmp/m.sql`) — non dare per scontato che esista solo perché CLAUDE.md lo documenta.
+
+Smoke test del binario reale (`cmd/service`) contro Postgres vero: stessa rete Docker+migrazioni del test di integrazione sopra, ma al posto di `go test` si lancia `go run ./cmd/service` con `-p HOSTPORT:8080 -e DATABASE_URL=...`, poi `curl localhost:HOSTPORT/...` dall'host. Utile per verificare il wiring di `main.go` (mai coperto da unit test).
+
+**Gotcha CI reale trovato il 2026-07-27**: `pnpm-workspace.yaml` (aggiunto con lo scaffold dei frontend) aveva `allowBuilds: { esbuild: "set this to true or false" }` — placeholder letterale mai compilato dallo strumento di scaffold. pnpm >=11 blocca gli install non interattivi (`--frozen-lockfile`, quindi anche CI) finché ogni build-script è approvato esplicitamente: `[ERR_PNPM_IGNORED_BUILDS]`. Rilevato perché la CI del backend falliva silenziosamente da due commit (frontend scaffold + il commit successivo) senza che nessuno se ne accorgesse guardando solo il proprio job. Fix: `pnpm approve-builds --all` (scrive `esbuild: true` nel workspace yaml), verificato con reinstall pulito (`rm -rf node_modules`, `pnpm install --frozen-lockfile`) da zero. **Lezione**: controllare lo stato CI (`gh run list`) dopo OGNI push, non solo dopo i propri — un file condiviso a livello repo (qui il workspace pnpm, toccato da un lavoro non correlato) può rompere silenziosamente il lavoro di un'altra area.
+
