@@ -54,10 +54,7 @@ export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ 
       });
       onRicarica();
       setEntitaPerDelega(null);
-      setCfDelegato('');
-      setNomeDelegato('');
-      setCognomeDelegato('');
-      setRuoloDelegato('operatore');
+      resetFormDelega();
     } catch (err) {
       setErroreDelega(err instanceof ErroreRichiestaApi ? err.message : 'Errore imprevisto durante l\'invito.');
     } finally {
@@ -72,6 +69,23 @@ export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ 
     setDataCostituzione('');
     setFile(null);
     setTipoDocumento('statuto');
+  };
+
+  const resetFormDelega = (): void => {
+    setCfDelegato('');
+    setNomeDelegato('');
+    setCognomeDelegato('');
+    setRuoloDelegato('operatore');
+    setErroreDelega(null);
+  };
+
+  const apriModaleDelega = (ent: EntitaRappresentata): void => {
+    // Difesa in profondità: anche se un percorso precedente avesse lasciato
+    // stato residuo, l'apertura di un nuovo modale riparte sempre da un
+    // default sicuro (mai 'rappresentante' ereditato da un'altra associazione
+    // — vedi Finding 3 della code review finale del branch).
+    resetFormDelega();
+    setEntitaPerDelega(ent);
   };
 
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
@@ -167,7 +181,7 @@ export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ 
             </div>
             {ent.stato === 'approvata' && (
               <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
-                <button onClick={() => setEntitaPerDelega(ent)} className="btn btn-secondary btn-sm">
+                <button onClick={() => apriModaleDelega(ent)} className="btn btn-secondary btn-sm">
                   <FileCheck2 size={14} /> Invita Delegato
                 </button>
               </div>
@@ -284,7 +298,7 @@ export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ 
                 </div>
               )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.25rem' }}>
-                <button type="button" onClick={() => setEntitaPerDelega(null)} className="btn btn-secondary">Annulla</button>
+                <button type="button" onClick={() => { setEntitaPerDelega(null); resetFormDelega(); }} className="btn btn-secondary">Annulla</button>
                 <button type="submit" className="btn btn-primary" disabled={inCorsoDelega}>
                   {inCorsoDelega ? 'Invio in corso…' : 'Invia Invito'}
                 </button>

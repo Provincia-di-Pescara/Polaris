@@ -9,6 +9,7 @@ export default defineConfig({
     proxy: {
       '/auth': 'http://localhost:3000',
       '/pubblico': 'http://localhost:3000',
+      '/stagioni': 'http://localhost:3000',
     },
   },
   test: {

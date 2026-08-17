@@ -50,7 +50,13 @@ const AppAutenticata: React.FC = () => {
     };
   }, []);
 
-  if (caricamento) {
+  // Il placeholder a pagina intera va mostrato solo al PRIMO caricamento
+  // (nessuna persona ancora nota). Un ricarica() successivo (es. dopo un
+  // upload documento fallito) rimette caricamento a true ma non deve
+  // smontare l'intero albero autenticato: altrimenti si perde lo stato
+  // locale delle view (es. l'avviso di upload fallito in
+  // AccreditamentoDelegaView) prima che l'utente possa leggerlo.
+  if (caricamento && !persona) {
     return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Caricamento…</div>;
   }
 

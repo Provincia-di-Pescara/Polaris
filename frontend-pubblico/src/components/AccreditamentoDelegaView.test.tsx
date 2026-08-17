@@ -104,4 +104,32 @@ describe('AccreditamentoDelegaView', () => {
 
     expect(screen.queryByRole('option', { name: /rappresentante/i })).not.toBeInTheDocument();
   });
+
+  it('annullare un invito con ruolo "rappresentante" non deve far trapelare lo stato su un\'altra associazione', async () => {
+    const entitaOperatore = { ...ENTITA_APPROVATA, id: 'a2', associazioneId: 'ass2', ruolo: 'operatore' as const, associazioneDenominazione: 'ASD Altra' };
+    const spy = vi.spyOn(delegheApi, 'creaSubDelega').mockResolvedValue({
+      id: 'del1', personaFisicaId: 'p2', associazioneId: 'ass2', istituzioneScolasticaId: null, stagioneId: 's1',
+      titolo: 'delegato', ruolo: 'operatore', stato: 'approvata', motivazione: null, creataDaAbilitazioneId: 'a2',
+    });
+    render(<AccreditamentoDelegaView entities={[ENTITA_APPROVATA, entitaOperatore]} stagioneId="st1" onRicarica={vi.fn()} />);
+
+    // Apre il modale sull'associazione dove l'utente è 'rappresentante',
+    // seleziona il ruolo 'rappresentante', poi annulla.
+    const invitaButtons = screen.getAllByRole('button', { name: /invita delegato/i });
+    await userEvent.click(invitaButtons[0]!);
+    await userEvent.selectOptions(screen.getByLabelText(/ruolo/i), 'rappresentante');
+    await userEvent.click(screen.getByRole('button', { name: /annulla/i }));
+
+    // Riapre il modale su un'altra associazione dove l'utente è solo 'operatore'.
+    await userEvent.click(screen.getAllByRole('button', { name: /invita delegato/i })[1]!);
+    expect(screen.getByLabelText(/ruolo/i)).toHaveValue('operatore');
+    expect(screen.queryByRole('option', { name: /rappresentante/i })).not.toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText(/codice fiscale/i), 'DLGDLG80A01H501U');
+    await userEvent.type(screen.getByLabelText(/^nome/i), 'Nuovo');
+    await userEvent.type(screen.getByLabelText(/^cognome/i), 'Delegato');
+    await userEvent.click(screen.getByRole('button', { name: /invia invito/i }));
+
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ ruolo: 'operatore' }));
+  });
 });
