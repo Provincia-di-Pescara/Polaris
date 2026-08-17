@@ -1,13 +1,3 @@
-export interface RepresentedEntity {
-  id: string;
-  nome: string;
-  codiceFiscale: string;
-  tipo: 'ASD' | 'SSD' | 'Istituto Scolastico';
-  ruoloPersona: 'Legale Rappresentante' | 'Delegato';
-  statoAccreditamento: 'approvato' | 'in_attesa' | 'richiesto';
-  isAttiva: boolean;
-}
-
 export interface ApplicationWizardState {
   classeAttivita: 'A' | 'B' | 'C' | 'D' | 'E';
   squadreFederaliCount: number;

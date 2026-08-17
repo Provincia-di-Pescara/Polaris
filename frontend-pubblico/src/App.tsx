@@ -12,7 +12,7 @@ import type { EntitaRappresentata } from './api/deleghe.ts';
 import { listaStagioni, type Stagione } from './api/stagioni.ts';
 
 const AppAutenticata: React.FC = () => {
-  const { persona, entities, caricamento, logout } = useAuth();
+  const { persona, entities, caricamento, logout, ricarica } = useAuth();
   const [activeTab, setActiveTab] = useState<string>('accreditamento');
   const [activeEntity, setActiveEntity] = useState<EntitaRappresentata | null>(null);
   const [stagioni, setStagioni] = useState<Stagione[]>([]);
@@ -74,12 +74,9 @@ const AppAutenticata: React.FC = () => {
       />
 
       <main style={{ flex: 1, paddingBottom: '3rem' }}>
-        {/* entities={[]}/onAddNewEntity no-op sono placeholder deliberati: la
-            forma di RepresentedEntity (mock interno alla view) è incompatibile
-            con EntitaRappresentata reale — un blocco futuro adatterà la view ai
-            dati reali di AuthContext. Per ora la view resta sul proprio mock
-            interno. */}
-        {activeTab === 'accreditamento' && <AccreditamentoDelegaView entities={[]} onAddNewEntity={() => {}} />}
+        {activeTab === 'accreditamento' && (
+          <AccreditamentoDelegaView entities={entities} stagioneId={stagioneId} onRicarica={ricarica} />
+        )}
         {activeTab === 'domanda-wizard' && <WizardDomandaView />}
         {activeTab === 'esiti-isf' && <EsitiIsfView />}
         {activeTab === 'concertazione' && <ConcertazioneView />}
