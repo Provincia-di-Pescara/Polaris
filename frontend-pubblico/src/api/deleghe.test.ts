@@ -10,6 +10,36 @@ import { creaSubDelega } from './deleghe.ts';
 const dsn = process.env.TEST_DATABASE_URL;
 const descrivi = dsn ? describe : describe.skip;
 
+// Nome/cognome del Rappresentante Legale devono combaciare con quelli restituiti
+// da creaPersonaTest ('Frontend'/'Test', vedi testUtil/creaPersonaTest.ts): la
+// validazione anti-frode del backend (server.ts, POST /pubblico/associazioni)
+// rifiuta con 400 se la persona autenticata non corrisponde al RL dichiarato.
+const referenteTest = {
+  nome: 'Luca',
+  cognome: 'Bianchi',
+  natoA: 'Pescara',
+  natoIl: '1980-01-01',
+  residenteVia: 'Via Roma 1',
+  residenteCitta: 'Pescara',
+  cellulare: '3331234567',
+  cartaIdentita: 'CI12345',
+};
+
+const referenteEmergenzeDaeTest = {
+  ...referenteTest,
+  daeMarca: 'Marca DAE',
+  daeMatricola: 'DAE-001',
+  daeScadenza: '2030-01-01',
+};
+
+const assicurazioneTest = {
+  compagnia: 'Compagnia Assicurativa SpA',
+  numeroPolizza: 'POL-001',
+  massimale: '1000000.00',
+  coperturaDal: '2026-01-01',
+  coperturaAl: '2027-01-01',
+};
+
 // Stesso pattern di src/api/associazioni.test.ts: nessun helper frontend per
 // creare una stagione di test, quindi inserimento diretto via pg (mirror di
 // backend-node/src/server.pubblico.test.ts:creaStagioneTest).
@@ -83,6 +113,18 @@ descrivi('deleghe.ts — creaSubDelega', () => {
       denominazione: `ASD Delega Test ${suffisso}`,
       codiceFiscalePartitaIva: `PIVA-${suffisso}`,
       stagioneId,
+      rappresentanteLegaleNome: rappresentante.persona.nome,
+      rappresentanteLegaleCognome: rappresentante.persona.cognome,
+      indirizzoVia: 'Via Milano 10',
+      indirizzoCivico: '10',
+      indirizzoCitta: 'Pescara',
+      email: 'asd-delega-test@example.com',
+      tipologiaSoggetto: 'associazione_sportiva',
+      iscrittaRasd: false,
+      haPersonaleAssunto: false,
+      referenteSicurezza: referenteTest,
+      referenteEmergenzeDae: referenteEmergenzeDaeTest,
+      assicurazioneRct: assicurazioneTest,
     });
     associazioniCreate.push(associazione.id);
 
