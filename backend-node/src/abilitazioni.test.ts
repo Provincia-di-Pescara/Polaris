@@ -23,6 +23,15 @@ async function fixture(pool: Pool) {
   const associazione = await creaAssociazione(pool, {
     denominazione: 'ASD Abilitazioni Test',
     codiceFiscalePartitaIva: `PIVA-${randomUUID().slice(0, 8)}`,
+    rappresentanteLegaleNome: 'Test',
+    rappresentanteLegaleCognome: 'Rappresentante',
+    indirizzoVia: 'Via Test',
+    indirizzoCivico: '1',
+    indirizzoCitta: 'Pescara',
+    email: `associazione-${randomUUID()}@test.local`,
+    tipologiaSoggetto: 'associazione_sportiva',
+    iscrittaRasd: false,
+    haPersonaleAssunto: false,
   });
   const stagione = await pool.query<{ id: string }>(
     `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2031-09-01', '2032-06-30') RETURNING id`,

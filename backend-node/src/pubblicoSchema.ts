@@ -1,13 +1,88 @@
 import { z } from 'zod';
 import { zDataIso } from './schemaComune.ts';
 
-export const schemaCreaAssociazione = z.object({
-  denominazione: z.string().min(1),
-  codiceFiscalePartitaIva: z.string().min(11).max(16),
-  rnaNumeroIscrizione: z.string().min(1).optional(),
-  dataCostituzione: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  stagioneId: z.string().uuid(),
+const REGEX_MASSIMALE = /^\d{1,10}(\.\d{1,2})?$/; // coerente con NUMERIC(12,2) di associazioni_assicurazioni.massimale
+
+const TIPOLOGIE_SOGGETTO = [
+  'associazione_sportiva',
+  'cooperativa_ente_promozione_sportiva',
+  'ente_promozione_culturale_giovanile_anziani',
+  'ente_assistenza_handicap_volontariato',
+  'soggetto_singolo_no_profit',
+  'organizzazione_sindacale',
+  'movimento_partito_politico',
+  'gruppo_privati_circolo',
+] as const;
+
+const schemaReferente = z.object({
+  nome: z.string().min(1),
+  cognome: z.string().min(1),
+  natoA: z.string().min(1),
+  natoIl: zDataIso,
+  residenteVia: z.string().min(1),
+  residenteCitta: z.string().min(1),
+  cellulare: z.string().min(1),
+  cartaIdentita: z.string().min(1),
 });
+
+const schemaReferenteEmergenzeDae = schemaReferente.extend({
+  daeMarca: z.string().min(1),
+  daeMatricola: z.string().min(1),
+  daeScadenza: zDataIso,
+});
+
+const schemaAssicurazione = z
+  .object({
+    compagnia: z.string().min(1),
+    agenzia: z.string().min(1).optional(),
+    numeroPolizza: z.string().min(1),
+    massimale: z.string().regex(REGEX_MASSIMALE),
+    coperturaDal: zDataIso,
+    coperturaAl: zDataIso,
+  })
+  .refine((d) => d.coperturaAl > d.coperturaDal, {
+    message: 'coperturaAl deve essere successiva a coperturaDal',
+    path: ['coperturaAl'],
+  });
+
+export const schemaCreaAssociazione = z
+  .object({
+    denominazione: z.string().min(1),
+    codiceFiscalePartitaIva: z.string().min(11).max(16),
+    rnaNumeroIscrizione: z.string().min(1).optional(),
+    dataCostituzione: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    stagioneId: z.string().uuid(),
+    rappresentanteLegaleNome: z.string().min(1),
+    rappresentanteLegaleCognome: z.string().min(1),
+    delegatoNome: z.string().min(1).optional(),
+    delegatoCognome: z.string().min(1).optional(),
+    indirizzoVia: z.string().min(1),
+    indirizzoCivico: z.string().min(1),
+    indirizzoCitta: z.string().min(1),
+    pec: z.string().email().optional(),
+    email: z.string().email(),
+    tipologiaSoggetto: z.enum(TIPOLOGIE_SOGGETTO),
+    iscrittaRasd: z.boolean(),
+    organismoSportivoCodice: z.string().min(1).optional(),
+    codiceAffiliazione: z.string().min(1).optional(),
+    haPersonaleAssunto: z.boolean(),
+    referenteSicurezza: schemaReferente,
+    referenteEmergenzeDae: schemaReferenteEmergenzeDae,
+    assicurazioneRct: schemaAssicurazione,
+    assicurazioneRco: schemaAssicurazione.optional(),
+  })
+  .refine((d) => (d.delegatoNome !== undefined) === (d.delegatoCognome !== undefined), {
+    message: 'delegatoNome e delegatoCognome devono essere entrambi presenti o entrambi assenti',
+    path: ['delegatoCognome'],
+  })
+  .refine((d) => !d.iscrittaRasd || (d.organismoSportivoCodice !== undefined && d.codiceAffiliazione !== undefined), {
+    message: 'organismoSportivoCodice e codiceAffiliazione sono obbligatori se iscrittaRasd è true',
+    path: ['organismoSportivoCodice'],
+  })
+  .refine((d) => d.haPersonaleAssunto === (d.assicurazioneRco !== undefined), {
+    message: 'assicurazioneRco è obbligatoria se e solo se haPersonaleAssunto è true',
+    path: ['assicurazioneRco'],
+  });
 export type CreaAssociazioneRequest = z.infer<typeof schemaCreaAssociazione>;
 
 export const schemaCaricaDocumento = z.object({

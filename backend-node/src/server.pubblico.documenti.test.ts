@@ -51,6 +51,15 @@ test(
     const associazione = await creaAssociazione(pool, {
       denominazione: 'ASD Documenti Test',
       codiceFiscalePartitaIva: `PIVA-${randomUUID().slice(0, 8)}`,
+      rappresentanteLegaleNome: 'Test',
+      rappresentanteLegaleCognome: 'Rappresentante',
+      indirizzoVia: 'Via Test',
+      indirizzoCivico: '1',
+      indirizzoCitta: 'Pescara',
+      email: `associazione-${randomUUID()}@test.local`,
+      tipologiaSoggetto: 'associazione_sportiva',
+      iscrittaRasd: false,
+      haPersonaleAssunto: false,
     });
     await pool.query(
       `INSERT INTO abilitazioni (persona_fisica_id, associazione_id, stagione_id, titolo, ruolo, stato)

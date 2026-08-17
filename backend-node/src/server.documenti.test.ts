@@ -46,7 +46,19 @@ test(
     });
 
     const operatore = await creaUtenteTest(pool, 'operatore');
-    const associazione = await creaAssociazione(pool, { denominazione: 'ASD Scarica Test', codiceFiscalePartitaIva: randomUUID() });
+    const associazione = await creaAssociazione(pool, {
+      denominazione: 'ASD Scarica Test',
+      codiceFiscalePartitaIva: randomUUID(),
+      rappresentanteLegaleNome: 'Test',
+      rappresentanteLegaleCognome: 'Rappresentante',
+      indirizzoVia: 'Via Test',
+      indirizzoCivico: '1',
+      indirizzoCitta: 'Pescara',
+      email: `associazione-${randomUUID()}@test.local`,
+      tipologiaSoggetto: 'associazione_sportiva',
+      iscrittaRasd: false,
+      haPersonaleAssunto: false,
+    });
 
     const nomeFile = `${randomUUID()}.pdf`;
     await mkdir(percorsoStorageDocumenti(), { recursive: true });

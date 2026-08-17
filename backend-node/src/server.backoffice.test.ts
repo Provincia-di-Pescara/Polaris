@@ -559,6 +559,15 @@ test(
     const associazione = await creaAssociazione(pool, {
       denominazione: 'ASD Approvazione Test',
       codiceFiscalePartitaIva: `PIVA-${randomUUID().slice(0, 8)}`,
+      rappresentanteLegaleNome: 'Test',
+      rappresentanteLegaleCognome: 'Rappresentante',
+      indirizzoVia: 'Via Test',
+      indirizzoCivico: '1',
+      indirizzoCitta: 'Pescara',
+      email: `associazione-${randomUUID()}@test.local`,
+      tipologiaSoggetto: 'associazione_sportiva',
+      iscrittaRasd: false,
+      haPersonaleAssunto: false,
     });
     const stagione = await pool.query<{ id: string }>(
       `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2032-09-01', '2033-06-30') RETURNING id`,
@@ -647,6 +656,15 @@ test(
     const associazione = await creaAssociazione(pool, {
       denominazione: 'ASD Revoca Test',
       codiceFiscalePartitaIva: `PIVA-${randomUUID().slice(0, 8)}`,
+      rappresentanteLegaleNome: 'Test',
+      rappresentanteLegaleCognome: 'Rappresentante',
+      indirizzoVia: 'Via Test',
+      indirizzoCivico: '1',
+      indirizzoCitta: 'Pescara',
+      email: `associazione-${randomUUID()}@test.local`,
+      tipologiaSoggetto: 'associazione_sportiva',
+      iscrittaRasd: false,
+      haPersonaleAssunto: false,
     });
     const stagione = await pool.query<{ id: string }>(
       `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2033-09-01', '2034-06-30') RETURNING id`,
