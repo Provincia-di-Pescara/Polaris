@@ -36,6 +36,11 @@ descrivi('App (backend reale)', () => {
 
     render(<App />);
 
-    expect(await screen.findByText(new RegExp(`${p.persona.nome} ${p.persona.cognome}`))).toBeInTheDocument();
-  });
+    // Timeout esplicito: App.tsx ora carica anche le stagioni (GET /stagioni)
+    // oltre a persona+entità al mount — tre fetch sequenziali contro un
+    // backend reale spawnato superano facilmente il default di 5000ms.
+    expect(
+      await screen.findByText(new RegExp(`${p.persona.nome} ${p.persona.cognome}`), {}, { timeout: 15000 }),
+    ).toBeInTheDocument();
+  }, 20000);
 });
