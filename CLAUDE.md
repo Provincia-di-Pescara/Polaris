@@ -27,9 +27,7 @@ Cartella `documenti/`, formato .docx (leggere con estrazione XML via zipfile+reg
 
 Ogni regola di business implementata deve essere riconducibile a un articolo preciso di questi tre documenti normativi. Non introdurre logiche non esplicitamente scritte (istruzione esplicita del committente).
 
-**Documenti di dettaglio complementari:**
-
-- `Associazioni_Documenti.docx` — elenca i campi anagrafici, documenti e dati assicurativi che ogni associazione richiedente deve dichiarare (tipologia soggetto, rappresentante legale/delegato, RASD/affiliazione, RCT/RCO, responsabili sicurezza/emergenze+DAE). Fornito dal committente successivamente (2026-08-17), non fa parte dei tre documenti normativi principali ma specifica il modulo di accreditamento.
+**Nota su `Associazioni_Documenti.docx`**: documento non ufficiale fornito informalmente dal committente (2026-08-17) con l'elenco dei campi anagrafici/documenti/assicurativi del modulo di accreditamento associazione (tipologia soggetto, rappresentante legale/delegato, RASD/affiliazione, RCT/RCO, responsabili sicurezza/emergenze+DAE) — non conservato in `documenti/` (non è fonte normativa). Contenuto già recepito nello schema/form (blocco "estensione anagrafica associazioni") e interamente trascritto in `docs/superpowers/specs/2026-08-17-associazioni-documenti-estensione-design.md`, che resta il riferimento per eventuali chiarimenti futuri su quei campi.
 
 **Allegato parametrico**: documento ufficiale dell'Ente con i valori numerici definitivi non ancora prodotto. Sviluppo procede con valori placeholder (marcati 🔺, dettagli in `docs/claude/parametrico-normativo.md`), versionati in DB e sostituibili dall'Ente in qualunque momento senza migrazione di schema — non blocca l'avvio di Fase 1/2.
 
