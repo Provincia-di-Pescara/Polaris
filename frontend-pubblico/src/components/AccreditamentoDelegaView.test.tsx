@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as associazioniApi from '../api/associazioni.ts';
+import * as delegheApi from '../api/deleghe.ts';
 import { ErroreRichiestaApi } from '../api/client.ts';
 import { AccreditamentoDelegaView } from './AccreditamentoDelegaView.tsx';
 import type { EntitaRappresentata } from '../api/deleghe.ts';
@@ -71,5 +72,36 @@ describe('AccreditamentoDelegaView', () => {
 
     expect(await screen.findByText(/associazione creata, ma il caricamento del documento è fallito/i)).toBeInTheDocument();
     expect(onRicarica).toHaveBeenCalled();
+  });
+
+  it('invita delegato: chiama creaSubDelega con lo stagioneId dell\'abilitazione, non uno globale', async () => {
+    const spy = vi.spyOn(delegheApi, 'creaSubDelega').mockResolvedValue({
+      id: 'del1', personaFisicaId: 'p2', associazioneId: 'ass1', istituzioneScolasticaId: null, stagioneId: 's1',
+      titolo: 'delegato', ruolo: 'operatore', stato: 'approvata', motivazione: null, creataDaAbilitazioneId: 'a1',
+    });
+    const onRicarica = vi.fn();
+    render(<AccreditamentoDelegaView entities={[ENTITA_APPROVATA]} stagioneId="stagione-diversa-selezionata-in-header" onRicarica={onRicarica} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /invita delegato/i }));
+    await userEvent.type(screen.getByLabelText(/codice fiscale/i), 'DLGDLG80A01H501U');
+    await userEvent.type(screen.getByLabelText(/^nome/i), 'Nuovo');
+    await userEvent.type(screen.getByLabelText(/^cognome/i), 'Delegato');
+    await userEvent.click(screen.getByRole('button', { name: /invia invito/i }));
+
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({
+      associazioneId: 'ass1',
+      stagioneId: 's1', // = ENTITA_APPROVATA.stagioneId, non "stagione-diversa-selezionata-in-header"
+      ruolo: 'operatore',
+    }));
+    expect(await vi.waitFor(() => onRicarica)).toHaveBeenCalled();
+  });
+
+  it('delegante con ruolo operatore: il dropdown non offre l\'opzione rappresentante', async () => {
+    const entitaOperatore = { ...ENTITA_APPROVATA, ruolo: 'operatore' as const };
+    render(<AccreditamentoDelegaView entities={[entitaOperatore]} stagioneId="st1" onRicarica={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /invita delegato/i }));
+
+    expect(screen.queryByRole('option', { name: /rappresentante/i })).not.toBeInTheDocument();
   });
 });

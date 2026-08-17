@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import type { EntitaRappresentata } from '../api/deleghe.ts';
+import { creaSubDelega, type EntitaRappresentata } from '../api/deleghe.ts';
 import { creaAssociazione, caricaDocumento, type DatiCreaAssociazione } from '../api/associazioni.ts';
 import { ErroreRichiestaApi } from '../api/client.ts';
-import { CheckCircle2, Shield, Building2, Plus } from 'lucide-react';
+import { CheckCircle2, Shield, Building2, Plus, FileCheck2 } from 'lucide-react';
 
 interface AccreditamentoDelegaProps {
   entities: EntitaRappresentata[];
@@ -27,6 +27,43 @@ export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ 
   const [errore, setErrore] = useState<string | null>(null);
   const [avvisoUploadFallito, setAvvisoUploadFallito] = useState<string | null>(null);
   const [inCorso, setInCorso] = useState(false);
+
+  const [entitaPerDelega, setEntitaPerDelega] = useState<EntitaRappresentata | null>(null);
+  const [cfDelegato, setCfDelegato] = useState('');
+  const [nomeDelegato, setNomeDelegato] = useState('');
+  const [cognomeDelegato, setCognomeDelegato] = useState('');
+  const [ruoloDelegato, setRuoloDelegato] = useState<'rappresentante' | 'operatore'>('operatore');
+  const [erroreDelega, setErroreDelega] = useState<string | null>(null);
+  const [inCorsoDelega, setInCorsoDelega] = useState(false);
+
+  const handleSubmitDelega = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    if (!entitaPerDelega || entitaPerDelega.associazioneId === null) return;
+    setErroreDelega(null);
+    setInCorsoDelega(true);
+    try {
+      await creaSubDelega({
+        codiceFiscale: cfDelegato,
+        nome: nomeDelegato,
+        cognome: cognomeDelegato,
+        associazioneId: entitaPerDelega.associazioneId,
+        // Stagione dell'abilitazione del delegante su QUESTA associazione, mai
+        // una stagione scelta altrove — vedi Global Constraints nel piano.
+        stagioneId: entitaPerDelega.stagioneId,
+        ruolo: ruoloDelegato,
+      });
+      onRicarica();
+      setEntitaPerDelega(null);
+      setCfDelegato('');
+      setNomeDelegato('');
+      setCognomeDelegato('');
+      setRuoloDelegato('operatore');
+    } catch (err) {
+      setErroreDelega(err instanceof ErroreRichiestaApi ? err.message : 'Errore imprevisto durante l\'invito.');
+    } finally {
+      setInCorsoDelega(false);
+    }
+  };
 
   const resetForm = (): void => {
     setDenominazione('');
@@ -128,7 +165,13 @@ export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ 
                 <strong>{ent.titolo === 'legale_rappresentante' ? 'Legale Rappresentante' : 'Delegato'} ({ent.ruolo})</strong>
               </div>
             </div>
-            {/* L'azione "Invita delegato" per le entità approvata arriva nel Task 4. */}
+            {ent.stato === 'approvata' && (
+              <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
+                <button onClick={() => setEntitaPerDelega(ent)} className="btn btn-secondary btn-sm">
+                  <FileCheck2 size={14} /> Invita Delegato
+                </button>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -197,6 +240,53 @@ export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ 
                 <button type="button" onClick={() => { setShowModal(false); resetForm(); setErrore(null); }} className="btn btn-secondary">Annulla</button>
                 <button type="submit" className="btn btn-primary" disabled={inCorso}>
                   {inCorso ? 'Invio in corso…' : 'Invia Delega all\'Operatore'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {entitaPerDelega && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ padding: '1.5rem' }}>
+            <h3 style={{ marginBottom: '1rem', color: 'var(--pa-blue-dark)' }}>
+              Invita Delegato per {entitaPerDelega.associazioneDenominazione ?? 'questa associazione'}
+            </h3>
+            <form onSubmit={handleSubmitDelega}>
+              <div className="form-group">
+                <label className="form-label" htmlFor="del-cf">Codice Fiscale:</label>
+                <input id="del-cf" type="text" required value={cfDelegato} onChange={(e) => setCfDelegato(e.target.value)} className="form-control" />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="del-nome">Nome:</label>
+                  <input id="del-nome" type="text" required value={nomeDelegato} onChange={(e) => setNomeDelegato(e.target.value)} className="form-control" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="del-cognome">Cognome:</label>
+                  <input id="del-cognome" type="text" required value={cognomeDelegato} onChange={(e) => setCognomeDelegato(e.target.value)} className="form-control" />
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label" htmlFor="del-ruolo">Ruolo:</label>
+                <select id="del-ruolo" value={ruoloDelegato} onChange={(e) => setRuoloDelegato(e.target.value as typeof ruoloDelegato)} className="form-control">
+                  <option value="operatore">Operatore</option>
+                  {/* Solo un delegante con ruolo 'rappresentante' può assegnare ruolo
+                      'rappresentante' — vedi backend-node/src/server.ts:1272-1275.
+                      Nascondere l'opzione qui evita un submit destinato al 403. */}
+                  {entitaPerDelega.ruolo === 'rappresentante' && <option value="rappresentante">Rappresentante</option>}
+                </select>
+              </div>
+              {erroreDelega && (
+                <div style={{ backgroundColor: 'var(--pa-danger-bg)', color: 'var(--pa-danger)', padding: '0.6rem 0.85rem', borderRadius: '6px', marginTop: '0.75rem' }}>
+                  {erroreDelega}
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.25rem' }}>
+                <button type="button" onClick={() => setEntitaPerDelega(null)} className="btn btn-secondary">Annulla</button>
+                <button type="submit" className="btn btn-primary" disabled={inCorsoDelega}>
+                  {inCorsoDelega ? 'Invio in corso…' : 'Invia Invito'}
                 </button>
               </div>
             </form>
