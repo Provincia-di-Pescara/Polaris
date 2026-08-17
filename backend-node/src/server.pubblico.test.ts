@@ -38,6 +38,57 @@ async function creaStagioneTest(pool: Pool): Promise<string> {
   return r.rows[0]!.id;
 }
 
+const referenteTest = {
+  nome: 'Luca',
+  cognome: 'Bianchi',
+  natoA: 'Pescara',
+  natoIl: '1980-01-01',
+  residenteVia: 'Via Roma 1',
+  residenteCitta: 'Pescara',
+  cellulare: '3331234567',
+  cartaIdentita: 'CI12345',
+};
+
+const referenteEmergenzeDaeTest = {
+  ...referenteTest,
+  daeMarca: 'Marca DAE',
+  daeMatricola: 'DAE-001',
+  daeScadenza: '2030-01-01',
+};
+
+const assicurazioneTest = {
+  compagnia: 'Compagnia Assicurativa SpA',
+  numeroPolizza: 'POL-001',
+  massimale: '1000000.00',
+  coperturaDal: '2026-01-01',
+  coperturaAl: '2027-01-01',
+};
+
+// Body minimo valido per POST /pubblico/associazioni con tutti i campi obbligatori
+// introdotti dall'estensione anagrafica (Task 2/3). rappresentanteLegaleNome/Cognome
+// combaciano di default con 'Mario'/'Rossi' (persona di test), dato che la validazione
+// anti-frode del Task 3 richiede che il RL o il delegato dichiarato combaci con la
+// persona autenticata.
+function corpoAssociazioneCompleto(overrides: Record<string, unknown> = {}) {
+  return {
+    denominazione: 'ASD Volley Pescara',
+    codiceFiscalePartitaIva: `PIVA-${randomUUID().slice(0, 8)}`,
+    rappresentanteLegaleNome: 'Mario',
+    rappresentanteLegaleCognome: 'Rossi',
+    indirizzoVia: 'Via Milano 10',
+    indirizzoCivico: '10',
+    indirizzoCitta: 'Pescara',
+    email: 'asd-volley@example.com',
+    tipologiaSoggetto: 'associazione_sportiva',
+    iscrittaRasd: false,
+    haPersonaleAssunto: false,
+    referenteSicurezza: referenteTest,
+    referenteEmergenzeDae: referenteEmergenzeDaeTest,
+    assicurazioneRct: assicurazioneTest,
+    ...overrides,
+  };
+}
+
 test(
   'POST /pubblico/associazioni crea associazione + abilitazione in_attesa',
   { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
@@ -61,11 +112,7 @@ test(
       const r = await fetch(`${base}/pubblico/associazioni`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
-        body: JSON.stringify({
-          denominazione: 'ASD Volley Pescara',
-          codiceFiscalePartitaIva: `PIVA-${randomUUID().slice(0, 8)}`,
-          stagioneId,
-        }),
+        body: JSON.stringify(corpoAssociazioneCompleto({ stagioneId })),
       });
       assert.equal(r.status, 201);
       const body = (await r.json()) as { id: string; denominazione: string };
@@ -90,7 +137,7 @@ test(
 
     await t.test('codice fiscale/partita IVA duplicato: 409', async () => {
       const piva = `PIVA-${randomUUID().slice(0, 8)}`;
-      const dati = { denominazione: 'ASD Duplicata', codiceFiscalePartitaIva: piva, stagioneId };
+      const dati = corpoAssociazioneCompleto({ denominazione: 'ASD Duplicata', codiceFiscalePartitaIva: piva, stagioneId });
       await fetch(`${base}/pubblico/associazioni`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
@@ -108,13 +155,117 @@ test(
       const r = await fetch(`${base}/pubblico/associazioni`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
-        body: JSON.stringify({
-          denominazione: 'ASD Fantasma',
-          codiceFiscalePartitaIva: `PIVA-${randomUUID().slice(0, 8)}`,
-          stagioneId: randomUUID(),
-        }),
+        body: JSON.stringify(corpoAssociazioneCompleto({ denominazione: 'ASD Fantasma', stagioneId: randomUUID() })),
       });
       assert.equal(r.status, 400);
+    });
+
+    await t.test('delegato dichiarato combacia con la persona autenticata, RL diverso: 201 (match sul delegato)', async () => {
+      const r = await fetch(`${base}/pubblico/associazioni`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+        body: JSON.stringify(
+          corpoAssociazioneCompleto({
+            stagioneId,
+            rappresentanteLegaleNome: 'Giuseppe',
+            rappresentanteLegaleCognome: 'Verdi',
+            delegatoNome: 'Mario',
+            delegatoCognome: 'Rossi',
+          }),
+        ),
+      });
+      assert.equal(r.status, 201);
+    });
+
+    await t.test('delegato dichiarato NON combacia con la persona autenticata: 400', async () => {
+      const r = await fetch(`${base}/pubblico/associazioni`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+        body: JSON.stringify(
+          corpoAssociazioneCompleto({
+            stagioneId,
+            delegatoNome: 'Altro',
+            delegatoCognome: 'Delegato',
+          }),
+        ),
+      });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('nessun delegato, RL diverso dalla persona autenticata: 400', async () => {
+      const r = await fetch(`${base}/pubblico/associazioni`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+        body: JSON.stringify(
+          corpoAssociazioneCompleto({
+            stagioneId,
+            rappresentanteLegaleNome: 'Giuseppe',
+            rappresentanteLegaleCognome: 'Verdi',
+          }),
+        ),
+      });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('iscrittaRasd true senza organismoSportivoCodice: 400', async () => {
+      const r = await fetch(`${base}/pubblico/associazioni`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+        body: JSON.stringify(corpoAssociazioneCompleto({ stagioneId, iscrittaRasd: true })),
+      });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('haPersonaleAssunto true senza assicurazioneRco: 400', async () => {
+      const r = await fetch(`${base}/pubblico/associazioni`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+        body: JSON.stringify(corpoAssociazioneCompleto({ stagioneId, haPersonaleAssunto: true })),
+      });
+      assert.equal(r.status, 400);
+    });
+
+    await t.test('haPersonaleAssunto true con assicurazioneRco: 201, riga assicurazioni_assicurazioni tipo rco creata', async () => {
+      const r = await fetch(`${base}/pubblico/associazioni`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+        body: JSON.stringify(
+          corpoAssociazioneCompleto({
+            stagioneId,
+            haPersonaleAssunto: true,
+            assicurazioneRco: assicurazioneTest,
+          }),
+        ),
+      });
+      assert.equal(r.status, 201);
+      const body = (await r.json()) as { id: string };
+
+      const rco = await pool.query(
+        `SELECT tipo FROM associazioni_assicurazioni WHERE associazione_id = $1 AND tipo = 'rco'`,
+        [body.id],
+      );
+      assert.equal(rco.rows.length, 1);
+    });
+  },
+);
+
+test(
+  'GET /organismi-sportivi',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const pool = new Pool({ connectionString: dsn });
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return pool.end();
+    });
+
+    await t.test('200, array non vuoto, nessuna autenticazione richiesta', async () => {
+      const r = await fetch(`${base}/organismi-sportivi`);
+      assert.equal(r.status, 200);
+      const body = (await r.json()) as Array<{ codice: string; denominazione: string }>;
+      assert.ok(Array.isArray(body));
+      assert.ok(body.length > 0);
     });
   },
 );
@@ -135,11 +286,7 @@ test(
     const rAss = await fetch(`${base}/pubblico/associazioni`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rappresentante.token}` },
-      body: JSON.stringify({
-        denominazione: 'ASD Delega Test',
-        codiceFiscalePartitaIva: `PIVA-${randomUUID().slice(0, 8)}`,
-        stagioneId,
-      }),
+      body: JSON.stringify(corpoAssociazioneCompleto({ denominazione: 'ASD Delega Test', stagioneId })),
     });
     const associazione = (await rAss.json()) as { id: string };
     await pool.query(`UPDATE abilitazioni SET stato = 'approvata' WHERE associazione_id = $1`, [associazione.id]);

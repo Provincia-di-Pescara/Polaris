@@ -65,7 +65,8 @@ import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } 
 import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaQueryListaDeleghe, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione, schemaCreaProvvedimento, schemaQueryListaLogOperazioni } from './backofficeSchema.ts';
 import { registraUtilizzo, trovaUtilizzoPerId, listaUtilizziPerAssegnazione, accogliGiustificazione, rigettaGiustificazione, presentaGiustificazione, listaUtilizziPerAssociazione } from './utilizziEffettivi.ts';
 import { codaMancatiUtilizzi, creaProvvedimento, listaProvvedimentiPerAssegnazione, applicaDecadenza } from './provvedimenti.ts';
-import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione, listaDocumentiPerAssociazione, trovaDocumentoPerId } from './associazioni.ts';
+import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione, listaDocumentiPerAssociazione, trovaDocumentoPerId, creaReferenteAssociazione, creaAssicurazioneAssociazione } from './associazioni.ts';
+import { listaOrganismiSportivi } from './organismiSportivi.ts';
 import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaCreaOsservazione, schemaCreaProposta, schemaAccettaProposta, schemaCreaVariazione, schemaAccettaVariazione, schemaPresentaGiustificazione } from './pubblicoSchema.ts';
 import { uploadDocumento, percorsoStorageDocumenti } from './documenti/storage.ts';
 import { MulterError } from 'multer';
@@ -274,6 +275,14 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     try {
       const stagioni = await listaStagioni(pool);
       res.status(200).json(stagioni);
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/organismi-sportivi', async (_req, res) => {
+    try {
+      res.status(200).json(await listaOrganismiSportivi(pool));
     } catch (err) {
       res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
     }
@@ -1075,6 +1084,20 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
         return;
       }
+      // Validazione anti-frode: chi sottoscrive deve essere davvero la persona che il
+      // modulo dichiara stia agendo (delegato se compilato, altrimenti il RL) — art. 53
+      // Doc Principale, tracciabilità della vera persona fisica operante. Confronto
+      // case-insensitive/trim: i claim OIDC e il testo libero del form possono differire
+      // per maiuscole/spazi senza che sia un mismatch reale.
+      const normalizza = (s: string) => s.trim().toLowerCase();
+      const nomeAtteso = parsed.data.delegatoNome ?? parsed.data.rappresentanteLegaleNome;
+      const cognomeAtteso = parsed.data.delegatoCognome ?? parsed.data.rappresentanteLegaleCognome;
+      if (normalizza(req.persona!.nome) !== normalizza(nomeAtteso) || normalizza(req.persona!.cognome) !== normalizza(cognomeAtteso)) {
+        res.status(400).json({
+          errore: 'la persona autenticata non corrisponde al Rappresentante Legale o al Delegato dichiarato nel modulo',
+        });
+        return;
+      }
       try {
         const associazione = await eseguiInTransazione(pool, async (client) => {
           const a = await creaAssociazione(client, parsed.data);
@@ -1083,6 +1106,12 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
             associazioneId: a.id,
             stagioneId: parsed.data.stagioneId,
           });
+          await creaReferenteAssociazione(client, { associazioneId: a.id, tipo: 'sicurezza', ...parsed.data.referenteSicurezza });
+          await creaReferenteAssociazione(client, { associazioneId: a.id, tipo: 'emergenze_dae', ...parsed.data.referenteEmergenzeDae });
+          await creaAssicurazioneAssociazione(client, { associazioneId: a.id, tipo: 'rct', ...parsed.data.assicurazioneRct });
+          if (parsed.data.assicurazioneRco) {
+            await creaAssicurazioneAssociazione(client, { associazioneId: a.id, tipo: 'rco', ...parsed.data.assicurazioneRco });
+          }
           await registraOperazione(client, {
             attore: { tipo: 'pubblico', personaFisicaId: req.persona!.sub, associazioneId: a.id, ruolo: 'rappresentante' },
             azione: 'accreditamento_associazione',
