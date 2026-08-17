@@ -210,6 +210,29 @@ test(
 );
 
 test(
+  'creaAssociazione con organismoSportivoCodice inesistente in organismi_sportivi viola il FK (Finding 4 code review finale)',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const { pool, distruggi } = await creaDatabaseDedicato(dsn!);
+    t.after(distruggi);
+
+    const piva = `PIVA-${randomUUID().slice(0, 8)}`;
+    await assert.rejects(
+      () =>
+        creaAssociazione(pool, {
+          ...datiAssociazioneBase(piva),
+          denominazione: 'ASD Organismo Sportivo Inesistente',
+          iscrittaRasd: true,
+          organismoSportivoCodice: 'CODICE-INESISTENTE',
+          codiceAffiliazione: 'AFF-999',
+        }),
+      (err: unknown) => err instanceof DatabaseError && err.code === '23503',
+      'atteso FK violation (23503) su associazioni_organismo_sportivo_fk',
+    );
+  },
+);
+
+test(
   'creaReferenteAssociazione: sicurezza e emergenze_dae (con DAE valorizzato), round-trip',
   { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
   async (t) => {

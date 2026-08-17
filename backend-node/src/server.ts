@@ -65,7 +65,7 @@ import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } 
 import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaQueryListaDeleghe, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione, schemaCreaProvvedimento, schemaQueryListaLogOperazioni } from './backofficeSchema.ts';
 import { registraUtilizzo, trovaUtilizzoPerId, listaUtilizziPerAssegnazione, accogliGiustificazione, rigettaGiustificazione, presentaGiustificazione, listaUtilizziPerAssociazione } from './utilizziEffettivi.ts';
 import { codaMancatiUtilizzi, creaProvvedimento, listaProvvedimentiPerAssegnazione, applicaDecadenza } from './provvedimenti.ts';
-import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione, listaDocumentiPerAssociazione, trovaDocumentoPerId, creaReferenteAssociazione, creaAssicurazioneAssociazione } from './associazioni.ts';
+import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione, listaDocumentiPerAssociazione, trovaDocumentoPerId, creaReferenteAssociazione, creaAssicurazioneAssociazione, listaReferentiPerAssociazione, listaAssicurazioniPerAssociazione } from './associazioni.ts';
 import { listaOrganismiSportivi } from './organismiSportivi.ts';
 import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaCreaOsservazione, schemaCreaProposta, schemaAccettaProposta, schemaCreaVariazione, schemaAccettaVariazione, schemaPresentaGiustificazione } from './pubblicoSchema.ts';
 import { uploadDocumento, percorsoStorageDocumenti } from './documenti/storage.ts';
@@ -1105,6 +1105,11 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
             personaFisicaId: req.persona!.sub,
             associazioneId: a.id,
             stagioneId: parsed.data.stagioneId,
+            // Riusa la stessa condizione del controllo anti-frode sopra: se è stato
+            // dichiarato un Delegato (ed è lui a combaciare con la persona autenticata,
+            // altrimenti la richiesta è già stata respinta con 400), il titolo deve
+            // riflettere quella capacità dichiarata — vedi Finding 5.
+            titolo: parsed.data.delegatoNome !== undefined ? 'delegato' : 'legale_rappresentante',
           });
           await creaReferenteAssociazione(client, { associazioneId: a.id, tipo: 'sicurezza', ...parsed.data.referenteSicurezza });
           await creaReferenteAssociazione(client, { associazioneId: a.id, tipo: 'emergenze_dae', ...parsed.data.referenteEmergenzeDae });
@@ -1219,6 +1224,34 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           return;
         }
         res.status(200).json(await listaDocumentiPerAssociazione(pool, associazioneId));
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/backoffice/associazioni/:id/dettagli-accreditamento',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req, res) => {
+      try {
+        const associazioneId = typeof req.params.id === 'string' ? req.params.id : '';
+        const associazione = await trovaAssociazionePerId(pool, associazioneId);
+        if (!associazione) {
+          res.status(404).json({ errore: 'associazione non trovata' });
+          return;
+        }
+        const [referenti, assicurazioni] = await Promise.all([
+          listaReferentiPerAssociazione(pool, associazioneId),
+          listaAssicurazioniPerAssociazione(pool, associazioneId),
+        ]);
+        res.status(200).json({ referenti, assicurazioni });
       } catch (err) {
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
         if (erroreRiferimento) {

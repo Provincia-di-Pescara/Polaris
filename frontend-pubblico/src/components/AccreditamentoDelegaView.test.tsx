@@ -8,6 +8,13 @@ import { ErroreRichiestaApi } from '../api/client.ts';
 import { AccreditamentoDelegaView } from './AccreditamentoDelegaView.tsx';
 import type { EntitaRappresentata } from '../api/deleghe.ts';
 import type { Associazione } from '../api/associazioni.ts';
+import type { PersonaAutenticata } from '../api/auth.ts';
+
+// Nome/cognome combaciano con quelli usati come Rappresentante Legale in
+// compilaCampiObbligatoriAssociazione() più sotto: la validazione anti-frode
+// lato client (Finding 2 della code review finale del branch) confronterebbe
+// altrimenti un mismatch e bloccherebbe ogni submit dei test esistenti.
+const PERSONA_MOCK: PersonaAutenticata = { sub: 'p1', codiceFiscale: 'RSSMRA80A01H501U', nome: 'Mario', cognome: 'Rossi' };
 
 const ENTITA_APPROVATA: EntitaRappresentata = {
   id: 'a1', personaFisicaId: 'p1', associazioneId: 'ass1', istituzioneScolasticaId: null, stagioneId: 's1',
@@ -70,20 +77,20 @@ function compilaCampiObbligatoriAssociazione(): void {
 
 describe('AccreditamentoDelegaView', () => {
   it('mostra le associazioni reali (non mock), incluso lo stato', () => {
-    render(<AccreditamentoDelegaView entities={[ENTITA_APPROVATA]} stagioneId="st1" onRicarica={vi.fn()} />);
+    render(<AccreditamentoDelegaView entities={[ENTITA_APPROVATA]} stagioneId="st1" onRicarica={vi.fn()} persona={PERSONA_MOCK} />);
     expect(screen.getByText('ASD Test')).toBeInTheDocument();
     expect(screen.getByText(/Approvato/)).toBeInTheDocument();
   });
 
   it('nessuna associazione: mostra lo stato vuoto', () => {
-    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={vi.fn()} />);
+    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={vi.fn()} persona={PERSONA_MOCK} />);
     expect(screen.getByText(/nessuna associazione accreditata/i)).toBeInTheDocument();
   });
 
   it('crea associazione: chiama creaAssociazione con stagioneId, poi onRicarica', async () => {
     const spy = vi.spyOn(associazioniApi, 'creaAssociazione').mockResolvedValue(ASSOCIAZIONE_MOCK_COMPLETA);
     const onRicarica = vi.fn();
-    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={onRicarica} />);
+    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={onRicarica} persona={PERSONA_MOCK} />);
 
     await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
     await userEvent.type(screen.getByLabelText(/denominazione ufficiale/i), 'ASD Nuova');
@@ -97,7 +104,7 @@ describe('AccreditamentoDelegaView', () => {
 
   it('senza stagioneId selezionato: mostra errore, non chiama creaAssociazione', async () => {
     const spy = vi.spyOn(associazioniApi, 'creaAssociazione');
-    render(<AccreditamentoDelegaView entities={[]} stagioneId={null} onRicarica={vi.fn()} />);
+    render(<AccreditamentoDelegaView entities={[]} stagioneId={null} onRicarica={vi.fn()} persona={PERSONA_MOCK} />);
 
     await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
     await userEvent.type(screen.getByLabelText(/denominazione ufficiale/i), 'ASD Nuova');
@@ -113,7 +120,7 @@ describe('AccreditamentoDelegaView', () => {
     vi.spyOn(associazioniApi, 'creaAssociazione').mockResolvedValue(ASSOCIAZIONE_MOCK_COMPLETA);
     vi.spyOn(associazioniApi, 'caricaDocumento').mockRejectedValue(new ErroreRichiestaApi(415, 'il contenuto del file non è un PDF valido'));
     const onRicarica = vi.fn();
-    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={onRicarica} />);
+    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={onRicarica} persona={PERSONA_MOCK} />);
 
     await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
     await userEvent.type(screen.getByLabelText(/denominazione ufficiale/i), 'ASD Nuova');
@@ -131,7 +138,7 @@ describe('AccreditamentoDelegaView', () => {
     vi.spyOn(organismiApi, 'listaOrganismiSportivi').mockResolvedValue([
       { codice: 'CONI', denominazione: 'CONI' },
     ]);
-    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={vi.fn()} />);
+    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={vi.fn()} persona={PERSONA_MOCK} />);
 
     await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
 
@@ -145,7 +152,7 @@ describe('AccreditamentoDelegaView', () => {
   });
 
   it('campi RCO: nascosti finché "ha personale assunto" non è selezionato', async () => {
-    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={vi.fn()} />);
+    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={vi.fn()} persona={PERSONA_MOCK} />);
 
     await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
 
@@ -159,7 +166,7 @@ describe('AccreditamentoDelegaView', () => {
 
   it('submit con tutti i campi compilati: creaAssociazione riceve referenti/assicurazioni', async () => {
     const spy = vi.spyOn(associazioniApi, 'creaAssociazione').mockResolvedValue(ASSOCIAZIONE_MOCK_COMPLETA);
-    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={vi.fn()} />);
+    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={vi.fn()} persona={PERSONA_MOCK} />);
 
     await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
     await userEvent.type(screen.getByLabelText(/denominazione ufficiale/i), 'ASD Nuova');
@@ -188,7 +195,7 @@ describe('AccreditamentoDelegaView', () => {
       titolo: 'delegato', ruolo: 'operatore', stato: 'approvata', motivazione: null, creataDaAbilitazioneId: 'a1',
     });
     const onRicarica = vi.fn();
-    render(<AccreditamentoDelegaView entities={[ENTITA_APPROVATA]} stagioneId="stagione-diversa-selezionata-in-header" onRicarica={onRicarica} />);
+    render(<AccreditamentoDelegaView entities={[ENTITA_APPROVATA]} stagioneId="stagione-diversa-selezionata-in-header" onRicarica={onRicarica} persona={PERSONA_MOCK} />);
 
     await userEvent.click(screen.getByRole('button', { name: /invita delegato/i }));
     await userEvent.type(screen.getByLabelText(/codice fiscale/i), 'DLGDLG80A01H501U');
@@ -206,7 +213,7 @@ describe('AccreditamentoDelegaView', () => {
 
   it('delegante con ruolo operatore: il dropdown non offre l\'opzione rappresentante', async () => {
     const entitaOperatore = { ...ENTITA_APPROVATA, ruolo: 'operatore' as const };
-    render(<AccreditamentoDelegaView entities={[entitaOperatore]} stagioneId="st1" onRicarica={vi.fn()} />);
+    render(<AccreditamentoDelegaView entities={[entitaOperatore]} stagioneId="st1" onRicarica={vi.fn()} persona={PERSONA_MOCK} />);
 
     await userEvent.click(screen.getByRole('button', { name: /invita delegato/i }));
 
@@ -219,7 +226,7 @@ describe('AccreditamentoDelegaView', () => {
       id: 'del1', personaFisicaId: 'p2', associazioneId: 'ass2', istituzioneScolasticaId: null, stagioneId: 's1',
       titolo: 'delegato', ruolo: 'operatore', stato: 'approvata', motivazione: null, creataDaAbilitazioneId: 'a2',
     });
-    render(<AccreditamentoDelegaView entities={[ENTITA_APPROVATA, entitaOperatore]} stagioneId="st1" onRicarica={vi.fn()} />);
+    render(<AccreditamentoDelegaView entities={[ENTITA_APPROVATA, entitaOperatore]} stagioneId="st1" onRicarica={vi.fn()} persona={PERSONA_MOCK} />);
 
     // Apre il modale sull'associazione dove l'utente è 'rappresentante',
     // seleziona il ruolo 'rappresentante', poi annulla.

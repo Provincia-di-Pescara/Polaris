@@ -3,6 +3,7 @@ import { creaSubDelega, type EntitaRappresentata } from '../api/deleghe.ts';
 import { creaAssociazione, caricaDocumento, type DatiCreaAssociazione, type TipologiaSoggetto } from '../api/associazioni.ts';
 import { listaOrganismiSportivi, type OrganismoSportivo } from '../api/organismiSportivi.ts';
 import { ErroreRichiestaApi } from '../api/client.ts';
+import type { PersonaAutenticata } from '../api/auth.ts';
 import { CheckCircle2, Shield, Building2, Plus, FileCheck2 } from 'lucide-react';
 
 const TIPOLOGIA_SOGGETTO_OPZIONI: Array<{ value: TipologiaSoggetto; label: string }> = [
@@ -20,6 +21,7 @@ interface AccreditamentoDelegaProps {
   entities: EntitaRappresentata[];
   stagioneId: string | null;
   onRicarica: () => void;
+  persona: PersonaAutenticata;
 }
 
 const TIPO_DOCUMENTO_OPZIONI: Array<{ value: 'statuto' | 'atto_costitutivo' | 'altro'; label: string }> = [
@@ -28,7 +30,7 @@ const TIPO_DOCUMENTO_OPZIONI: Array<{ value: 'statuto' | 'atto_costitutivo' | 'a
   { value: 'altro', label: 'Altro' },
 ];
 
-export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ entities, stagioneId, onRicarica }) => {
+export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ entities, stagioneId, onRicarica, persona }) => {
   const [showModal, setShowModal] = useState(false);
   const [denominazione, setDenominazione] = useState('');
   const [codiceFiscalePartitaIva, setCodiceFiscalePartitaIva] = useState('');
@@ -40,8 +42,8 @@ export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ 
   const [avvisoUploadFallito, setAvvisoUploadFallito] = useState<string | null>(null);
   const [inCorso, setInCorso] = useState(false);
 
-  const [rappresentanteLegaleNome, setRappresentanteLegaleNome] = useState('');
-  const [rappresentanteLegaleCognome, setRappresentanteLegaleCognome] = useState('');
+  const [rappresentanteLegaleNome, setRappresentanteLegaleNome] = useState(persona.nome);
+  const [rappresentanteLegaleCognome, setRappresentanteLegaleCognome] = useState(persona.cognome);
   const [delegatoNome, setDelegatoNome] = useState('');
   const [delegatoCognome, setDelegatoCognome] = useState('');
   const [indirizzoVia, setIndirizzoVia] = useState('');
@@ -55,6 +57,7 @@ export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ 
   const [codiceAffiliazione, setCodiceAffiliazione] = useState('');
   const [haPersonaleAssunto, setHaPersonaleAssunto] = useState(false);
   const [organismi, setOrganismi] = useState<OrganismoSportivo[]>([]);
+  const [erroreOrganismi, setErroreOrganismi] = useState<string | null>(null);
 
   const [refSicurezzaNome, setRefSicurezzaNome] = useState('');
   const [refSicurezzaCognome, setRefSicurezzaCognome] = useState('');
@@ -101,8 +104,10 @@ export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ 
 
   useEffect(() => {
     listaOrganismiSportivi().then(setOrganismi).catch(() => {
-      // Non blocca il resto del form: se il caricamento fallisce, il select resta vuoto
-      // e l'utente non potrà selezionare RASD — errore visibile solo se prova a farlo.
+      // Non blocca il resto del form: se il caricamento fallisce, il select resta vuoto,
+      // ma segnaliamo l'errore in modo visibile vicino al campo RASD (Finding 1 della
+      // code review finale del branch — prima l'errore era silenzioso).
+      setErroreOrganismi('Elenco organismi sportivi non disponibile.');
     });
   }, []);
 
@@ -139,8 +144,8 @@ export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ 
     setDataCostituzione('');
     setFile(null);
     setTipoDocumento('statuto');
-    setRappresentanteLegaleNome('');
-    setRappresentanteLegaleCognome('');
+    setRappresentanteLegaleNome(persona.nome);
+    setRappresentanteLegaleCognome(persona.cognome);
     setDelegatoNome('');
     setDelegatoCognome('');
     setIndirizzoVia('');
@@ -211,6 +216,18 @@ export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ 
     }
     setErrore(null);
     setAvvisoUploadFallito(null);
+    // Verifica lato client, a specchio del controllo anti-spoofing server-side
+    // (backend-node/src/server.ts, POST /pubblico/associazioni): non sostituisce
+    // il controllo server, che resta l'unico autoritativo, ma evita un round trip
+    // inutile quando il nome/cognome dichiarato non combacia con l'identità SPID
+    // autenticata (Finding 2 della code review finale del branch).
+    const normalizza = (s: string) => s.trim().toLowerCase();
+    const nomeAtteso = delegatoNome || rappresentanteLegaleNome;
+    const cognomeAtteso = delegatoCognome || rappresentanteLegaleCognome;
+    if (normalizza(persona.nome) !== normalizza(nomeAtteso) || normalizza(persona.cognome) !== normalizza(cognomeAtteso)) {
+      setErrore('Il nome inserito come Rappresentante Legale (o Delegato) deve corrispondere alla tua identità digitale autenticata.');
+      return;
+    }
     setInCorso(true);
     try {
       const dati: DatiCreaAssociazione = {
@@ -446,6 +463,11 @@ export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ 
                   onChange={(e) => setIscrittaRasd(e.target.checked)} />
                 <label className="form-label" htmlFor="acc-rasd" style={{ margin: 0 }}>Iscritta al Registro Attività Sportiva Dilettantistica (RASD)</label>
               </div>
+              {iscrittaRasd && erroreOrganismi && (
+                <div style={{ backgroundColor: 'var(--pa-danger-bg)', color: 'var(--pa-danger)', padding: '0.6rem 0.85rem', borderRadius: '6px', marginBottom: '0.75rem' }}>
+                  {erroreOrganismi}
+                </div>
+              )}
               {iscrittaRasd && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                   <div className="form-group">

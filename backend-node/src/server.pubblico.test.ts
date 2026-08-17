@@ -160,7 +160,7 @@ test(
       assert.equal(r.status, 400);
     });
 
-    await t.test('delegato dichiarato combacia con la persona autenticata, RL diverso: 201 (match sul delegato)', async () => {
+    await t.test('delegato dichiarato combacia con la persona autenticata, RL diverso: 201 (match sul delegato), titolo = delegato', async () => {
       const r = await fetch(`${base}/pubblico/associazioni`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
@@ -175,6 +175,16 @@ test(
         ),
       });
       assert.equal(r.status, 201);
+      const body = (await r.json()) as { id: string };
+      // Finding 5 della code review finale del branch: quando il match anti-frode è
+      // avvenuto sul Delegato dichiarato (non sul RL), il titolo dell'abilitazione
+      // deve riflettere quella capacità — 'delegato', non 'legale_rappresentante'.
+      const abilitazione = await pool.query(
+        `SELECT titolo, ruolo FROM abilitazioni WHERE persona_fisica_id = $1 AND associazione_id = $2`,
+        [persona.id, body.id],
+      );
+      assert.equal(abilitazione.rows[0]?.titolo, 'delegato');
+      assert.equal(abilitazione.rows[0]?.ruolo, 'rappresentante');
     });
 
     await t.test('delegato dichiarato NON combacia con la persona autenticata: 400', async () => {

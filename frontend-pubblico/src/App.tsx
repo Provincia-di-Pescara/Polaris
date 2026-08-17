@@ -81,7 +81,7 @@ const AppAutenticata: React.FC = () => {
 
       <main style={{ flex: 1, paddingBottom: '3rem' }}>
         {activeTab === 'accreditamento' && (
-          <AccreditamentoDelegaView entities={entities} stagioneId={stagioneId} onRicarica={ricarica} />
+          <AccreditamentoDelegaView entities={entities} stagioneId={stagioneId} onRicarica={ricarica} persona={persona} />
         )}
         {activeTab === 'domanda-wizard' && <WizardDomandaView />}
         {activeTab === 'esiti-isf' && <EsitiIsfView />}

@@ -291,6 +291,16 @@ export async function creaReferenteAssociazione(db: Db, dati: DatiCreaReferenteA
   return daRigaReferente(r.rows[0]!);
 }
 
+export async function listaReferentiPerAssociazione(db: Db, associazioneId: string): Promise<ReferenteAssociazione[]> {
+  const r = await db.query<RigaReferente>(
+    `SELECT id, associazione_id, tipo, nome, cognome, nato_a, nato_il::text, residente_via, residente_citta,
+       cellulare, carta_identita, dae_marca, dae_matricola, dae_scadenza::text
+     FROM associazioni_referenti WHERE associazione_id = $1 ORDER BY tipo`,
+    [associazioneId],
+  );
+  return r.rows.map(daRigaReferente);
+}
+
 export interface AssicurazioneAssociazione {
   id: string;
   associazioneId: string;
@@ -358,4 +368,14 @@ export async function creaAssicurazioneAssociazione(db: Db, dati: DatiCreaAssicu
     ],
   );
   return daRigaAssicurazione(r.rows[0]!);
+}
+
+export async function listaAssicurazioniPerAssociazione(db: Db, associazioneId: string): Promise<AssicurazioneAssociazione[]> {
+  const r = await db.query<RigaAssicurazione>(
+    `SELECT id, associazione_id, tipo, compagnia, agenzia, numero_polizza, massimale::text,
+       copertura_dal::text, copertura_al::text
+     FROM associazioni_assicurazioni WHERE associazione_id = $1 ORDER BY tipo`,
+    [associazioneId],
+  );
+  return r.rows.map(daRigaAssicurazione);
 }

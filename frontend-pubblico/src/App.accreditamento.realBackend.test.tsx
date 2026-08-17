@@ -86,9 +86,12 @@ descrivi('App — accreditamento (backend reale)', () => {
     // Il Rappresentante Legale deve combaciare con la persona fisica autenticata
     // (nome/cognome della persona di test creata sopra): la validazione
     // cross-campo del Task 3 (anti-frode) rifiuta con 400 un Rappresentante
-    // Legale diverso dalla persona che sta effettuando la richiesta.
-    await userEvent.type(document.getElementById('acc-rl-nome')!, p.persona.nome);
-    await userEvent.type(document.getElementById('acc-rl-cognome')!, p.persona.cognome);
+    // Legale diverso dalla persona che sta effettuando la richiesta. Da quando
+    // AccreditamentoDelegaView prefilla questi campi da persona.nome/cognome
+    // (Finding 2 della code review finale del branch) i campi arrivano già
+    // valorizzati correttamente — niente da digitare, solo verificarlo.
+    expect(document.getElementById('acc-rl-nome')).toHaveValue(p.persona.nome);
+    expect(document.getElementById('acc-rl-cognome')).toHaveValue(p.persona.cognome);
     await userEvent.type(document.getElementById('acc-indirizzo-via')!, 'Via Roma');
     await userEvent.type(document.getElementById('acc-indirizzo-civico')!, '1');
     await userEvent.type(document.getElementById('acc-indirizzo-citta')!, 'Pescara');

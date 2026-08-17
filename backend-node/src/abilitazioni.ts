@@ -48,13 +48,23 @@ const COLONNE_SELECT = `id, persona_fisica_id, associazione_id, istituzione_scol
 
 export async function creaAbilitazionePrincipale(
   db: Db,
-  dati: { personaFisicaId: string; associazioneId: string; stagioneId: string },
+  dati: {
+    personaFisicaId: string;
+    associazioneId: string;
+    stagioneId: string;
+    // Riflette il ruolo dichiarato nel form di accreditamento (Delegato vs
+    // Rappresentante Legale — vedi Finding 5 della code review finale del branch):
+    // 'ruolo' resta sempre 'rappresentante' (è comunque chi fonda/gestisce la
+    // presenza digitale dell'associazione), ma 'titolo' deve riflettere la
+    // capacità legalmente dichiarata che ha superato la verifica anti-frode.
+    titolo?: 'legale_rappresentante' | 'delegato';
+  },
 ): Promise<Abilitazione> {
   const r = await db.query<RigaAbilitazione>(
     `INSERT INTO abilitazioni (persona_fisica_id, associazione_id, stagione_id, titolo, ruolo, stato)
-     VALUES ($1, $2, $3, 'legale_rappresentante', 'rappresentante', 'in_attesa')
+     VALUES ($1, $2, $3, $4, 'rappresentante', 'in_attesa')
      RETURNING ${COLONNE_SELECT}`,
-    [dati.personaFisicaId, dati.associazioneId, dati.stagioneId],
+    [dati.personaFisicaId, dati.associazioneId, dati.stagioneId, dati.titolo ?? 'legale_rappresentante'],
   );
   return daRiga(r.rows[0]!);
 }

@@ -1,0 +1,1 @@
+ALTER TABLE associazioni DROP CONSTRAINT associazioni_organismo_sportivo_fk;

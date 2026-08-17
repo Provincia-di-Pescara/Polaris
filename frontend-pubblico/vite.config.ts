@@ -10,6 +10,7 @@ export default defineConfig({
       '/auth': 'http://localhost:3000',
       '/pubblico': 'http://localhost:3000',
       '/stagioni': 'http://localhost:3000',
+      '/organismi-sportivi': 'http://localhost:3000',
     },
   },
   test: {
