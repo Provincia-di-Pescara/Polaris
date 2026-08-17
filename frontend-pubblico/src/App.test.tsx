@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as authApi from './api/auth.ts';
 import * as deleghe from './api/deleghe.ts';
@@ -7,6 +7,47 @@ import * as stagioniApi from './api/stagioni.ts';
 import * as associazioniApi from './api/associazioni.ts';
 import { ErroreRichiestaApi } from './api/client.ts';
 import { App } from './App.tsx';
+
+// Riempie tutti i campi obbligatori del form di creazione associazione tranne
+// denominazione/CF (compilati separatamente da ciascun test) — stesso helper
+// usato in components/AccreditamentoDelegaView.test.tsx.
+function compilaCampiObbligatoriAssociazione(): void {
+  const set = (id: string, value: string): void => {
+    const el = document.getElementById(id);
+    if (!el) throw new Error(`Campo #${id} non trovato`);
+    fireEvent.change(el, { target: { value } });
+  };
+  set('acc-rl-nome', 'Mario');
+  set('acc-rl-cognome', 'Rossi');
+  set('acc-indirizzo-via', 'Via Roma');
+  set('acc-indirizzo-civico', '1');
+  set('acc-indirizzo-citta', 'Pescara');
+  set('acc-email', 'asd@example.com');
+  set('acc-rct-compagnia', 'Generali');
+  set('acc-rct-polizza', 'POL123');
+  set('acc-rct-massimale', '1000000.00');
+  set('acc-rct-dal', '2026-01-01');
+  set('acc-rct-al', '2027-01-01');
+  set('acc-sic-nome', 'Luigi');
+  set('acc-sic-cognome', 'Verdi');
+  set('acc-sic-nato-a', 'Pescara');
+  set('acc-sic-nato-il', '1980-01-01');
+  set('acc-sic-via', 'Via Milano');
+  set('acc-sic-citta', 'Pescara');
+  set('acc-sic-cellulare', '3331234567');
+  set('acc-sic-cid', 'AB1234567');
+  set('acc-eme-nome', 'Anna');
+  set('acc-eme-cognome', 'Bianchi');
+  set('acc-eme-nato-a', 'Pescara');
+  set('acc-eme-nato-il', '1985-05-05');
+  set('acc-eme-via', 'Via Napoli');
+  set('acc-eme-citta', 'Pescara');
+  set('acc-eme-cellulare', '3339876543');
+  set('acc-eme-cid', 'CD7654321');
+  set('acc-dae-marca', 'Philips');
+  set('acc-dae-matricola', 'DAE001');
+  set('acc-dae-scadenza', '2028-01-01');
+}
 
 describe('App', () => {
   beforeEach(() => {
@@ -60,6 +101,10 @@ describe('App', () => {
     ]);
     vi.spyOn(associazioniApi, 'creaAssociazione').mockResolvedValue({
       id: 'nuova-ass', denominazione: 'ASD Nuova', codiceFiscalePartitaIva: '123', rnaNumeroIscrizione: null, dataCostituzione: null,
+      rappresentanteLegaleNome: 'Mario', rappresentanteLegaleCognome: 'Rossi', delegatoNome: null, delegatoCognome: null,
+      indirizzoVia: 'Via Roma', indirizzoCivico: '1', indirizzoCitta: 'Pescara', pec: null, email: 'asd@example.com',
+      tipologiaSoggetto: 'associazione_sportiva', iscrittaRasd: false, organismoSportivoCodice: null, codiceAffiliazione: null,
+      haPersonaleAssunto: false,
     });
     vi.spyOn(associazioniApi, 'caricaDocumento').mockRejectedValue(new ErroreRichiestaApi(415, 'il contenuto del file non è un PDF valido'));
 
@@ -69,6 +114,7 @@ describe('App', () => {
     await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
     await userEvent.type(screen.getByLabelText(/denominazione ufficiale/i), 'ASD Nuova');
     await userEvent.type(screen.getByLabelText(/codice fiscale \/ p\.iva/i), '123');
+    compilaCampiObbligatoriAssociazione();
     const file = new File(['contenuto'], 'doc.pdf', { type: 'application/pdf' });
     await userEvent.upload(screen.getByLabelText(/carica documento/i), file);
     await userEvent.click(screen.getByRole('button', { name: /invia delega/i }));

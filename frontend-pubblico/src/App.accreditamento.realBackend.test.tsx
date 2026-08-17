@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { avviaBackendReale, type BackendReale } from './testUtil/backendReale.ts';
 import { creaPersonaTest, type PersonaTest } from './testUtil/creaPersonaTest.ts';
@@ -83,10 +83,45 @@ descrivi('App — accreditamento (backend reale)', () => {
     await userEvent.type(screen.getByLabelText(/denominazione ufficiale/i), `ASD Smoke ${suffisso}`);
     await userEvent.type(screen.getByLabelText(/codice fiscale \/ p\.iva/i), `PIVA-${suffisso}`);
 
+    // Il Rappresentante Legale deve combaciare con la persona fisica autenticata
+    // (nome/cognome della persona di test creata sopra): la validazione
+    // cross-campo del Task 3 (anti-frode) rifiuta con 400 un Rappresentante
+    // Legale diverso dalla persona che sta effettuando la richiesta.
+    await userEvent.type(document.getElementById('acc-rl-nome')!, p.persona.nome);
+    await userEvent.type(document.getElementById('acc-rl-cognome')!, p.persona.cognome);
+    await userEvent.type(document.getElementById('acc-indirizzo-via')!, 'Via Roma');
+    await userEvent.type(document.getElementById('acc-indirizzo-civico')!, '1');
+    await userEvent.type(document.getElementById('acc-indirizzo-citta')!, 'Pescara');
+    await userEvent.type(document.getElementById('acc-email')!, `asd-${suffisso}@example.com`);
+    await userEvent.type(document.getElementById('acc-rct-compagnia')!, 'Generali');
+    await userEvent.type(document.getElementById('acc-rct-polizza')!, 'POL123');
+    await userEvent.type(document.getElementById('acc-rct-massimale')!, '1000000.00');
+    fireEvent.change(document.getElementById('acc-rct-dal')!, { target: { value: '2026-01-01' } });
+    fireEvent.change(document.getElementById('acc-rct-al')!, { target: { value: '2027-01-01' } });
+    await userEvent.type(document.getElementById('acc-sic-nome')!, 'Luigi');
+    await userEvent.type(document.getElementById('acc-sic-cognome')!, 'Verdi');
+    await userEvent.type(document.getElementById('acc-sic-nato-a')!, 'Pescara');
+    fireEvent.change(document.getElementById('acc-sic-nato-il')!, { target: { value: '1980-01-01' } });
+    await userEvent.type(document.getElementById('acc-sic-via')!, 'Via Milano');
+    await userEvent.type(document.getElementById('acc-sic-citta')!, 'Pescara');
+    await userEvent.type(document.getElementById('acc-sic-cellulare')!, '3331234567');
+    await userEvent.type(document.getElementById('acc-sic-cid')!, 'AB1234567');
+    await userEvent.type(document.getElementById('acc-eme-nome')!, 'Anna');
+    await userEvent.type(document.getElementById('acc-eme-cognome')!, 'Bianchi');
+    await userEvent.type(document.getElementById('acc-eme-nato-a')!, 'Pescara');
+    fireEvent.change(document.getElementById('acc-eme-nato-il')!, { target: { value: '1985-05-05' } });
+    await userEvent.type(document.getElementById('acc-eme-via')!, 'Via Napoli');
+    await userEvent.type(document.getElementById('acc-eme-citta')!, 'Pescara');
+    await userEvent.type(document.getElementById('acc-eme-cellulare')!, '3339876543');
+    await userEvent.type(document.getElementById('acc-eme-cid')!, 'CD7654321');
+    await userEvent.type(document.getElementById('acc-dae-marca')!, 'Philips');
+    await userEvent.type(document.getElementById('acc-dae-matricola')!, 'DAE001');
+    fireEvent.change(document.getElementById('acc-dae-scadenza')!, { target: { value: '2028-01-01' } });
+
     // Il form richiede una stagione selezionata: attende che il caricamento
     // automatico di App.tsx ne abbia già impostata una di default (vedi Task 2).
     await userEvent.click(screen.getByRole('button', { name: /invia delega/i }));
 
     expect(await screen.findByText(new RegExp(`ASD Smoke ${suffisso}`), {}, { timeout: 10000 })).toBeInTheDocument();
-  }, 20000);
+  }, 40000);
 });

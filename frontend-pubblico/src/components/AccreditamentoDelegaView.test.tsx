@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as associazioniApi from '../api/associazioni.ts';
 import * as delegheApi from '../api/deleghe.ts';
+import * as organismiApi from '../api/organismiSportivi.ts';
 import { ErroreRichiestaApi } from '../api/client.ts';
 import { AccreditamentoDelegaView } from './AccreditamentoDelegaView.tsx';
 import type { EntitaRappresentata } from '../api/deleghe.ts';
+import type { Associazione } from '../api/associazioni.ts';
 
 const ENTITA_APPROVATA: EntitaRappresentata = {
   id: 'a1', personaFisicaId: 'p1', associazioneId: 'ass1', istituzioneScolasticaId: null, stagioneId: 's1',
@@ -13,6 +15,58 @@ const ENTITA_APPROVATA: EntitaRappresentata = {
   personaFisicaNome: 'Mario', personaFisicaCognome: 'Rossi', personaFisicaCodiceFiscale: 'RSSMRA80A01H501U',
   associazioneDenominazione: 'ASD Test', associazioneCodiceFiscalePartitaIva: '01234567890',
 };
+
+const ASSOCIAZIONE_MOCK_COMPLETA: Associazione = {
+  id: 'nuova-ass', denominazione: 'ASD Nuova', codiceFiscalePartitaIva: '123', rnaNumeroIscrizione: null, dataCostituzione: null,
+  rappresentanteLegaleNome: 'Mario', rappresentanteLegaleCognome: 'Rossi', delegatoNome: null, delegatoCognome: null,
+  indirizzoVia: 'Via Roma', indirizzoCivico: '1', indirizzoCitta: 'Pescara', pec: null, email: 'asd@example.com',
+  tipologiaSoggetto: 'associazione_sportiva', iscrittaRasd: false, organismoSportivoCodice: null, codiceAffiliazione: null,
+  haPersonaleAssunto: false,
+};
+
+// Riempie tutti i campi obbligatori del form di creazione associazione tranne
+// denominazione/CF (compilati separatamente da ciascun test) e i campi
+// condizionali (RASD, RCO) che sono coperti da test dedicati. Usa fireEvent
+// direttamente sugli id (anziché getByLabelText, che sarebbe ambiguo: più
+// sezioni condividono etichette come "Nome:"/"Cognome:") per evitare le
+// stranezze di userEvent.type sugli input type="date" in jsdom.
+function compilaCampiObbligatoriAssociazione(): void {
+  const set = (id: string, value: string): void => {
+    const el = document.getElementById(id);
+    if (!el) throw new Error(`Campo #${id} non trovato`);
+    fireEvent.change(el, { target: { value } });
+  };
+  set('acc-rl-nome', 'Mario');
+  set('acc-rl-cognome', 'Rossi');
+  set('acc-indirizzo-via', 'Via Roma');
+  set('acc-indirizzo-civico', '1');
+  set('acc-indirizzo-citta', 'Pescara');
+  set('acc-email', 'asd@example.com');
+  set('acc-rct-compagnia', 'Generali');
+  set('acc-rct-polizza', 'POL123');
+  set('acc-rct-massimale', '1000000.00');
+  set('acc-rct-dal', '2026-01-01');
+  set('acc-rct-al', '2027-01-01');
+  set('acc-sic-nome', 'Luigi');
+  set('acc-sic-cognome', 'Verdi');
+  set('acc-sic-nato-a', 'Pescara');
+  set('acc-sic-nato-il', '1980-01-01');
+  set('acc-sic-via', 'Via Milano');
+  set('acc-sic-citta', 'Pescara');
+  set('acc-sic-cellulare', '3331234567');
+  set('acc-sic-cid', 'AB1234567');
+  set('acc-eme-nome', 'Anna');
+  set('acc-eme-cognome', 'Bianchi');
+  set('acc-eme-nato-a', 'Pescara');
+  set('acc-eme-nato-il', '1985-05-05');
+  set('acc-eme-via', 'Via Napoli');
+  set('acc-eme-citta', 'Pescara');
+  set('acc-eme-cellulare', '3339876543');
+  set('acc-eme-cid', 'CD7654321');
+  set('acc-dae-marca', 'Philips');
+  set('acc-dae-matricola', 'DAE001');
+  set('acc-dae-scadenza', '2028-01-01');
+}
 
 describe('AccreditamentoDelegaView', () => {
   it('mostra le associazioni reali (non mock), incluso lo stato', () => {
@@ -27,15 +81,14 @@ describe('AccreditamentoDelegaView', () => {
   });
 
   it('crea associazione: chiama creaAssociazione con stagioneId, poi onRicarica', async () => {
-    const spy = vi.spyOn(associazioniApi, 'creaAssociazione').mockResolvedValue({
-      id: 'nuova-ass', denominazione: 'ASD Nuova', codiceFiscalePartitaIva: '123', rnaNumeroIscrizione: null, dataCostituzione: null,
-    });
+    const spy = vi.spyOn(associazioniApi, 'creaAssociazione').mockResolvedValue(ASSOCIAZIONE_MOCK_COMPLETA);
     const onRicarica = vi.fn();
     render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={onRicarica} />);
 
     await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
     await userEvent.type(screen.getByLabelText(/denominazione ufficiale/i), 'ASD Nuova');
     await userEvent.type(screen.getByLabelText(/codice fiscale \/ p\.iva/i), '123');
+    compilaCampiObbligatoriAssociazione();
     await userEvent.click(screen.getByRole('button', { name: /invia delega/i }));
 
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ denominazione: 'ASD Nuova', codiceFiscalePartitaIva: '123', stagioneId: 'st1' }));
@@ -49,6 +102,7 @@ describe('AccreditamentoDelegaView', () => {
     await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
     await userEvent.type(screen.getByLabelText(/denominazione ufficiale/i), 'ASD Nuova');
     await userEvent.type(screen.getByLabelText(/codice fiscale \/ p\.iva/i), '123');
+    compilaCampiObbligatoriAssociazione();
     await userEvent.click(screen.getByRole('button', { name: /invia delega/i }));
 
     expect(screen.getByText(/seleziona una stagione/i)).toBeInTheDocument();
@@ -56,9 +110,7 @@ describe('AccreditamentoDelegaView', () => {
   });
 
   it('creazione associazione riuscita ma upload documento fallito: mostra avviso distinto, chiama comunque onRicarica', async () => {
-    vi.spyOn(associazioniApi, 'creaAssociazione').mockResolvedValue({
-      id: 'nuova-ass', denominazione: 'ASD Nuova', codiceFiscalePartitaIva: '123', rnaNumeroIscrizione: null, dataCostituzione: null,
-    });
+    vi.spyOn(associazioniApi, 'creaAssociazione').mockResolvedValue(ASSOCIAZIONE_MOCK_COMPLETA);
     vi.spyOn(associazioniApi, 'caricaDocumento').mockRejectedValue(new ErroreRichiestaApi(415, 'il contenuto del file non è un PDF valido'));
     const onRicarica = vi.fn();
     render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={onRicarica} />);
@@ -66,12 +118,68 @@ describe('AccreditamentoDelegaView', () => {
     await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
     await userEvent.type(screen.getByLabelText(/denominazione ufficiale/i), 'ASD Nuova');
     await userEvent.type(screen.getByLabelText(/codice fiscale \/ p\.iva/i), '123');
+    compilaCampiObbligatoriAssociazione();
     const file = new File(['contenuto'], 'doc.pdf', { type: 'application/pdf' });
     await userEvent.upload(screen.getByLabelText(/carica documento/i), file);
     await userEvent.click(screen.getByRole('button', { name: /invia delega/i }));
 
     expect(await screen.findByText(/associazione creata, ma il caricamento del documento è fallito/i)).toBeInTheDocument();
     expect(onRicarica).toHaveBeenCalled();
+  });
+
+  it('select organismo sportivo: nascosto finché RASD non è selezionato', async () => {
+    vi.spyOn(organismiApi, 'listaOrganismiSportivi').mockResolvedValue([
+      { codice: 'CONI', denominazione: 'CONI' },
+    ]);
+    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
+
+    expect(document.getElementById('acc-organismo-sportivo')).not.toBeInTheDocument();
+    expect(document.getElementById('acc-codice-affiliazione')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByLabelText(/RASD/i));
+
+    expect(document.getElementById('acc-organismo-sportivo')).toBeInTheDocument();
+    expect(document.getElementById('acc-codice-affiliazione')).toBeInTheDocument();
+  });
+
+  it('campi RCO: nascosti finché "ha personale assunto" non è selezionato', async () => {
+    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
+
+    expect(document.getElementById('acc-rco-compagnia')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByLabelText(/l'associazione ha personale assunto/i));
+
+    expect(document.getElementById('acc-rco-compagnia')).toBeInTheDocument();
+    expect(document.getElementById('acc-rco-polizza')).toBeInTheDocument();
+  });
+
+  it('submit con tutti i campi compilati: creaAssociazione riceve referenti/assicurazioni', async () => {
+    const spy = vi.spyOn(associazioniApi, 'creaAssociazione').mockResolvedValue(ASSOCIAZIONE_MOCK_COMPLETA);
+    render(<AccreditamentoDelegaView entities={[]} stagioneId="st1" onRicarica={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
+    await userEvent.type(screen.getByLabelText(/denominazione ufficiale/i), 'ASD Nuova');
+    await userEvent.type(screen.getByLabelText(/codice fiscale \/ p\.iva/i), '123');
+    compilaCampiObbligatoriAssociazione();
+    await userEvent.click(screen.getByRole('button', { name: /invia delega/i }));
+
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({
+      referenteSicurezza: expect.objectContaining({
+        nome: 'Luigi', cognome: 'Verdi', natoA: 'Pescara', natoIl: '1980-01-01',
+        residenteVia: 'Via Milano', residenteCitta: 'Pescara', cellulare: '3331234567', cartaIdentita: 'AB1234567',
+      }),
+      referenteEmergenzeDae: expect.objectContaining({
+        nome: 'Anna', cognome: 'Bianchi',
+        daeMarca: 'Philips', daeMatricola: 'DAE001', daeScadenza: '2028-01-01',
+      }),
+      assicurazioneRct: expect.objectContaining({
+        compagnia: 'Generali', numeroPolizza: 'POL123', massimale: '1000000.00', coperturaDal: '2026-01-01', coperturaAl: '2027-01-01',
+      }),
+    }));
   });
 
   it('invita delegato: chiama creaSubDelega con lo stagioneId dell\'abilitazione, non uno globale', async () => {
