@@ -1,6 +1,7 @@
 import React from 'react';
 import type { PersonaAutenticata } from '../api/auth.ts';
 import type { EntitaRappresentata } from '../api/deleghe.ts';
+import type { Stagione } from '../api/stagioni.ts';
 import { Landmark, ShieldCheck, User, Building, FileCheck2, Calculator, BarChart2, RefreshCw, Calendar, LogOut } from 'lucide-react';
 
 interface HeaderProps {
@@ -11,6 +12,9 @@ interface HeaderProps {
   activeTab: string;
   setActiveTab: (t: string) => void;
   onLogout: () => void;
+  stagioni: Stagione[];
+  stagioneId: string | null;
+  setStagioneId: (id: string) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -20,7 +24,10 @@ export const Header: React.FC<HeaderProps> = ({
   setActiveEntity,
   activeTab,
   setActiveTab,
-  onLogout
+  onLogout,
+  stagioni,
+  stagioneId,
+  setStagioneId
 }) => {
   // Lo switcher lascia scegliere solo tra le entità con delega approvata: una
   // delega in_attesa/respinta/revocata non deve mai poter diventare il contesto
@@ -124,6 +131,43 @@ export const Header: React.FC<HeaderProps> = ({
             ) : null}
           </div>
         </div>
+
+        {/* Season Selector */}
+        {stagioni.length > 0 && (
+          <div style={{
+            backgroundColor: 'rgba(255,255,255,0.08)',
+            border: '1px solid rgba(255,255,255,0.2)',
+            borderRadius: '8px',
+            padding: '0.5rem 0.85rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem'
+          }}>
+            <Calendar size={20} color="var(--pa-accent)" />
+            <div>
+              <div style={{ fontSize: '0.7rem', opacity: 0.75, textTransform: 'uppercase', fontWeight: 600 }}>Stagione:</div>
+              <select
+                value={stagioneId ?? ''}
+                onChange={(e) => setStagioneId(e.target.value)}
+                style={{
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  color: 'white',
+                  fontWeight: 700,
+                  fontSize: '0.925rem',
+                  cursor: 'pointer',
+                  outline: 'none'
+                }}
+              >
+                {stagioni.map(s => (
+                  <option key={s.id} value={s.id} style={{ color: 'black' }}>
+                    {s.nome}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Portal Navigation Tabs */}

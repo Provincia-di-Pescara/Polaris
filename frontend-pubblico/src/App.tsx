@@ -9,11 +9,14 @@ import { EsitiIsfView } from './components/EsitiIsfView';
 import { ConcertazioneView } from './components/ConcertazioneView';
 import { CalendarioDefinitivoView } from './components/CalendarioDefinitivoView';
 import type { EntitaRappresentata } from './api/deleghe.ts';
+import { listaStagioni, type Stagione } from './api/stagioni.ts';
 
 const AppAutenticata: React.FC = () => {
   const { persona, entities, caricamento, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<string>('accreditamento');
   const [activeEntity, setActiveEntity] = useState<EntitaRappresentata | null>(null);
+  const [stagioni, setStagioni] = useState<Stagione[]>([]);
+  const [stagioneId, setStagioneId] = useState<string | null>(null);
 
   useEffect(() => {
     // Auto-seleziona solo tra le entità con delega approvata: una entità
@@ -24,6 +27,28 @@ const AppAutenticata: React.FC = () => {
       setActiveEntity(entitaApprovate[0]!);
     }
   }, [entities, activeEntity]);
+
+  useEffect(() => {
+    let annullato = false;
+    listaStagioni()
+      .then((s) => {
+        if (annullato) return;
+        setStagioni(s);
+        // Default: prima stagione non chiusa, ordine già data_inizio DESC dal
+        // backend (vedi backend-node/src/stagioni.ts:22-26) — se tutte chiuse,
+        // fallback alla prima in assoluto.
+        const nonChiusa = s.find((st) => st.stato !== 'chiusa');
+        setStagioneId((prev) => prev ?? nonChiusa?.id ?? s[0]?.id ?? null);
+      })
+      .catch(() => {
+        // Nessuna stagione disponibile non deve bloccare il resto dell'app —
+        // il selettore resta vuoto, il flusso di creazione associazione lo
+        // segnalerà se l'utente prova a usarlo senza una stagione selezionata.
+      });
+    return () => {
+      annullato = true;
+    };
+  }, []);
 
   if (caricamento) {
     return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Caricamento…</div>;
@@ -43,6 +68,9 @@ const AppAutenticata: React.FC = () => {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         onLogout={logout}
+        stagioni={stagioni}
+        stagioneId={stagioneId}
+        setStagioneId={setStagioneId}
       />
 
       <main style={{ flex: 1, paddingBottom: '3rem' }}>

@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Header } from './Header.tsx';
 import type { EntitaRappresentata } from '../api/deleghe.ts';
+import type { Stagione } from '../api/stagioni.ts';
 
 const PERSONA = { sub: 'p1', codiceFiscale: 'RSSMRA80A01H501U', nome: 'Mario', cognome: 'Rossi' };
 const ENTITA: EntitaRappresentata = {
@@ -16,7 +17,8 @@ describe('Header', () => {
   it('mostra la persona reale, non hardcoded', () => {
     render(
       <Header persona={PERSONA} entities={[ENTITA]} activeEntity={ENTITA} setActiveEntity={vi.fn()}
-        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()} />,
+        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()}
+        stagioni={[]} stagioneId={null} setStagioneId={vi.fn()} />,
     );
     expect(screen.getByText(/Mario Rossi/)).toBeInTheDocument();
     expect(screen.queryByText(/Marco Rossi/)).not.toBeInTheDocument();
@@ -25,7 +27,8 @@ describe('Header', () => {
   it('nessuna entità: mostra lo stato vuoto invece dello switcher', () => {
     render(
       <Header persona={PERSONA} entities={[]} activeEntity={null} setActiveEntity={vi.fn()}
-        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()} />,
+        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()}
+        stagioni={[]} stagioneId={null} setStagioneId={vi.fn()} />,
     );
     expect(screen.getByText(/nessuna associazione accreditata/i)).toBeInTheDocument();
   });
@@ -34,7 +37,8 @@ describe('Header', () => {
     const entitaRevocata: EntitaRappresentata = { ...ENTITA, id: 'a2', stato: 'revocata' };
     render(
       <Header persona={PERSONA} entities={[entitaRevocata]} activeEntity={null} setActiveEntity={vi.fn()}
-        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()} />,
+        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()}
+        stagioni={[]} stagioneId={null} setStagioneId={vi.fn()} />,
     );
     expect(screen.getByText(/nessuna associazione accreditata/i)).toBeInTheDocument();
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
@@ -44,7 +48,8 @@ describe('Header', () => {
     const entitaRevocata: EntitaRappresentata = { ...ENTITA, id: 'a2', associazioneDenominazione: 'ASD Revocata', stato: 'revocata' };
     render(
       <Header persona={PERSONA} entities={[ENTITA, entitaRevocata]} activeEntity={ENTITA} setActiveEntity={vi.fn()}
-        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()} />,
+        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()}
+        stagioni={[]} stagioneId={null} setStagioneId={vi.fn()} />,
     );
     expect(screen.getByText(/ASD Test/)).toBeInTheDocument();
     expect(screen.queryByText(/ASD Revocata/)).not.toBeInTheDocument();
@@ -54,9 +59,33 @@ describe('Header', () => {
     const onLogout = vi.fn();
     render(
       <Header persona={PERSONA} entities={[ENTITA]} activeEntity={ENTITA} setActiveEntity={vi.fn()}
-        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={onLogout} />,
+        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={onLogout}
+        stagioni={[]} stagioneId={null} setStagioneId={vi.fn()} />,
     );
     await userEvent.click(screen.getByRole('button', { name: /esci|logout/i }));
     expect(onLogout).toHaveBeenCalled();
+  });
+
+  const STAGIONE: Stagione = { id: 'st1', nome: 'Stagione 2026/2027', dataInizio: '2026-09-01', dataFine: '2027-06-30', stato: 'censimento' };
+
+  it('mostra il selettore stagione con le stagioni fornite', () => {
+    render(
+      <Header persona={PERSONA} entities={[]} activeEntity={null} setActiveEntity={vi.fn()}
+        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()}
+        stagioni={[STAGIONE]} stagioneId="st1" setStagioneId={vi.fn()} />,
+    );
+    // getByText non basta: il banner statico contiene già "Stagione
+    // 2026/2027" nel sottotitolo, quindi disambiguiamo sull'opzione del
+    // nuovo <select> del selettore stagione.
+    expect(screen.getByRole('option', { name: 'Stagione 2026/2027' })).toBeInTheDocument();
+  });
+
+  it('nessuna stagione: non mostra il selettore stagione', () => {
+    render(
+      <Header persona={PERSONA} entities={[]} activeEntity={null} setActiveEntity={vi.fn()}
+        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()}
+        stagioni={[]} stagioneId={null} setStagioneId={vi.fn()} />,
+    );
+    expect(screen.queryByText(/Stagione:/)).not.toBeInTheDocument();
   });
 });
