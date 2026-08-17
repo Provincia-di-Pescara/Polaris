@@ -147,6 +147,7 @@ export const Header: React.FC<HeaderProps> = ({
             <div>
               <div style={{ fontSize: '0.7rem', opacity: 0.75, textTransform: 'uppercase', fontWeight: 600 }}>Stagione:</div>
               <select
+                aria-label="Stagione"
                 value={stagioneId ?? ''}
                 onChange={(e) => setStagioneId(e.target.value)}
                 style={{

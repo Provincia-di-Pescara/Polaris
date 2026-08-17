@@ -33,6 +33,11 @@ describe('App', () => {
       { id: 'st-attiva', nome: 'Corrente', dataInizio: '2026-09-01', dataFine: '2027-06-30', stato: 'censimento' },
     ]);
     render(<App />);
-    expect(await screen.findByText(/Corrente/)).toBeInTheDocument();
+    // Non basta verificare la presenza testuale di "Corrente": Header.tsx
+    // renderizza un'<option> per ogni stagione, quindi il testo sarebbe
+    // presente anche se la selezione di default fosse errata (es. la
+    // stagione chiusa). Verifichiamo il valore effettivamente selezionato
+    // nel combobox della stagione.
+    expect(await screen.findByRole('combobox', { name: /stagione/i })).toHaveValue('st-attiva');
   });
 });
