@@ -31,9 +31,22 @@ const LIVELLI_CAMPIONATO: Array<{ value: LivelloCampionato; label: string }> = [
 
 const GIORNI = ['—', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'];
 
+// Specchio esatto di REGEX_MINUTI in backend-node/src/pubblicoSchema.ts
+// (coerente con NUMERIC(10,3) di domande.fabbisogno_*_minuti). Non va
+// reinventata: una regex più permissiva qui produrrebbe un 400 al submit,
+// una più stretta rifiuterebbe valori che il backend accetta.
+const REGEX_MINUTI = /^\d{1,7}(\.\d{1,3})?$/;
+
 function etichettaSlot(s: SlotDisponibile): string {
   const giorno = GIORNI[s.giornoSettimana] ?? `Giorno ${s.giornoSettimana}`;
   return `${s.impiantoDenominazione} — ${s.spazioDenominazione} · ${giorno} ${s.orarioInizio}–${s.orarioFine} (${s.durataMinuti} min)${s.pregiata ? ' · fascia pregiata' : ''}`;
+}
+
+// Data/ora di presentazione leggibile; se il backend restituisse un valore non
+// parsabile si mostra la stringa originale invece di "Invalid Date".
+function formattaData(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString('it-IT');
 }
 
 // Riga vuota di richiesta giornata gara: `necessitaImpiantoOmologato` parte a
@@ -141,6 +154,9 @@ export const WizardDomandaView: React.FC<WizardDomandaProps> = ({ entities, stag
 
   useEffect(() => {
     let annullato = false;
+    // Nessun form da popolare se manca il contesto operativo (stagione o
+    // associazione attiva): la view mostra comunque solo un messaggio.
+    if (!associazioneId || !stagioneId) return;
     Promise.all([listaDiscipline(), listaClassiAttivita()])
       .then(([d, c]) => {
         if (annullato) return;
@@ -154,7 +170,7 @@ export const WizardDomandaView: React.FC<WizardDomandaProps> = ({ entities, stag
     return () => {
       annullato = true;
     };
-  }, []);
+  }, [associazioneId, stagioneId]);
 
   // Filtro slot: default sulla PRIMA disciplina selezionata allo step 1; se
   // l'utente cambia la selezione, il filtro segue finché non lo sposta a mano.
@@ -206,17 +222,16 @@ export const WizardDomandaView: React.FC<WizardDomandaProps> = ({ entities, stag
   };
 
   const toggleSlotPreferenza = (slotId: string): void => {
-    setPreferenze((prec) => {
-      if (prec.includes(slotId)) {
-        // Rimuovendo uno slot dalle preferenze si rimuove anche da eventuali
-        // blocchi/selezioni in corso: un blocco non può contenere slot non
-        // preferiti (e sotto i 2 elementi il blocco stesso non è più valido).
-        setSelezionatiPerBlocco((sel) => sel.filter((id) => id !== slotId));
-        setBlocchiAllenamento((bl) => bl.map((b) => b.filter((id) => id !== slotId)).filter((b) => b.length >= 2));
-        return prec.filter((id) => id !== slotId);
-      }
-      return [...prec, slotId];
-    });
+    if (!preferenze.includes(slotId)) {
+      setPreferenze((prec) => [...prec, slotId]);
+      return;
+    }
+    // Rimuovendo uno slot dalle preferenze si rimuove anche da eventuali
+    // blocchi/selezioni in corso: un blocco non può contenere slot non
+    // preferiti (e sotto i 2 elementi il blocco stesso non è più valido).
+    setPreferenze((prec) => prec.filter((id) => id !== slotId));
+    setSelezionatiPerBlocco((sel) => sel.filter((id) => id !== slotId));
+    setBlocchiAllenamento((bl) => bl.map((b) => b.filter((id) => id !== slotId)).filter((b) => b.length >= 2));
   };
 
   const spostaPreferenza = (indice: number, delta: number): void => {
@@ -235,10 +250,16 @@ export const WizardDomandaView: React.FC<WizardDomandaProps> = ({ entities, stag
     setSelezionatiPerBlocco((prec) => (prec.includes(slotId) ? prec.filter((id) => id !== slotId) : [...prec, slotId]));
   };
 
+  // Uno slot può appartenere ad al più UN blocco allenamento: due blocchi che
+  // condividono lo stesso slot sono semanticamente incoerenti (lo slot non può
+  // essere contemporaneamente in due allenamenti contigui distinti).
+  const indiceBloccoDi = (slotId: string): number => blocchiAllenamento.findIndex((b) => b.includes(slotId));
+
   const raggruppaInBlocco = (): void => {
     if (selezionatiPerBlocco.length < 2) return;
     // Ordine del blocco = ordine di preferenza, non ordine di click.
-    const blocco = preferenze.filter((id) => selezionatiPerBlocco.includes(id));
+    const blocco = preferenze.filter((id) => selezionatiPerBlocco.includes(id) && indiceBloccoDi(id) === -1);
+    if (blocco.length < 2) return;
     setBlocchiAllenamento((prec) => [...prec, blocco]);
     setSelezionatiPerBlocco([]);
   };
@@ -263,16 +284,57 @@ export const WizardDomandaView: React.FC<WizardDomandaProps> = ({ entities, stag
       if (disciplineCodici.length === 0) return 'Seleziona almeno una disciplina.';
       return null;
     }
+    if (step === 2) {
+      // Specchio di schemaCreaDomanda: entrambi i fabbisogni devono rispettare
+      // REGEX_MINUTI e ottimale >= minimo. Il confronto numerico è l'unico
+      // punto in cui i minuti diventano Number, ed è una VALIDAZIONE, non un
+      // ricalcolo: i valori inviati restano le stringhe digitate dall'utente
+      // (stesso `Number(...) >= Number(...)` del refine zod lato backend).
+      if (!REGEX_MINUTI.test(fabbisognoMinimoMinuti)) {
+        return 'Indica un fabbisogno minimo settimanale valido (minuti, es. 360 oppure 360.5).';
+      }
+      if (!REGEX_MINUTI.test(fabbisognoOttimaleMinuti)) {
+        return 'Indica un fabbisogno ottimale settimanale valido (minuti, es. 480 oppure 480.5).';
+      }
+      if (Number(fabbisognoOttimaleMinuti) < Number(fabbisognoMinimoMinuti)) {
+        return 'Il fabbisogno ottimale deve essere maggiore o uguale al fabbisogno minimo.';
+      }
+      return null;
+    }
     if (step === 3) {
       // Specchio della regola zod lato backend:
       // richiedeGiornataGara ⇒ richiesteGiornataGara.length > 0
       if (richiedeGiornataGara && richiesteGiornataGara.length === 0) {
         return 'Hai richiesto un blocco giornata gara: aggiungi almeno una richiesta prima di proseguire.';
       }
+      // schemaRichiestaGiornataGara richiede .min(1) su federazione/campionato/
+      // categoria: una riga aggiunta ma lasciata vuota passerebbe il conteggio
+      // sopra e verrebbe rifiutata dal backend.
+      if (richiedeGiornataGara) {
+        const incompleta = richiesteGiornataGara.findIndex(
+          (r) => !r.federazione.trim() || !r.campionato.trim() || !r.categoria.trim(),
+        );
+        if (incompleta !== -1) {
+          return `Richiesta giornata gara #${incompleta + 1}: federazione, campionato e categoria sono obbligatori.`;
+        }
+      }
+      return null;
+    }
+    if (step === 4) {
+      // preferenze: z.array(z.string().uuid()).min(1)
+      if (preferenze.length === 0) {
+        return 'Seleziona almeno uno slot tra le preferenze prima di inviare la domanda.';
+      }
       return null;
     }
     return null;
   };
+
+  // Rivalidazione completa: lo stepper cliccabile permette di saltare uno step
+  // senza passare dal bottone "Avanti", quindi il submit non può fidarsi delle
+  // sole validazioni già eseguite in navigazione.
+  const validaTutto = (): string | null =>
+    validaStep(1) ?? validaStep(2) ?? validaStep(3) ?? validaStep(4);
 
   const avanti = (): void => {
     const errore = validaStep(currentStep);
@@ -328,7 +390,7 @@ export const WizardDomandaView: React.FC<WizardDomandaProps> = ({ entities, stag
   };
 
   const inviaDomanda = async (): Promise<void> => {
-    const erroreValidazione = validaStep(1) ?? validaStep(3);
+    const erroreValidazione = validaTutto();
     if (erroreValidazione) {
       setErroreInvio(erroreValidazione);
       return;
@@ -400,7 +462,7 @@ export const WizardDomandaView: React.FC<WizardDomandaProps> = ({ entities, stag
           </div>
           <div style={STILE_BOX}>
             <div>Stato: <strong>{domandaEsistente.stato}</strong></div>
-            <div>Presentata il: <strong>{domandaEsistente.presentataIl}</strong></div>
+            <div>Presentata il: <strong>{formattaData(domandaEsistente.presentataIl)}</strong></div>
             <div>Fabbisogno minimo dichiarato: <strong>{domandaEsistente.fabbisognoMinimoMinuti}</strong> minuti</div>
             <div>Fabbisogno ottimale dichiarato: <strong>{domandaEsistente.fabbisognoOttimaleMinuti}</strong> minuti</div>
             <div>Tesserati: <strong>{domandaEsistente.numeroTesserati}</strong></div>
@@ -694,14 +756,22 @@ export const WizardDomandaView: React.FC<WizardDomandaProps> = ({ entities, stag
                 <div style={{ color: 'var(--pa-text-muted)', fontSize: '0.85rem' }}>Nessuna preferenza selezionata.</div>
               )}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {preferenze.map((slotId, indice) => (
+                {preferenze.map((slotId, indice) => {
+                  const bloccoDi = indiceBloccoDi(slotId);
+                  return (
                   <div key={slotId} style={{ ...STILE_BOX, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', padding: '0.6rem 0.85rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                       <span className="badge badge-primary">{indice + 1}</span>
                       <input id={`wiz-blocco-sel-${slotId}`} type="checkbox" checked={selezionatiPerBlocco.includes(slotId)}
-                        onChange={() => toggleSelezionePerBlocco(slotId)} />
-                      <label htmlFor={`wiz-blocco-sel-${slotId}`} style={{ margin: 0, fontSize: '0.85rem' }}>
+                        disabled={bloccoDi !== -1} onChange={() => toggleSelezionePerBlocco(slotId)} />
+                      <label htmlFor={`wiz-blocco-sel-${slotId}`}
+                        style={{ margin: 0, fontSize: '0.85rem', color: bloccoDi !== -1 ? 'var(--pa-text-muted)' : undefined }}>
                         {etichettaSlotPerId(slotId)}
+                        {bloccoDi !== -1 && (
+                          <span style={{ marginLeft: '0.5rem', fontStyle: 'italic' }}>
+                            — già nel blocco {bloccoDi + 1}
+                          </span>
+                        )}
                       </label>
                     </div>
                     <div style={{ display: 'flex', gap: '0.35rem' }}>
@@ -715,7 +785,8 @@ export const WizardDomandaView: React.FC<WizardDomandaProps> = ({ entities, stag
                       </button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 

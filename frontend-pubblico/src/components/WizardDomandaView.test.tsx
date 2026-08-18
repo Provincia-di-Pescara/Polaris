@@ -59,11 +59,16 @@ async function selezionaSlot(slotId: string): Promise<void> {
   await userEvent.click(el);
 }
 
-// Compila i minimi indispensabili dello step 1 (almeno una disciplina) e
-// avanza fino allo step indicato.
+// Compila i minimi indispensabili per superare le validazioni di ogni step
+// (disciplina allo step 1, fabbisogni allo step 2) e avanza fino allo step
+// indicato.
 async function vaiAlloStep(n: number): Promise<void> {
   await userEvent.click(await screen.findByLabelText('Pallavolo'));
   for (let i = 1; i < n; i++) {
+    if (i === 2) {
+      await userEvent.type(screen.getByLabelText(/fabbisogno minimo/i), '360');
+      await userEvent.type(screen.getByLabelText(/fabbisogno ottimale/i), '480');
+    }
     await userEvent.click(screen.getByRole('button', { name: /avanti al prossimo step/i }));
   }
 }
@@ -112,6 +117,8 @@ describe('WizardDomandaView', () => {
     await vaiAlloStep(2);
     expect(screen.getByText(/step 2: fabbisogno/i)).toBeInTheDocument();
 
+    await userEvent.type(screen.getByLabelText(/fabbisogno minimo/i), '360');
+    await userEvent.type(screen.getByLabelText(/fabbisogno ottimale/i), '480');
     await userEvent.click(screen.getByRole('button', { name: /avanti al prossimo step/i }));
     expect(screen.getByText(/step 3: richiesta blocco giornata/i)).toBeInTheDocument();
 
@@ -141,8 +148,80 @@ describe('WizardDomandaView', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /aggiungi richiesta giornata gara/i }));
     await userEvent.type(screen.getByLabelText(/^federazione/i), 'FIPAV');
+    await userEvent.type(screen.getByLabelText(/^campionato/i), 'Serie C');
+    await userEvent.type(screen.getByLabelText(/^categoria/i), 'Maschile');
     await userEvent.click(screen.getByRole('button', { name: /avanti al prossimo step/i }));
     expect(screen.getByText(/step 4: preferenze slot/i)).toBeInTheDocument();
+  });
+
+  it('step 2: fabbisogni vuoti o ottimale < minimo bloccano l\'avanzamento', async () => {
+    renderWizard();
+    await vaiAlloStep(2);
+
+    await userEvent.click(screen.getByRole('button', { name: /avanti al prossimo step/i }));
+    expect(screen.getByText(/fabbisogno minimo settimanale valido/i)).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText(/fabbisogno minimo/i), '480');
+    await userEvent.click(screen.getByRole('button', { name: /avanti al prossimo step/i }));
+    expect(screen.getByText(/fabbisogno ottimale settimanale valido/i)).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText(/fabbisogno ottimale/i), '360');
+    await userEvent.click(screen.getByRole('button', { name: /avanti al prossimo step/i }));
+    expect(screen.getByText(/ottimale deve essere maggiore o uguale/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 2: fabbisogno/i)).toBeInTheDocument();
+  });
+
+  it('step 3: una richiesta giornata gara con campi vuoti blocca l\'avanzamento', async () => {
+    renderWizard();
+    await vaiAlloStep(3);
+
+    await userEvent.click(screen.getByLabelText(/richiedi blocco\/i giornata gara/i));
+    await userEvent.click(screen.getByRole('button', { name: /aggiungi richiesta giornata gara/i }));
+    await userEvent.type(screen.getByLabelText(/^federazione/i), 'FIPAV');
+    // campionato e categoria restano vuoti: il backend li richiede .min(1)
+    await userEvent.click(screen.getByRole('button', { name: /avanti al prossimo step/i }));
+
+    expect(screen.getByText(/federazione, campionato e categoria sono obbligatori/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 3: richiesta blocco giornata/i)).toBeInTheDocument();
+  });
+
+  it('submit senza preferenze: blocca con messaggio, non chiama creaDomanda', async () => {
+    const spy = vi.spyOn(domandeApi, 'creaDomanda');
+    renderWizard();
+    await vaiAlloStep(4);
+
+    await userEvent.click(screen.getByRole('button', { name: /invia domanda definitiva/i }));
+
+    expect(screen.getByText(/seleziona almeno uno slot tra le preferenze/i)).toBeInTheDocument();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('submit dopo aver saltato lo step 2 con lo stepper: rivalidato, nessuna chiamata', async () => {
+    const spy = vi.spyOn(domandeApi, 'creaDomanda');
+    renderWizard();
+    await userEvent.click(await screen.findByLabelText('Pallavolo'));
+    // Salto diretto allo step 4 cliccando lo stepper (bypass dei bottoni Avanti).
+    await userEvent.click(screen.getByText('Preferenze & Blocchi'));
+    await selezionaSlot(SLOT_A.id);
+    await userEvent.click(screen.getByRole('button', { name: /invia domanda definitiva/i }));
+
+    expect(screen.getByText(/fabbisogno minimo settimanale valido/i)).toBeInTheDocument();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('uno slot già in un blocco non può entrare in un secondo blocco', async () => {
+    renderWizard();
+    await vaiAlloStep(4);
+
+    await selezionaSlot(SLOT_A.id);
+    await selezionaSlot(SLOT_B.id);
+    await userEvent.click(document.getElementById(`wiz-blocco-sel-${SLOT_A.id}`)!);
+    await userEvent.click(document.getElementById(`wiz-blocco-sel-${SLOT_B.id}`)!);
+    await userEvent.click(screen.getByRole('button', { name: /raggruppa in blocco allenamento/i }));
+
+    expect(document.getElementById(`wiz-blocco-sel-${SLOT_A.id}`)).toBeDisabled();
+    expect(document.getElementById(`wiz-blocco-sel-${SLOT_B.id}`)).toBeDisabled();
+    expect(screen.getAllByText(/già nel blocco 1/i).length).toBe(2);
   });
 
   it('anteprima FR: chiama anteprimaFabbisogno con i campi correnti e mostra il risultato', async () => {
@@ -202,7 +281,7 @@ describe('WizardDomandaView', () => {
     await userEvent.click(document.getElementById(`wiz-blocco-sel-${SLOT_B.id}`)!);
     await userEvent.click(screen.getByRole('button', { name: /raggruppa in blocco allenamento/i }));
 
-    expect(screen.getByText(/blocco 1/i)).toBeInTheDocument();
+    expect(screen.getByText('Blocco 1')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /invia domanda definitiva/i }));
 
