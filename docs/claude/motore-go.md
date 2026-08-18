@@ -43,6 +43,7 @@ Endpoint:
 - `POST /stagioni/{id}/istruttoria` → `{"domande_calcolate": N}`
 - `POST /stagioni/{id}/blocchi-gara` → genera il seme, esegue la Fase 6, `{"elaborazione_id", "numero_assegnazioni", "richieste_non_assegnate"}`
 - `POST /stagioni/{id}/prima-assegnazione` → genera il seme, esegue il round-robin, `{"elaborazione_id", "numero_assegnazioni", "round_eseguiti"}`
+- `POST /anteprima-fabbisogno` → stateless, nessuna scrittura DB, nessun `{id}` di stagione nel path: calcola FR (art. A.5) e coefficienti (CRS/CAA/CSD/CP, art. A.6/A.7/A.11/A.12) per una singola combinazione classe-attività/livello-campionato/squadre-federali/FD **prima** che una domanda sia presentata — riusa `internal/calc/` e `internal/istruttoria/` così com'è, nessuna logica nuova. Espone all'utente pubblico un'anteprima del proprio fabbisogno riconosciuto in fase di compilazione (WizardDomandaView step 2), coerente col vincolo "nessuna logica di calcolo duplicata fuori dal motore".
 
 `cmd/service/main.go` legge `DATABASE_URL`/`PORT`, shutdown pulito su SIGTERM. Verificato con smoke test reale (non solo `go build`): binario avviato con `go run` contro Postgres vero su rete Docker dedicata, tutti e 3 gli scenari chiamati via `curl` — healthz 200, istruttoria/prima-assegnazione su stagione vuota (0 domande, chiusura round-robin corretta con 0 fasce), stagione inesistente propaga correttamente il vincolo FK come errore 500 leggibile (non un crash).
 
