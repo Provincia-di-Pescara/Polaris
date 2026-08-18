@@ -57,6 +57,7 @@ import {
 import { revocaSessioniUtente } from './repository/sessioni.ts';
 import { ErroreValoreDuplicato, ErroreNonTrovato, ErroreStatoNonValidoPerTransizione, ErroreOrdineFasiNonRispettato, ErroreElaborazioneInCorso, ErroreRiferimentoNonValido, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
 import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './discipline.ts';
+import { listaClassiAttivita } from './classiAttivita.ts';
 import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstituzione } from './istituzioni.ts';
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
@@ -275,6 +276,22 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     try {
       const stagioni = await listaStagioni(pool);
       res.status(200).json(stagioni);
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/discipline', async (_req, res) => {
+    try {
+      res.status(200).json(await listaDiscipline(pool));
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/classi-attivita', async (_req, res) => {
+    try {
+      res.status(200).json(await listaClassiAttivita(pool));
     } catch (err) {
       res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
     }
@@ -2474,6 +2491,51 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(400).json({ errore: erroreRiferimento.message });
           return;
         }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Pubblico: slot della settimana tipo (per il wizard domanda) ---
+
+  app.get(
+    '/pubblico/stagioni/:id/slot',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const stagioneId = typeof req.params.id === 'string' ? req.params.id : '';
+      const disciplinaCodice = typeof req.query.disciplinaCodice === 'string' ? req.query.disciplinaCodice : undefined;
+      try {
+        const condizioneDisciplina = disciplinaCodice
+          ? `AND EXISTS (
+               SELECT 1 FROM spazio_disciplina_compatibile sdc
+               WHERE sdc.spazio_id = sp.id AND sdc.disciplina_codice = $2
+             )`
+          : '';
+        const parametri = disciplinaCodice ? [stagioneId, disciplinaCodice] : [stagioneId];
+        const r = await pool.query(
+          `SELECT s.id, i.denominazione AS impianto_denominazione, sp.denominazione AS spazio_denominazione,
+                  s.giorno_settimana, s.orario_inizio::text, s.orario_fine::text, s.durata_minuti, s.pregiata
+           FROM slot_settimana_tipo s
+           JOIN spazi_sportivi sp ON sp.id = s.spazio_id
+           JOIN impianti i ON i.id = sp.impianto_id
+           WHERE s.stagione_id = $1 AND s.indisponibile_permanente = false
+           ${condizioneDisciplina}
+           ORDER BY i.denominazione, sp.denominazione, s.giorno_settimana, s.orario_inizio`,
+          parametri,
+        );
+        res.status(200).json(
+          r.rows.map((row) => ({
+            id: row.id,
+            impiantoDenominazione: row.impianto_denominazione,
+            spazioDenominazione: row.spazio_denominazione,
+            giornoSettimana: row.giorno_settimana,
+            orarioInizio: row.orario_inizio,
+            orarioFine: row.orario_fine,
+            durataMinuti: row.durata_minuti,
+            pregiata: row.pregiata,
+          })),
+        );
+      } catch (err) {
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },

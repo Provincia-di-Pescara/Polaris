@@ -405,3 +405,99 @@ test(
     });
   },
 );
+
+test('GET /discipline: 200, array, nessuna autenticazione richiesta', async (t) => {
+  if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(chiudi);
+
+  const r = await fetch(`${base}/discipline`);
+  assert.equal(r.status, 200);
+  const corpo = (await r.json()) as unknown[];
+  assert.ok(Array.isArray(corpo));
+});
+
+test('GET /classi-attivita: 200, 5 elementi, nessuna autenticazione richiesta', async (t) => {
+  if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(chiudi);
+
+  const r = await fetch(`${base}/classi-attivita`);
+  assert.equal(r.status, 200);
+  const corpo = (await r.json()) as unknown[];
+  assert.equal(corpo.length, 5);
+});
+
+test('GET /pubblico/stagioni/:id/slot', async (t) => {
+  if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(chiudi);
+
+  const stagioneId = await creaStagioneTest(pool);
+  const persona = await creaPersonaFisicaTest(pool);
+
+  const impianto = await pool.query<{ id: string }>(
+    `INSERT INTO impianti (denominazione) VALUES ('Impianto Slot Pubblico Test') RETURNING id`,
+  );
+  const spazio = await pool.query<{ id: string }>(
+    `INSERT INTO spazi_sportivi (impianto_id, denominazione) VALUES ($1, 'Palestra Slot Pubblico Test') RETURNING id`,
+    [impianto.rows[0]!.id],
+  );
+  const slot = await pool.query<{ id: string }>(
+    `INSERT INTO slot_settimana_tipo (stagione_id, spazio_id, giorno_settimana, orario_inizio, orario_fine)
+     VALUES ($1, $2, 2, '18:00', '19:00') RETURNING id`,
+    [stagioneId, spazio.rows[0]!.id],
+  );
+  const disciplinaCodice = `SLOTPUB${randomUUID().slice(0, 6).toUpperCase()}`;
+  await pool.query(
+    `INSERT INTO discipline_sportive (codice, denominazione) VALUES ($1, 'Disciplina Slot Pubblico Test')`,
+    [disciplinaCodice],
+  );
+
+  await t.test('senza token: 401', async () => {
+    const r = await fetch(`${base}/pubblico/stagioni/${stagioneId}/slot`);
+    assert.equal(r.status, 401);
+  });
+
+  await t.test('con token, senza filtro disciplina: lo slot compare', async () => {
+    const r = await fetch(`${base}/pubblico/stagioni/${stagioneId}/slot`, {
+      headers: { Authorization: `Bearer ${persona.token}` },
+    });
+    assert.equal(r.status, 200);
+    const corpo = (await r.json()) as Array<{ id: string }>;
+    assert.ok(corpo.some((s) => s.id === slot.rows[0]!.id));
+  });
+
+  await t.test('con disciplinaCodice non compatibile con lo spazio: lista vuota', async () => {
+    const altraDisciplina = `SLOTNOPE${randomUUID().slice(0, 6).toUpperCase()}`;
+    await pool.query(
+      `INSERT INTO discipline_sportive (codice, denominazione) VALUES ($1, 'Disciplina Non Compatibile Test')`,
+      [altraDisciplina],
+    );
+    const r = await fetch(`${base}/pubblico/stagioni/${stagioneId}/slot?disciplinaCodice=${altraDisciplina}`, {
+      headers: { Authorization: `Bearer ${persona.token}` },
+    });
+    assert.equal(r.status, 200);
+    const corpo = (await r.json()) as unknown[];
+    assert.equal(corpo.length, 0);
+  });
+
+  await t.test('con disciplinaCodice compatibile: lo slot compare', async () => {
+    await pool.query(
+      `INSERT INTO spazio_disciplina_compatibile (spazio_id, disciplina_codice) VALUES ($1, $2)`,
+      [spazio.rows[0]!.id, disciplinaCodice],
+    );
+    const r = await fetch(`${base}/pubblico/stagioni/${stagioneId}/slot?disciplinaCodice=${disciplinaCodice}`, {
+      headers: { Authorization: `Bearer ${persona.token}` },
+    });
+    assert.equal(r.status, 200);
+    const corpo = (await r.json()) as Array<{ id: string }>;
+    assert.ok(corpo.some((s) => s.id === slot.rows[0]!.id));
+  });
+});
