@@ -1,14 +1,3 @@
-export interface ApplicationWizardState {
-  classeAttivita: 'A' | 'B' | 'C' | 'D' | 'E';
-  squadreFederaliCount: number;
-  fdMinimoMinuti: number;
-  fdOttimaleMinuti: number;
-  richiedeBloccoGara: boolean;
-  bloccoGaraImpiantoId: string;
-  bloccoGaraGiorno: 'Sabato' | 'Domenica';
-  preferenzeImpianti: string[];
-}
-
 export interface ConcertazioneProposal {
   id: string;
   associazioneProponente: string;
