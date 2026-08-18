@@ -40,6 +40,27 @@ async function creaStagioneTest(pool: Pool): Promise<string> {
   return r.rows[0]!.id;
 }
 
+async function creaAssociazioneTest(pool: Pool): Promise<string> {
+  const r = await pool.query<{ id: string }>(
+    `INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ($1, $2) RETURNING id`,
+    [`ASD Anteprima Test ${randomUUID()}`, `PIVA-${randomUUID().slice(0, 8)}`],
+  );
+  return r.rows[0]!.id;
+}
+
+async function creaAbilitazioneApprovataTest(
+  pool: Pool,
+  personaId: string,
+  associazioneId: string,
+  stagioneId: string,
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO abilitazioni (persona_fisica_id, associazione_id, stagione_id, titolo, ruolo, stato)
+     VALUES ($1, $2, $3, 'legale_rappresentante', 'rappresentante', 'approvata')`,
+    [personaId, associazioneId, stagioneId],
+  );
+}
+
 const referenteTest = {
   nome: 'Luca',
   cognome: 'Bianchi',
@@ -461,6 +482,26 @@ test('GET /pubblico/stagioni/:id/slot', async (t) => {
     `INSERT INTO discipline_sportive (codice, denominazione) VALUES ($1, 'Disciplina Slot Pubblico Test')`,
     [disciplinaCodice],
   );
+  // altraDisciplina è creata dentro il subtest "non compatibile" sotto: tracciata
+  // qui per essere ripulita FK-safe (figli prima dei genitori) invece che con un
+  // pattern LIKE, per evitare il rischio di cancellare righe di altri file di
+  // test in esecuzione in parallelo.
+  // NOTA: la pulizia è invocata inline a fine funzione (non via t.after) perché
+  // t.after esegue gli hook in ordine di registrazione (FIFO), e t.after(() =>
+  // pool.end()) è già stato registrato più sopra: un secondo t.after qui
+  // troverebbe il pool già chiuso.
+  let altraDisciplinaCodice: string | undefined;
+  const pulisci = async (): Promise<void> => {
+    await pool.query('DELETE FROM spazio_disciplina_compatibile WHERE spazio_id = $1', [spazio.rows[0]!.id]);
+    await pool.query('DELETE FROM slot_settimana_tipo WHERE id = $1', [slot.rows[0]!.id]);
+    await pool.query('DELETE FROM spazi_sportivi WHERE id = $1', [spazio.rows[0]!.id]);
+    await pool.query('DELETE FROM impianti WHERE id = $1', [impianto.rows[0]!.id]);
+    await pool.query('DELETE FROM discipline_sportive WHERE codice = $1', [disciplinaCodice]);
+    if (altraDisciplinaCodice) {
+      await pool.query('DELETE FROM discipline_sportive WHERE codice = $1', [altraDisciplinaCodice]);
+    }
+    await pool.query('DELETE FROM stagioni_sportive WHERE id = $1', [stagioneId]);
+  };
 
   await t.test('senza token: 401', async () => {
     const r = await fetch(`${base}/pubblico/stagioni/${stagioneId}/slot`);
@@ -478,6 +519,7 @@ test('GET /pubblico/stagioni/:id/slot', async (t) => {
 
   await t.test('con disciplinaCodice non compatibile con lo spazio: lista vuota', async () => {
     const altraDisciplina = `SLOTNOPE${randomUUID().slice(0, 6).toUpperCase()}`;
+    altraDisciplinaCodice = altraDisciplina;
     await pool.query(
       `INSERT INTO discipline_sportive (codice, denominazione) VALUES ($1, 'Disciplina Non Compatibile Test')`,
       [altraDisciplina],
@@ -502,6 +544,8 @@ test('GET /pubblico/stagioni/:id/slot', async (t) => {
     const corpo = (await r.json()) as Array<{ id: string }>;
     assert.ok(corpo.some((s) => s.id === slot.rows[0]!.id));
   });
+
+  await pulisci();
 });
 
 // --- POST /pubblico/domande/anteprima-fabbisogno (proxy verso il motore Go, Task 3) ---
@@ -563,7 +607,8 @@ test('POST /pubblico/domande/anteprima-fabbisogno: 200, corpo combacia con la ri
 
   const persona = await creaPersonaFisicaTest(pool);
   const stagioneId = await creaStagioneTest(pool);
-  const associazioneId = randomUUID();
+  const associazioneId = await creaAssociazioneTest(pool);
+  await creaAbilitazioneApprovataTest(pool, persona.id, associazioneId, stagioneId);
 
   const r = await fetch(`${base}/pubblico/domande/anteprima-fabbisogno`, {
     method: 'POST',
@@ -591,6 +636,13 @@ test('POST /pubblico/domande/anteprima-fabbisogno: 200, corpo combacia con la ri
     csd: '1.050',
     cp: '1.386',
   });
+
+  // Pulizia inline (non via t.after): t.after esegue gli hook in ordine di
+  // registrazione (FIFO) e t.after(() => pool.end()) è già stato registrato
+  // sopra, quindi un secondo t.after qui troverebbe il pool già chiuso.
+  await pool.query('DELETE FROM abilitazioni WHERE associazione_id = $1', [associazioneId]);
+  await pool.query('DELETE FROM associazioni WHERE id = $1', [associazioneId]);
+  await pool.query('DELETE FROM stagioni_sportive WHERE id = $1', [stagioneId]);
 });
 
 test('POST /pubblico/domande/anteprima-fabbisogno: senza autenticazione, 401', async (t) => {
@@ -607,6 +659,50 @@ test('POST /pubblico/domande/anteprima-fabbisogno: senza autenticazione, 401', a
     body: JSON.stringify(corpoAnteprimaFabbisognoValido(randomUUID(), stagioneId)),
   });
   assert.equal(r.status, 401);
+  await pool.query('DELETE FROM stagioni_sportive WHERE id = $1', [stagioneId]);
+});
+
+test('POST /pubblico/domande/anteprima-fabbisogno: associazione inesistente/senza abilitazione, 403', async (t) => {
+  if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool, { clientMotore: clientMotoreFittizioAnteprima() });
+  t.after(chiudi);
+
+  const persona = await creaPersonaFisicaTest(pool);
+  const stagioneId = await creaStagioneTest(pool);
+  const r = await fetch(`${base}/pubblico/domande/anteprima-fabbisogno`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+    body: JSON.stringify(corpoAnteprimaFabbisognoValido(randomUUID(), stagioneId)),
+  });
+  assert.equal(r.status, 403);
+  await pool.query('DELETE FROM stagioni_sportive WHERE id = $1', [stagioneId]);
+});
+
+test('POST /pubblico/domande/anteprima-fabbisogno: persona autenticata senza abilitazione su associazione altrui, 403', async (t) => {
+  if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool, { clientMotore: clientMotoreFittizioAnteprima() });
+  t.after(chiudi);
+
+  const titolare = await creaPersonaFisicaTest(pool);
+  const estraneo = await creaPersonaFisicaTest(pool);
+  const stagioneId = await creaStagioneTest(pool);
+  const associazioneId = await creaAssociazioneTest(pool);
+  await creaAbilitazioneApprovataTest(pool, titolare.id, associazioneId, stagioneId);
+
+  const r = await fetch(`${base}/pubblico/domande/anteprima-fabbisogno`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${estraneo.token}` },
+    body: JSON.stringify(corpoAnteprimaFabbisognoValido(associazioneId, stagioneId)),
+  });
+  assert.equal(r.status, 403);
+
+  await pool.query('DELETE FROM abilitazioni WHERE associazione_id = $1', [associazioneId]);
+  await pool.query('DELETE FROM associazioni WHERE id = $1', [associazioneId]);
+  await pool.query('DELETE FROM stagioni_sportive WHERE id = $1', [stagioneId]);
 });
 
 test('POST /pubblico/domande/anteprima-fabbisogno: senza clientMotore configurato, 503', async (t) => {
@@ -626,6 +722,7 @@ test('POST /pubblico/domande/anteprima-fabbisogno: senza clientMotore configurat
     body: JSON.stringify(corpoAnteprimaFabbisognoValido(randomUUID(), stagioneId)),
   });
   assert.equal(r.status, 503);
+  await pool.query('DELETE FROM stagioni_sportive WHERE id = $1', [stagioneId]);
 });
 
 test('POST /pubblico/domande/anteprima-fabbisogno: body non valido (fdMinuti non numerico), 400', async (t) => {
@@ -645,6 +742,7 @@ test('POST /pubblico/domande/anteprima-fabbisogno: body non valido (fdMinuti non
     body: JSON.stringify(corpo),
   });
   assert.equal(r.status, 400);
+  await pool.query('DELETE FROM stagioni_sportive WHERE id = $1', [stagioneId]);
 });
 
 test('POST /pubblico/domande/anteprima-fabbisogno: motore irraggiungibile, 502', async (t) => {
@@ -662,10 +760,17 @@ test('POST /pubblico/domande/anteprima-fabbisogno: motore irraggiungibile, 502',
 
   const persona = await creaPersonaFisicaTest(pool);
   const stagioneId = await creaStagioneTest(pool);
+  const associazioneId = await creaAssociazioneTest(pool);
+  await creaAbilitazioneApprovataTest(pool, persona.id, associazioneId, stagioneId);
+
   const r = await fetch(`${base}/pubblico/domande/anteprima-fabbisogno`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
-    body: JSON.stringify(corpoAnteprimaFabbisognoValido(randomUUID(), stagioneId)),
+    body: JSON.stringify(corpoAnteprimaFabbisognoValido(associazioneId, stagioneId)),
   });
   assert.equal(r.status, 502);
+
+  await pool.query('DELETE FROM abilitazioni WHERE associazione_id = $1', [associazioneId]);
+  await pool.query('DELETE FROM associazioni WHERE id = $1', [associazioneId]);
+  await pool.query('DELETE FROM stagioni_sportive WHERE id = $1', [stagioneId]);
 });

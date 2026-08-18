@@ -83,7 +83,7 @@ describe('WizardDomandaView', () => {
   it('nessuna domanda esistente: mostra il wizard allo step 1', async () => {
     renderWizard();
     expect(await screen.findByText(/step 1: inquadramento/i)).toBeInTheDocument();
-    expect(domandeApi.listaDomandePerAssociazione).toHaveBeenCalledWith('ass1');
+    expect(domandeApi.listaDomandePerAssociazione).toHaveBeenCalledWith('ass1', 'st1');
   });
 
   it('domanda già presentata per la stagione: mostra il riepilogo di sola lettura', async () => {

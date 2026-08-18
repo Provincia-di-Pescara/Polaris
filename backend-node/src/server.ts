@@ -2556,6 +2556,13 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
         return;
       }
+      const delegante = await trovaAbilitazioneAttiva(
+        pool, req.persona!.sub, parsed.data.associazioneId, parsed.data.stagioneId,
+      );
+      if (!delegante) {
+        res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
+        return;
+      }
       try {
         const risultato = await clientMotore.anteprimaFabbisogno(parsed.data);
         res.status(200).json(risultato);

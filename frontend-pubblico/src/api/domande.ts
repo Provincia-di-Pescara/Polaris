@@ -53,8 +53,9 @@ export function creaDomanda(dati: DatiCreaDomanda): Promise<Domanda> {
   });
 }
 
-export function listaDomandePerAssociazione(associazioneId: string): Promise<Domanda[]> {
-  return richiedi(`/pubblico/associazioni/${encodeURIComponent(associazioneId)}/domande`);
+export function listaDomandePerAssociazione(associazioneId: string, stagioneId?: string): Promise<Domanda[]> {
+  const query = stagioneId ? `?stagioneId=${encodeURIComponent(stagioneId)}` : '';
+  return richiedi(`/pubblico/associazioni/${encodeURIComponent(associazioneId)}/domande${query}`);
 }
 
 export interface DatiAnteprimaFabbisogno {

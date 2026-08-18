@@ -127,7 +127,7 @@ export const WizardDomandaView: React.FC<WizardDomandaProps> = ({ entities, stag
       return;
     }
     setVerificaInCorso(true);
-    listaDomandePerAssociazione(associazioneId)
+    listaDomandePerAssociazione(associazioneId, stagioneId)
       .then((domande) => {
         if (annullato) return;
         setDomandaEsistente(domande.find((d) => d.stagioneId === stagioneId) ?? null);
@@ -178,14 +178,22 @@ export const WizardDomandaView: React.FC<WizardDomandaProps> = ({ entities, stag
     setDisciplinaFiltroSlot((prec) => (prec && disciplineCodici.includes(prec) ? prec : disciplineCodici[0] ?? ''));
   }, [disciplineCodici]);
 
-  const caricaSlot = useCallback((): void => {
+  // Il flag di cancellazione vive nell'useEffect chiamante (stesso pattern di
+  // StatisticheView.tsx), non dentro la useCallback: caricaSlot riceve un
+  // controllo "è ancora valida questa richiesta?" invece di gestire da sola lo
+  // stato di cancellazione, così una risposta lenta e superata (es. due switch
+  // rapidi del filtro disciplina) viene scartata invece di sovrascrivere uno
+  // stato più recente.
+  const caricaSlot = useCallback((estaAnnullato: () => boolean): void => {
     if (!stagioneId) return;
     listaSlot(stagioneId, disciplinaFiltroSlot || undefined)
       .then((s) => {
+        if (estaAnnullato()) return;
         setSlot(s);
         setErroreSlot(null);
       })
       .catch((err) => {
+        if (estaAnnullato()) return;
         setSlot([]);
         setErroreSlot(
           err instanceof ErroreRichiestaApi ? `Elenco slot non disponibile: ${err.message}` : 'Elenco slot non disponibile.',
@@ -195,7 +203,11 @@ export const WizardDomandaView: React.FC<WizardDomandaProps> = ({ entities, stag
 
   useEffect(() => {
     if (currentStep !== 4) return;
-    caricaSlot();
+    let annullato = false;
+    caricaSlot(() => annullato);
+    return () => {
+      annullato = true;
+    };
   }, [currentStep, caricaSlot]);
 
   if (!stagioneId) {

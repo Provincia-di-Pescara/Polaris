@@ -96,6 +96,8 @@ descrivi('domande.ts', () => {
   let pool: Pool;
   const personeCreate: PersonaTest[] = [];
   const associazioniCreate: string[] = [];
+  const stagioniCreate: string[] = [];
+  const disciplineCreate: string[] = [];
 
   beforeAll(async () => {
     backend = await avviaBackendReale();
@@ -140,6 +142,15 @@ descrivi('domande.ts', () => {
     await pool.query('DELETE FROM slot_settimana_tipo WHERE spazio_id IN (SELECT id FROM spazi_sportivi WHERE denominazione LIKE \'Spazio Test %\')');
     await pool.query('DELETE FROM spazi_sportivi WHERE denominazione LIKE \'Spazio Test %\'');
     await pool.query('DELETE FROM impianti WHERE denominazione LIKE \'Impianto Test %\'');
+    // Stagioni e discipline create nei test: rimosse ora che slot/domande che le
+    // referenziano sono già stati eliminati sopra (stesso ordine FK-safe di
+    // App.domanda.realBackend.test.tsx).
+    if (disciplineCreate.length > 0) {
+      await pool.query('DELETE FROM discipline_sportive WHERE codice = ANY($1::text[])', [disciplineCreate]);
+    }
+    if (stagioniCreate.length > 0) {
+      await pool.query('DELETE FROM stagioni_sportive WHERE id = ANY($1::uuid[])', [stagioniCreate]);
+    }
 
     const personeIds = personeCreate.map((p) => p.persona.id);
     if (personeIds.length > 0) {
@@ -155,6 +166,7 @@ descrivi('domande.ts', () => {
     impostaTokens(persona.accessToken, persona.refreshToken);
 
     const stagioneId = await creaStagioneTest(pool);
+    stagioniCreate.push(stagioneId);
     const slotId = await creaSlotTest(pool, stagioneId);
 
     // Crea una disciplina di test
@@ -163,6 +175,7 @@ descrivi('domande.ts', () => {
       `INSERT INTO discipline_sportive (codice, denominazione) VALUES ($1, 'Disciplina Test')`,
       [disciplinaCodice],
     );
+    disciplineCreate.push(disciplinaCodice);
 
     const suffisso = randomUUID().slice(0, 8);
     const associazione = await creaAssociazione({
@@ -220,6 +233,7 @@ descrivi('domande.ts', () => {
     impostaTokens(persona.accessToken, persona.refreshToken);
 
     const stagioneId = await creaStagioneTest(pool);
+    stagioniCreate.push(stagioneId);
     const slotId = await creaSlotTest(pool, stagioneId);
 
     // Crea una disciplina di test
@@ -228,6 +242,7 @@ descrivi('domande.ts', () => {
       `INSERT INTO discipline_sportive (codice, denominazione) VALUES ($1, 'Disciplina Test')`,
       [disciplinaCodice],
     );
+    disciplineCreate.push(disciplinaCodice);
 
     const suffisso = randomUUID().slice(0, 8);
     const associazione = await creaAssociazione({
@@ -284,6 +299,7 @@ descrivi('domande.ts', () => {
     impostaTokens(persona.accessToken, persona.refreshToken);
 
     const stagioneId = await creaStagioneTest(pool);
+    stagioniCreate.push(stagioneId);
 
     const suffisso = randomUUID().slice(0, 8);
     const associazione = await creaAssociazione({

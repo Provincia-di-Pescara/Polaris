@@ -22,6 +22,7 @@ descrivi('slot.ts', () => {
   let backend: BackendReale;
   let pool: Pool;
   const personeCreate: PersonaTest[] = [];
+  const stagioniCreate: string[] = [];
 
   beforeAll(async () => {
     backend = await avviaBackendReale();
@@ -33,6 +34,9 @@ descrivi('slot.ts', () => {
   afterAll(async () => {
     rimuoviTokens();
     await backend.chiudi();
+    if (stagioniCreate.length > 0) {
+      await pool.query('DELETE FROM stagioni_sportive WHERE id = ANY($1::uuid[])', [stagioniCreate]);
+    }
     await Promise.all(personeCreate.map((p) => p.elimina()));
     await pool.end();
   });
@@ -43,6 +47,7 @@ descrivi('slot.ts', () => {
     impostaTokens(persona.accessToken, persona.refreshToken);
 
     const stagioneId = await creaStagioneTest(pool);
+    stagioniCreate.push(stagioneId);
 
     const slot = await listaSlot(stagioneId);
     expect(Array.isArray(slot)).toBe(true);
@@ -54,6 +59,7 @@ descrivi('slot.ts', () => {
     impostaTokens(persona.accessToken, persona.refreshToken);
 
     const stagioneId = await creaStagioneTest(pool);
+    stagioniCreate.push(stagioneId);
 
     const slot = await listaSlot(stagioneId, 'CALCIO');
     expect(Array.isArray(slot)).toBe(true);
