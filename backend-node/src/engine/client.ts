@@ -30,18 +30,40 @@ export class ErroreMotoreIrraggiungibile extends Error {}
 // interna), nessuna differenziazione di status — vedi engine-go/internal/httpapi.
 export class ErroreMotoreDominio extends Error {}
 
+export interface DatiAnteprimaFabbisogno {
+  associazioneId: string;
+  stagioneId: string;
+  classeAttivitaCodice: string;
+  livelloCampionato?: string | undefined;
+  numeroSquadreFederali: number;
+  fdMinuti: string;
+}
+
+export interface RisultatoAnteprimaFabbisogno {
+  pesoBase: number;
+  incrementoSquadre: number;
+  frCalcolatoMinuti: string;
+  frFinaleMinuti: string;
+  crs: string;
+  caa: string;
+  csd: string;
+  cp: string;
+}
+
 export interface ClientMotore {
   eseguiIstruttoria(stagioneId: string): Promise<RisultatoIstruttoria>;
   eseguiBlocchiGara(stagioneId: string): Promise<RisultatoBlocchiGara>;
   eseguiPrimaAssegnazione(stagioneId: string): Promise<RisultatoPrimaAssegnazione>;
   eseguiRiassegnazioneResidua(stagioneId: string): Promise<RisultatoRiassegnazioneResidua>;
+  anteprimaFabbisogno(dati: DatiAnteprimaFabbisogno): Promise<RisultatoAnteprimaFabbisogno>;
 }
 
-async function chiamaMotore(baseUrl: string, timeoutMs: number, path: string): Promise<unknown> {
+async function chiamaMotore(baseUrl: string, timeoutMs: number, path: string, corpo?: unknown): Promise<unknown> {
   let res: Response;
   try {
     res = await fetch(`${baseUrl}${path}`, {
       method: 'POST',
+      ...(corpo !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(corpo) } : {}),
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
@@ -108,6 +130,35 @@ export function creaClientMotore(baseUrl: string, timeoutMs: number): ClientMoto
         elaborazioneId: body.elaborazione_id,
         numeroAssegnazioni: body.numero_assegnazioni,
         roundEseguiti: body.round_eseguiti,
+      };
+    },
+    async anteprimaFabbisogno(dati) {
+      const body = (await chiamaMotore(baseUrl, timeoutMs, '/anteprima-fabbisogno', {
+        associazione_id: dati.associazioneId,
+        stagione_id: dati.stagioneId,
+        classe_attivita_codice: dati.classeAttivitaCodice,
+        livello_campionato: dati.livelloCampionato ?? null,
+        numero_squadre_federali: dati.numeroSquadreFederali,
+        fd_minuti: dati.fdMinuti,
+      })) as {
+        peso_base: number;
+        incremento_squadre: number;
+        fr_calcolato_minuti: string;
+        fr_finale_minuti: string;
+        crs: string;
+        caa: string;
+        csd: string;
+        cp: string;
+      };
+      return {
+        pesoBase: body.peso_base,
+        incrementoSquadre: body.incremento_squadre,
+        frCalcolatoMinuti: body.fr_calcolato_minuti,
+        frFinaleMinuti: body.fr_finale_minuti,
+        crs: body.crs,
+        caa: body.caa,
+        csd: body.csd,
+        cp: body.cp,
       };
     },
   };

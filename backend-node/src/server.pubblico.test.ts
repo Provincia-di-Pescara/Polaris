@@ -2,14 +2,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { creaApp } from './server.ts';
+import { creaApp, type DipendenzeApp } from './server.ts';
 import { generaAccessTokenPubblico } from './auth/jwtPubblico.ts';
+import type { ClientMotore } from './engine/client.ts';
+import { ErroreMotoreIrraggiungibile } from './engine/client.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 process.env.JWT_SECRET ??= 'segreto-di-test-non-usare-in-produzione';
 
-async function avviaServerTest(pool: Pool): Promise<{ base: string; chiudi: () => void }> {
-  const app = creaApp(pool);
+async function avviaServerTest(pool: Pool, dipendenze: DipendenzeApp = {}): Promise<{ base: string; chiudi: () => void }> {
+  const app = creaApp(pool, dipendenze);
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.on('listening', resolve));
   const addr = server.address();
@@ -500,4 +502,170 @@ test('GET /pubblico/stagioni/:id/slot', async (t) => {
     const corpo = (await r.json()) as Array<{ id: string }>;
     assert.ok(corpo.some((s) => s.id === slot.rows[0]!.id));
   });
+});
+
+// --- POST /pubblico/domande/anteprima-fabbisogno (proxy verso il motore Go, Task 3) ---
+//
+// Stesso pattern usato in server.motoreGo.test.ts: un ClientMotore fittizio iniettato via
+// DipendenzeApp, MAI un mock di `fetch` — il proxy verso il motore reale è responsabilità di
+// engine/client.ts (chiamaMotore), qui testiamo solo che la rotta lo invochi/mappi correttamente.
+function clientMotoreFittizioAnteprima(overrides: Partial<ClientMotore> = {}): ClientMotore {
+  return {
+    eseguiIstruttoria: overrides.eseguiIstruttoria ?? (async () => ({ domandeCalcolate: 0 })),
+    eseguiBlocchiGara:
+      overrides.eseguiBlocchiGara ?? (async () => ({ elaborazioneId: randomUUID(), numeroAssegnazioni: 0, richiesteNonAssegnate: 0 })),
+    eseguiPrimaAssegnazione:
+      overrides.eseguiPrimaAssegnazione ?? (async () => ({ elaborazioneId: randomUUID(), numeroAssegnazioni: 0, roundEseguiti: 0 })),
+    eseguiRiassegnazioneResidua:
+      overrides.eseguiRiassegnazioneResidua ?? (async () => ({ elaborazioneId: randomUUID(), numeroAssegnazioni: 0, roundEseguiti: 0 })),
+    anteprimaFabbisogno:
+      overrides.anteprimaFabbisogno ??
+      (async () => ({
+        pesoBase: 1,
+        incrementoSquadre: 0,
+        frCalcolatoMinuti: '60.000',
+        frFinaleMinuti: '60.000',
+        crs: '1.000',
+        caa: '1.000',
+        csd: '1.000',
+        cp: '1.000',
+      })),
+  };
+}
+
+const corpoAnteprimaFabbisognoValido = (associazioneId: string, stagioneId: string) => ({
+  associazioneId,
+  stagioneId,
+  classeAttivitaCodice: 'C1',
+  numeroSquadreFederali: 2,
+  fdMinuti: '90.000',
+});
+
+test('POST /pubblico/domande/anteprima-fabbisogno: 200, corpo combacia con la risposta del motore', async (t) => {
+  if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool, {
+    clientMotore: clientMotoreFittizioAnteprima({
+      anteprimaFabbisogno: async () => ({
+        pesoBase: 2,
+        incrementoSquadre: 1,
+        frCalcolatoMinuti: '120.000',
+        frFinaleMinuti: '150.000',
+        crs: '1.200',
+        caa: '1.100',
+        csd: '1.050',
+        cp: '1.386',
+      }),
+    }),
+  });
+  t.after(chiudi);
+
+  const persona = await creaPersonaFisicaTest(pool);
+  const stagioneId = await creaStagioneTest(pool);
+  const associazioneId = randomUUID();
+
+  const r = await fetch(`${base}/pubblico/domande/anteprima-fabbisogno`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+    body: JSON.stringify(corpoAnteprimaFabbisognoValido(associazioneId, stagioneId)),
+  });
+  assert.equal(r.status, 200);
+  const body = (await r.json()) as {
+    pesoBase: number;
+    incrementoSquadre: number;
+    frCalcolatoMinuti: string;
+    frFinaleMinuti: string;
+    crs: string;
+    caa: string;
+    csd: string;
+    cp: string;
+  };
+  assert.deepEqual(body, {
+    pesoBase: 2,
+    incrementoSquadre: 1,
+    frCalcolatoMinuti: '120.000',
+    frFinaleMinuti: '150.000',
+    crs: '1.200',
+    caa: '1.100',
+    csd: '1.050',
+    cp: '1.386',
+  });
+});
+
+test('POST /pubblico/domande/anteprima-fabbisogno: senza autenticazione, 401', async (t) => {
+  if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool, { clientMotore: clientMotoreFittizioAnteprima() });
+  t.after(chiudi);
+
+  const stagioneId = await creaStagioneTest(pool);
+  const r = await fetch(`${base}/pubblico/domande/anteprima-fabbisogno`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(corpoAnteprimaFabbisognoValido(randomUUID(), stagioneId)),
+  });
+  assert.equal(r.status, 401);
+});
+
+test('POST /pubblico/domande/anteprima-fabbisogno: senza clientMotore configurato, 503', async (t) => {
+  if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  // Nessun dipendenze.clientMotore passato: DipendenzeApp() default {} → creaApp calcola
+  // clientMotore da ENGINE_URL, che non è impostato nell'ambiente di test → null.
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(chiudi);
+
+  const persona = await creaPersonaFisicaTest(pool);
+  const stagioneId = await creaStagioneTest(pool);
+  const r = await fetch(`${base}/pubblico/domande/anteprima-fabbisogno`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+    body: JSON.stringify(corpoAnteprimaFabbisognoValido(randomUUID(), stagioneId)),
+  });
+  assert.equal(r.status, 503);
+});
+
+test('POST /pubblico/domande/anteprima-fabbisogno: body non valido (fdMinuti non numerico), 400', async (t) => {
+  if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool, { clientMotore: clientMotoreFittizioAnteprima() });
+  t.after(chiudi);
+
+  const persona = await creaPersonaFisicaTest(pool);
+  const stagioneId = await creaStagioneTest(pool);
+  const corpo = { ...corpoAnteprimaFabbisognoValido(randomUUID(), stagioneId), fdMinuti: 'non-un-numero' };
+
+  const r = await fetch(`${base}/pubblico/domande/anteprima-fabbisogno`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+    body: JSON.stringify(corpo),
+  });
+  assert.equal(r.status, 400);
+});
+
+test('POST /pubblico/domande/anteprima-fabbisogno: motore irraggiungibile, 502', async (t) => {
+  if (!dsn) { t.skip('TEST_DATABASE_URL non impostata'); return; }
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { base, chiudi } = await avviaServerTest(pool, {
+    clientMotore: clientMotoreFittizioAnteprima({
+      anteprimaFabbisogno: async () => {
+        throw new ErroreMotoreIrraggiungibile('simulato');
+      },
+    }),
+  });
+  t.after(chiudi);
+
+  const persona = await creaPersonaFisicaTest(pool);
+  const stagioneId = await creaStagioneTest(pool);
+  const r = await fetch(`${base}/pubblico/domande/anteprima-fabbisogno`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${persona.token}` },
+    body: JSON.stringify(corpoAnteprimaFabbisognoValido(randomUUID(), stagioneId)),
+  });
+  assert.equal(r.status, 502);
 });

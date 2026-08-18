@@ -156,6 +156,16 @@ export const schemaCreaDomanda = z
   });
 export type CreaDomandaRequest = z.infer<typeof schemaCreaDomanda>;
 
+export const schemaAnteprimaFabbisogno = z.object({
+  associazioneId: z.string().uuid(),
+  stagioneId: z.string().uuid(),
+  classeAttivitaCodice: z.string().min(1),
+  livelloCampionato: z.enum(['provinciale', 'regionale', 'interregionale', 'nazionale']).optional(),
+  numeroSquadreFederali: z.number().int().min(0),
+  fdMinuti: z.string().regex(REGEX_MINUTI),
+});
+export type AnteprimaFabbisognoRequest = z.infer<typeof schemaAnteprimaFabbisogno>;
+
 export const schemaCreaOsservazione = z.object({
   testo: z.string().min(1),
 });

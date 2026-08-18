@@ -93,6 +93,18 @@ if (!dsn) {
       eseguiRiassegnazioneResidua:
         overrides.eseguiRiassegnazioneResidua ??
         (async () => ({ elaborazioneId: randomUUID(), numeroAssegnazioni: 0, roundEseguiti: 0 })),
+      anteprimaFabbisogno:
+        overrides.anteprimaFabbisogno ??
+        (async () => ({
+          pesoBase: 1,
+          incrementoSquadre: 0,
+          frCalcolatoMinuti: '60.000',
+          frFinaleMinuti: '60.000',
+          crs: '1.000',
+          caa: '1.000',
+          csd: '1.000',
+          cp: '1.000',
+        })),
     };
   }
 
@@ -342,6 +354,9 @@ if (!dsn) {
       },
       eseguiRiassegnazioneResidua: async () => {
         throw new Error('eseguiRiassegnazioneResidua NON deve essere chiamato con uno stagioneId malformato');
+      },
+      anteprimaFabbisogno: async () => {
+        throw new Error('anteprimaFabbisogno NON deve essere chiamato con uno stagioneId malformato');
       },
     };
   }

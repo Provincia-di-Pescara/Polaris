@@ -124,6 +124,98 @@ test('timeout allo scadere produce ErroreMotoreIrraggiungibile', async () => {
   }
 });
 
+test('anteprimaFabbisogno: invia body snake_case con POST, mappa la risposta in camelCase', async () => {
+  const { baseUrl, chiudi } = await avviaServerFittizio((req, res) => {
+    assert.equal(req.method, 'POST');
+    assert.equal(req.url, '/anteprima-fabbisogno');
+    assert.equal(req.headers['content-type'], 'application/json');
+    let corpo = '';
+    req.on('data', (chunk: Buffer) => { corpo += chunk.toString(); });
+    req.on('end', () => {
+      assert.deepEqual(JSON.parse(corpo), {
+        associazione_id: 'assoc-1',
+        stagione_id: 'stagione-5',
+        classe_attivita_codice: 'C1',
+        livello_campionato: 'provinciale',
+        numero_squadre_federali: 2,
+        fd_minuti: '90.000',
+      });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          peso_base: 2,
+          incremento_squadre: 1,
+          fr_calcolato_minuti: '120.000',
+          fr_finale_minuti: '150.000',
+          crs: '1.200',
+          caa: '1.100',
+          csd: '1.050',
+          cp: '1.386',
+        }),
+      );
+    });
+  });
+  try {
+    const client = creaClientMotore(baseUrl, 5000);
+    const risultato = await client.anteprimaFabbisogno({
+      associazioneId: 'assoc-1',
+      stagioneId: 'stagione-5',
+      classeAttivitaCodice: 'C1',
+      livelloCampionato: 'provinciale',
+      numeroSquadreFederali: 2,
+      fdMinuti: '90.000',
+    });
+    assert.deepEqual(risultato, {
+      pesoBase: 2,
+      incrementoSquadre: 1,
+      frCalcolatoMinuti: '120.000',
+      frFinaleMinuti: '150.000',
+      crs: '1.200',
+      caa: '1.100',
+      csd: '1.050',
+      cp: '1.386',
+    });
+  } finally {
+    await chiudi();
+  }
+});
+
+test('anteprimaFabbisogno: livelloCampionato assente diventa null nel body', async () => {
+  const { baseUrl, chiudi } = await avviaServerFittizio((req, res) => {
+    let corpo = '';
+    req.on('data', (chunk: Buffer) => { corpo += chunk.toString(); });
+    req.on('end', () => {
+      const parsed = JSON.parse(corpo) as { livello_campionato: unknown };
+      assert.equal(parsed.livello_campionato, null);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          peso_base: 1,
+          incremento_squadre: 0,
+          fr_calcolato_minuti: '60.000',
+          fr_finale_minuti: '60.000',
+          crs: '1.000',
+          caa: '1.000',
+          csd: '1.000',
+          cp: '1.000',
+        }),
+      );
+    });
+  });
+  try {
+    const client = creaClientMotore(baseUrl, 5000);
+    await client.anteprimaFabbisogno({
+      associazioneId: 'assoc-2',
+      stagioneId: 'stagione-6',
+      classeAttivitaCodice: 'C1',
+      numeroSquadreFederali: 0,
+      fdMinuti: '30.000',
+    });
+  } finally {
+    await chiudi();
+  }
+});
+
 test('eseguiRiassegnazioneResidua: risposta 200 valida mappata in camelCase', async () => {
   const { baseUrl, chiudi } = await avviaServerFittizio((req, res) => {
     assert.equal(req.url, '/stagioni/stagione-4/riassegnazione-residua');

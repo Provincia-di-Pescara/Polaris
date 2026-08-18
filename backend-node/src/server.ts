@@ -68,7 +68,7 @@ import { registraUtilizzo, trovaUtilizzoPerId, listaUtilizziPerAssegnazione, acc
 import { codaMancatiUtilizzi, creaProvvedimento, listaProvvedimentiPerAssegnazione, applicaDecadenza } from './provvedimenti.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione, listaDocumentiPerAssociazione, trovaDocumentoPerId, creaReferenteAssociazione, creaAssicurazioneAssociazione, listaReferentiPerAssociazione, listaAssicurazioniPerAssociazione } from './associazioni.ts';
 import { listaOrganismiSportivi } from './organismiSportivi.ts';
-import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaCreaOsservazione, schemaCreaProposta, schemaAccettaProposta, schemaCreaVariazione, schemaAccettaVariazione, schemaPresentaGiustificazione } from './pubblicoSchema.ts';
+import { schemaCreaAssociazione, schemaCaricaDocumento, schemaCreaDelega, schemaCreaDomanda, schemaAnteprimaFabbisogno, schemaCreaOsservazione, schemaCreaProposta, schemaAccettaProposta, schemaCreaVariazione, schemaAccettaVariazione, schemaPresentaGiustificazione } from './pubblicoSchema.ts';
 import { uploadDocumento, percorsoStorageDocumenti } from './documenti/storage.ts';
 import { MulterError } from 'multer';
 import { readFile, unlink } from 'node:fs/promises';
@@ -2542,6 +2542,36 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
   );
 
   // --- Pubblico: presentazione domanda (Allegato B art. B.5-B.6) ---
+
+  app.post(
+    '/pubblico/domande/anteprima-fabbisogno',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      if (!clientMotore) {
+        res.status(503).json({ errore: 'motore di calcolo non configurato' });
+        return;
+      }
+      const parsed = schemaAnteprimaFabbisogno.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const risultato = await clientMotore.anteprimaFabbisogno(parsed.data);
+        res.status(200).json(risultato);
+      } catch (err) {
+        if (err instanceof ErroreMotoreIrraggiungibile) {
+          res.status(502).json({ errore: 'motore di calcolo non raggiungibile' });
+          return;
+        }
+        if (err instanceof ErroreMotoreDominio) {
+          res.status(400).json({ errore: err.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
 
   app.post(
     '/pubblico/domande',
