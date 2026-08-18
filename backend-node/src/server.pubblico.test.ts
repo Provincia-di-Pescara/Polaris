@@ -6,6 +6,13 @@ import { creaApp, type DipendenzeApp } from './server.ts';
 import { generaAccessTokenPubblico } from './auth/jwtPubblico.ts';
 import type { ClientMotore } from './engine/client.ts';
 import { ErroreMotoreIrraggiungibile } from './engine/client.ts';
+import { creaDomanda, ammettiDomanda } from './domande.ts';
+import { presentaOsservazione } from './osservazioni.ts';
+import { creaDisciplina } from './discipline.ts';
+import { creaIstituzione } from './istituzioni.ts';
+import { creaImpianto } from './impianti.ts';
+import { creaSpazio } from './spazi.ts';
+import { creaSlot } from './slot.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 process.env.JWT_SECRET ??= 'segreto-di-test-non-usare-in-produzione';
@@ -773,4 +780,88 @@ test('POST /pubblico/domande/anteprima-fabbisogno: motore irraggiungibile, 502',
   await pool.query('DELETE FROM abilitazioni WHERE associazione_id = $1', [associazioneId]);
   await pool.query('DELETE FROM associazioni WHERE id = $1', [associazioneId]);
   await pool.query('DELETE FROM stagioni_sportive WHERE id = $1', [stagioneId]);
+});
+
+// --- GET /pubblico/domande/:id/osservazioni (Task 1, art. B.11) ---
+
+async function creaDomandaAmmessaConOsservazioneTest(
+  pool: Pool,
+): Promise<{ domandaId: string; associazioneId: string; stagioneId: string; titolare: { id: string; token: string } }> {
+  const disciplina = await creaDisciplina(pool, { codice: `OSSPUB-${randomUUID().slice(0, 8)}`, denominazione: 'Pallavolo' });
+  const istituzione = await creaIstituzione(pool, { denominazione: `Istituto oss pub test ${randomUUID()}` });
+  const impianto = await creaImpianto(pool, { denominazione: 'Palestra oss pub test', istituzioneScolasticaId: istituzione.id });
+  const spazio = await creaSpazio(pool, { impiantoId: impianto.id, denominazione: 'Campo A', disciplineCompatibili: [disciplina.codice] });
+  const stagioneId = await creaStagioneTest(pool);
+  const slot = await creaSlot(pool, { stagioneId, spazioId: spazio.id, giornoSettimana: 1, orarioInizio: '18:00', orarioFine: '19:00' });
+  const associazioneId = await creaAssociazioneTest(pool);
+  const titolare = await creaPersonaFisicaTest(pool);
+  await creaAbilitazioneApprovataTest(pool, titolare.id, associazioneId, stagioneId);
+
+  const domanda = await creaDomanda(
+    pool,
+    {
+      associazioneId,
+      stagioneId,
+      disciplineCodici: [disciplina.codice],
+      numeroTesserati: 0,
+      numeroAtletiPartecipanti: 0,
+      numeroSquadre: 0,
+      numeroSquadreFederaliStagionePrecedente: 0,
+      attivitaGiovanile: false,
+      attivitaAgonistica: false,
+      attivitaParalimpicaInclusiva: false,
+      fabbisognoMinimoMinuti: '30.000',
+      fabbisognoOttimaleMinuti: '30.000',
+      preferenze: [slot.id],
+      blocchiAllenamento: [],
+      richiedeGiornataGara: false,
+      richiesteGiornataGara: [],
+    },
+    titolare.id,
+  );
+  await ammettiDomanda(pool, domanda.id);
+  await presentaOsservazione(pool, { domandaId: domanda.id, personaFisicaId: titolare.id, testo: 'non concordo con FR' });
+
+  return { domandaId: domanda.id, associazioneId, stagioneId, titolare };
+}
+
+test('GET /pubblico/domande/:id/osservazioni', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(() => {
+    chiudi();
+    return pool.end();
+  });
+
+  const fx = await creaDomandaAmmessaConOsservazioneTest(pool);
+
+  await t.test('200 per il titolare, array con l\'osservazione di fixture', async () => {
+    const r = await fetch(`${base}/pubblico/domande/${fx.domandaId}/osservazioni`, {
+      headers: { Authorization: `Bearer ${fx.titolare.token}` },
+    });
+    assert.equal(r.status, 200);
+    const body = (await r.json()) as Array<{ testo: string }>;
+    assert.equal(body.length, 1);
+    assert.equal(body[0]?.testo, 'non concordo con FR');
+  });
+
+  await t.test('403 per una persona senza abilitazione attiva su quell\'associazione/stagione', async () => {
+    const estraneo = await creaPersonaFisicaTest(pool);
+    const r = await fetch(`${base}/pubblico/domande/${fx.domandaId}/osservazioni`, {
+      headers: { Authorization: `Bearer ${estraneo.token}` },
+    });
+    assert.equal(r.status, 403);
+  });
+
+  await t.test('404 per un id di domanda inesistente', async () => {
+    const r = await fetch(`${base}/pubblico/domande/${randomUUID()}/osservazioni`, {
+      headers: { Authorization: `Bearer ${fx.titolare.token}` },
+    });
+    assert.equal(r.status, 404);
+  });
+
+  await t.test('senza token: 401', async () => {
+    const r = await fetch(`${base}/pubblico/domande/${fx.domandaId}/osservazioni`);
+    assert.equal(r.status, 401);
+  });
 });

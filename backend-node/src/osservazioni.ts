@@ -126,6 +126,14 @@ export async function trovaOsservazionePerId(db: Db, id: string): Promise<Osserv
   return r.rows[0] ? daRiga(r.rows[0]) : null;
 }
 
+export async function listaOsservazioniPerDomanda(db: Db, domandaId: string): Promise<Osservazione[]> {
+  const r = await db.query<RigaOsservazione>(
+    `SELECT ${COLONNE_SELECT_OSSERVAZIONE} FROM osservazioni_istruttoria WHERE domanda_id = $1 ORDER BY presentata_il`,
+    [domandaId],
+  );
+  return r.rows.map(daRiga);
+}
+
 // Se non restano più osservazioni 'in_esame' per la domanda, il riesame è completo:
 // riesame_stato passa da 'richiesto' a 'deciso' (art. B.11). domande.stato non viene mai
 // toccato (C1). Ritorna true se la transizione è avvenuta davvero in questa chiamata (I6).

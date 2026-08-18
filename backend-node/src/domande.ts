@@ -444,6 +444,7 @@ export async function trovaDomandaConEsitoPerId(db: Db, id: string): Promise<Dom
 export interface EsitoPubblicato {
   domandaId: string;
   associazioneId: string;
+  associazioneDenominazione: string;
   stato: StatoDomanda;
   motivazioneEsclusione: string | null;
   fabbisognoRiconosciuto: EsitoIstruttoria | null;
@@ -454,6 +455,7 @@ export async function elencoEsitiPubblicati(db: Db, stagioneId: string): Promise
   const r = await db.query<{
     id: string;
     associazione_id: string;
+    associazione_denominazione: string;
     stato: StatoDomanda;
     motivazione_esclusione: string | null;
     fr_calcolato_minuti: string | null;
@@ -464,10 +466,11 @@ export async function elencoEsitiPubblicati(db: Db, stagioneId: string): Promise
     csd: string | null;
     cp: string | null;
   }>(
-    `SELECT d.id, d.associazione_id, d.stato, d.motivazione_esclusione,
+    `SELECT d.id, d.associazione_id, a.denominazione AS associazione_denominazione, d.stato, d.motivazione_esclusione,
             fr.fr_calcolato_minuti::text, fr.fd_minuti::text, fr.fr_finale_minuti::text,
             c.crs::text, c.caa::text, c.csd::text, c.cp::text
      FROM domande d
+     JOIN associazioni a ON a.id = d.associazione_id
      LEFT JOIN fabbisogni_riconosciuti fr ON fr.domanda_id = d.id
      LEFT JOIN coefficienti_associazione c ON c.domanda_id = d.id
      WHERE d.stagione_id = $1 AND d.stato <> 'presentata'
@@ -477,6 +480,7 @@ export async function elencoEsitiPubblicati(db: Db, stagioneId: string): Promise
   return r.rows.map((riga) => ({
     domandaId: riga.id,
     associazioneId: riga.associazione_id,
+    associazioneDenominazione: riga.associazione_denominazione,
     stato: riga.stato,
     motivazioneEsclusione: riga.motivazione_esclusione,
     fabbisognoRiconosciuto:

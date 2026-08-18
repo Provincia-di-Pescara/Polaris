@@ -91,7 +91,7 @@ import {
   trovaDomandaConEsitoPerId,
   elencoEsitiPubblicati,
 } from './domande.ts';
-import { presentaOsservazione, trovaOsservazionePerId, accogliOsservazione, respingiOsservazione } from './osservazioni.ts';
+import { presentaOsservazione, trovaOsservazionePerId, listaOsservazioniPerDomanda, accogliOsservazione, respingiOsservazione } from './osservazioni.ts';
 import { pubblicaProposta, trovaPropostaProvvisoria } from './propostaProvvisoria.ts';
 import { trovaPersonaFisicaPerCf, creaPersonaFisicaShell } from './repository/personeFisiche.ts';
 import {
@@ -3280,6 +3280,29 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(400).json({ errore: erroreRiferimento.message });
           return;
         }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/pubblico/domande/:id/osservazioni',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const domandaId = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        const domanda = await trovaDomandaPerId(pool, domandaId);
+        if (!domanda) {
+          res.status(404).json({ errore: 'domanda non trovata' });
+          return;
+        }
+        const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, domanda.associazioneId, domanda.stagioneId);
+        if (!delegante) {
+          res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
+          return;
+        }
+        res.status(200).json(await listaOsservazioniPerDomanda(pool, domandaId));
+      } catch (err) {
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { presentaOsservazione, trovaOsservazionePerId, accogliOsservazione, respingiOsservazione } from './osservazioni.ts';
+import { presentaOsservazione, trovaOsservazionePerId, listaOsservazioniPerDomanda, accogliOsservazione, respingiOsservazione } from './osservazioni.ts';
 import { creaDomanda, ammettiDomanda } from './domande.ts';
 import { creaDisciplina } from './discipline.ts';
 import { creaIstituzione } from './istituzioni.ts';
@@ -248,4 +248,30 @@ test('C1: un\'osservazione su una domanda ammessa non la fa sparire dalla query 
   const riga = await pool.query<{ stato: string; riesame_stato: string }>(`SELECT stato, riesame_stato FROM domande WHERE id = $1`, [domanda.id]);
   assert.equal(riga.rows[0]?.stato, 'ammessa');
   assert.equal(riga.rows[0]?.riesame_stato, 'richiesto');
+});
+
+test('listaOsservazioniPerDomanda restituisce le osservazioni ordinate per presentataIl', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { domanda, personaId } = await creaDomandaFixture(pool);
+  await ammettiDomanda(pool, domanda.id);
+
+  const oss1 = await presentaOsservazione(pool, { domandaId: domanda.id, personaFisicaId: personaId, testo: 'prima' });
+  const oss2 = await presentaOsservazione(pool, { domandaId: domanda.id, personaFisicaId: personaId, testo: 'seconda' });
+
+  const lista = await listaOsservazioniPerDomanda(pool, domanda.id);
+  assert.equal(lista.length, 2);
+  assert.equal(lista[0]?.id, oss1.id);
+  assert.equal(lista[1]?.id, oss2.id);
+  assert.ok(lista[0]!.presentataIl <= lista[1]!.presentataIl);
+});
+
+test('listaOsservazioniPerDomanda restituisce array vuoto per una domanda senza osservazioni', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  t.after(() => pool.end());
+  const { domanda } = await creaDomandaFixture(pool);
+  await ammettiDomanda(pool, domanda.id);
+
+  const lista = await listaOsservazioniPerDomanda(pool, domanda.id);
+  assert.deepEqual(lista, []);
 });

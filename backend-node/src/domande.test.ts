@@ -195,4 +195,10 @@ test('elencoEsitiPubblicati esclude le domande ancora presentata', { skip: dsn ?
   assert.equal(dopoAmmissione.length, 1);
   assert.equal(dopoAmmissione[0]?.stato, 'ammessa');
   assert.equal(dopoAmmissione[0]?.fabbisognoRiconosciuto, null);
+
+  const associazioneRiga = await pool.query<{ denominazione: string }>(
+    `SELECT denominazione FROM associazioni WHERE id = $1`,
+    [fx.associazioneId],
+  );
+  assert.equal(dopoAmmissione[0]?.associazioneDenominazione, associazioneRiga.rows[0]?.denominazione);
 });
