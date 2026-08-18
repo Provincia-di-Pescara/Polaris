@@ -159,3 +159,81 @@ func EseguiIstruttoria(ctx context.Context, pool *pgxpool.Pool, stagioneID strin
 
 	return len(domande), nil
 }
+
+// DatiAnteprimaFabbisogno raccoglie l'input grezzo per un'anteprima FR/coefficienti,
+// prima che la domanda esista davvero (usato dal wizard di presentazione domanda).
+type DatiAnteprimaFabbisogno struct {
+	AssociazioneID        string
+	StagioneID            string
+	ClasseAttivitaCodice  string
+	LivelloCampionato     *string
+	NumeroSquadreFederali int
+	FDMinuti              string
+}
+
+// caricaContestoAnteprima replica la stessa query di caricaDomandeAmmesse (prima_stagione,
+// anni_attivita) ma per una coppia associazione/stagione che non ha ancora una domanda —
+// confronta contro la data_inizio della stagione TARGET, non quella di una domanda esistente.
+func caricaContestoAnteprima(ctx context.Context, pool *pgxpool.Pool, associazioneID, stagioneID string) (anniAttivita decimal.Decimal, primaStagione bool, err error) {
+	var anniAttivitaTxt *string
+	err = pool.QueryRow(ctx, `
+		SELECT
+			CASE WHEN a.data_costituzione IS NULL THEN NULL
+			     ELSE ((s.data_inizio - a.data_costituzione)::numeric / 365.25)::text
+			END,
+			NOT EXISTS (
+				SELECT 1 FROM domande d2
+				JOIN stagioni_sportive s2 ON s2.id = d2.stagione_id
+				WHERE d2.associazione_id = a.id
+				  AND d2.stato = 'ammessa'
+				  AND s2.data_inizio < s.data_inizio
+			)
+		FROM associazioni a, stagioni_sportive s
+		WHERE a.id = $1 AND s.id = $2
+	`, associazioneID, stagioneID).Scan(&anniAttivitaTxt, &primaStagione)
+	if err != nil {
+		return decimal.Decimal{}, false, fmt.Errorf("caricamento contesto anteprima: %w", err)
+	}
+
+	if primaStagione {
+		return decimal.Zero, true, nil
+	}
+	if anniAttivitaTxt == nil {
+		return decimal.Decimal{}, false, fmt.Errorf("associazione senza data_costituzione, impossibile calcolare CAA (non è prima stagione)")
+	}
+	anniAttivita, err = decimalDaTesto(*anniAttivitaTxt)
+	if err != nil {
+		return decimal.Decimal{}, false, err
+	}
+	return anniAttivita, false, nil
+}
+
+// CaricaAnteprimaFabbisogno calcola un'anteprima FR/coefficienti per una domanda non
+// ancora presentata (wizard di compilazione) — stessa formula di EseguiIstruttoria, nessuna
+// scrittura, nessuna persistenza. La versione parametrico usata è sempre quella attiva
+// al momento della chiamata (nessuna cache, l'anteprima deve riflettere il valore corrente).
+func CaricaAnteprimaFabbisogno(ctx context.Context, pool *pgxpool.Pool, dati DatiAnteprimaFabbisogno) (istruttoria.Fabbisogno, istruttoria.Coefficienti, error) {
+	parametrico, err := CaricaParametricoAttivo(ctx, pool)
+	if err != nil {
+		return istruttoria.Fabbisogno{}, istruttoria.Coefficienti{}, err
+	}
+
+	anniAttivita, primaStagione, err := caricaContestoAnteprima(ctx, pool, dati.AssociazioneID, dati.StagioneID)
+	if err != nil {
+		return istruttoria.Fabbisogno{}, istruttoria.Coefficienti{}, err
+	}
+
+	fd, err := decimalDaTesto(dati.FDMinuti)
+	if err != nil {
+		return istruttoria.Fabbisogno{}, istruttoria.Coefficienti{}, err
+	}
+
+	return istruttoria.Calcola(istruttoria.DatiDomanda{
+		ClasseAttivitaCodice:  dati.ClasseAttivitaCodice,
+		LivelloCampionato:     dati.LivelloCampionato,
+		NumeroSquadreFederali: dati.NumeroSquadreFederali,
+		AnniAttivita:          anniAttivita,
+		PrimaStagione:         primaStagione,
+		FDMinuti:              fd,
+	}, parametrico.Istruttoria)
+}

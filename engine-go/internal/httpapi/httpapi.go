@@ -12,6 +12,7 @@ import (
 	"net/http"
 
 	"github.com/provincia/palestre-engine/internal/gara"
+	"github.com/provincia/palestre-engine/internal/istruttoria"
 	"github.com/provincia/palestre-engine/internal/roundrobin"
 )
 
@@ -23,6 +24,7 @@ type Server struct {
 	EseguiRoundRobin            func(ctx context.Context, stagioneID, semeHex string) (roundrobin.Esito, string, error)
 	EseguiRiassegnazioneResidua func(ctx context.Context, stagioneID, semeHex string) (roundrobin.Esito, string, error)
 	GeneraSeme                  func() (string, error)
+	AnteprimaFabbisogno         func(ctx context.Context, dati AnteprimaFabbisognoRequest) (istruttoria.Fabbisogno, istruttoria.Coefficienti, error)
 }
 
 // GeneraSemeCSPRNG implementa il requisito dell'art. B.38: seme casuale generato con
@@ -43,6 +45,7 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("POST /stagioni/{id}/blocchi-gara", s.handleBlocchiGara)
 	mux.HandleFunc("POST /stagioni/{id}/prima-assegnazione", s.handlePrimaAssegnazione)
 	mux.HandleFunc("POST /stagioni/{id}/riassegnazione-residua", s.handleRiassegnazioneResidua)
+	mux.HandleFunc("POST /anteprima-fabbisogno", s.handleAnteprimaFabbisogno)
 	return mux
 }
 
@@ -145,6 +148,42 @@ func (s *Server) handleRiassegnazioneResidua(w http.ResponseWriter, r *http.Requ
 		"elaborazione_id":     elaborazioneID,
 		"numero_assegnazioni": len(esito.Assegnazioni),
 		"round_eseguiti":      esito.RoundEseguiti,
+	})
+}
+
+// AnteprimaFabbisognoRequest è il body JSON del wizard di presentazione domanda —
+// primo endpoint del motore che legge un body invece di soli path param.
+type AnteprimaFabbisognoRequest struct {
+	AssociazioneID        string  `json:"associazione_id"`
+	StagioneID            string  `json:"stagione_id"`
+	ClasseAttivitaCodice  string  `json:"classe_attivita_codice"`
+	LivelloCampionato     *string `json:"livello_campionato"`
+	NumeroSquadreFederali int     `json:"numero_squadre_federali"`
+	FDMinuti              string  `json:"fd_minuti"`
+}
+
+func (s *Server) handleAnteprimaFabbisogno(w http.ResponseWriter, r *http.Request) {
+	var req AnteprimaFabbisognoRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		scriviJSON(w, http.StatusBadRequest, map[string]any{"errore": "corpo della richiesta non valido: " + err.Error()})
+		return
+	}
+
+	fabbisogno, coeff, err := s.AnteprimaFabbisogno(r.Context(), req)
+	if err != nil {
+		scriviErrore(w, err)
+		return
+	}
+
+	scriviJSON(w, http.StatusOK, map[string]any{
+		"peso_base":           fabbisogno.PesoBase,
+		"incremento_squadre":  fabbisogno.IncrementoSquadre,
+		"fr_calcolato_minuti": fabbisogno.FRCalcolato.String(),
+		"fr_finale_minuti":    fabbisogno.FRFinale.String(),
+		"crs":                 coeff.CRS.String(),
+		"caa":                 coeff.CAA.String(),
+		"csd":                 coeff.CSD.String(),
+		"cp":                  coeff.CP.String(),
 	})
 }
 

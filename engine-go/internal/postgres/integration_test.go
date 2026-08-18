@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/provincia/palestre-engine/internal/istruttoria"
 	"github.com/shopspring/decimal"
 )
 
@@ -362,4 +363,121 @@ func TestIntegrazione_RiassegnazioneResidua(t *testing.T) {
 	if numAssegnazioniTotaliFinale != 3 {
 		t.Errorf("assegnazioni attive totali dopo l'estensione = %d, attese 3 (2 originali + 1 nuova)", numAssegnazioniTotaliFinale)
 	}
+}
+
+// TestIntegrazione_AnteprimaFabbisogno verifica CaricaAnteprimaFabbisogno (wizard di
+// presentazione domanda, nessuna domanda persistita) contro Postgres reale, sia per il
+// caso "prima stagione" (nessuna domanda ammessa precedente) sia per il caso con
+// storia pregressa (CAA calcolato, non neutro).
+func TestIntegrazione_AnteprimaFabbisogno(t *testing.T) {
+	pool := connessioneTest(t)
+	ctx := context.Background()
+	sfx := suffissoCasuale(t)
+
+	must := func(query string, args ...any) string {
+		var id string
+		if err := pool.QueryRow(ctx, query+" RETURNING id", args...).Scan(&id); err != nil {
+			t.Fatalf("setup fixture (%s): %v", query, err)
+		}
+		return id
+	}
+
+	stagioneID := must(`INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, $2, $3)`,
+		"2027/2028 - test anteprima "+sfx, "2027-09-01", "2028-06-30")
+	personaID := must(`INSERT INTO persone_fisiche (codice_fiscale, nome, cognome, oidc_subject, oidc_provider) VALUES ($1, 'Test', 'Anteprima', $2, 'spid')`,
+		"TSTANT-"+sfx, "sub-anteprima-"+sfx)
+
+	t.Run("prima stagione", func(t *testing.T) {
+		assocID := must(`INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva, data_costituzione) VALUES ($1, $2, '2020-01-01')`,
+			"ASD Anteprima Nuova "+sfx, "93"+sfx+"001")
+
+		fabbisogno, coeff, err := CaricaAnteprimaFabbisogno(ctx, pool, DatiAnteprimaFabbisogno{
+			AssociazioneID:        assocID,
+			StagioneID:            stagioneID,
+			ClasseAttivitaCodice:  "A",
+			NumeroSquadreFederali: 0,
+			FDMinuti:              "500",
+		})
+		if err != nil {
+			t.Fatalf("CaricaAnteprimaFabbisogno: %v", err)
+		}
+		if fabbisogno.PesoBase != 1 {
+			t.Errorf("PesoBase = %d, atteso 1 (classe A)", fabbisogno.PesoBase)
+		}
+		// stesso scenario (classe A, prima stagione, FD=500) di TestIntegrazione_IstruttoriaERoundRobin:
+		// peso_base=1, incremento neutro=0, moltiplicatore placeholder 60 -> FR calcolato = 60,
+		// FD=500 non è il tetto -> FR finale = 60.
+		if !fabbisogno.FRFinale.Equal(decimal.RequireFromString("60.000")) {
+			t.Errorf("FRFinale = %s, atteso 60.000", fabbisogno.FRFinale)
+		}
+
+		parametrico, err := CaricaParametricoAttivo(ctx, pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !coeff.CAA.Equal(parametrico.Istruttoria.CAANeutro) {
+			t.Errorf("CAA = %s, atteso il valore neutro %s (prima stagione, nessuna domanda ammessa precedente)", coeff.CAA, parametrico.Istruttoria.CAANeutro)
+		}
+	})
+
+	t.Run("non prima stagione", func(t *testing.T) {
+		assocID := must(`INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva, data_costituzione) VALUES ($1, $2, '2010-01-01')`,
+			"ASD Anteprima Storica "+sfx, "93"+sfx+"002")
+		stagionePrecedenteID := must(`INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, $2, $3)`,
+			"2026/2027 - test anteprima precedente "+sfx, "2026-09-01", "2027-06-30")
+		must(`
+			INSERT INTO domande (numero_protocollo, associazione_id, stagione_id, presentata_da_persona_fisica_id,
+				classe_attivita_codice, fabbisogno_minimo_minuti, fabbisogno_ottimale_minuti, stato)
+			VALUES ($1, $2, $3, $4, 'A', 60, 400, 'ammessa')`,
+			"PROT-ANT-"+sfx+"-1", assocID, stagionePrecedenteID, personaID)
+
+		fabbisogno, coeff, err := CaricaAnteprimaFabbisogno(ctx, pool, DatiAnteprimaFabbisogno{
+			AssociazioneID:        assocID,
+			StagioneID:            stagioneID,
+			ClasseAttivitaCodice:  "A",
+			NumeroSquadreFederali: 2,
+			FDMinuti:              "500",
+		})
+		if err != nil {
+			t.Fatalf("CaricaAnteprimaFabbisogno: %v", err)
+		}
+
+		// Verifica indipendente: stesso calcolo via istruttoria.Calcola con anni_attivita letto
+		// direttamente dal DB (stessa formula di caricaContestoAnteprima) — valida che la query
+		// SQL produca il contesto corretto, non solo che la formula pura funzioni (già coperta
+		// dai test unitari di internal/istruttoria).
+		var anniAttivitaTxt string
+		if err := pool.QueryRow(ctx, `
+			SELECT ((s.data_inizio - a.data_costituzione)::numeric / 365.25)::text
+			FROM associazioni a, stagioni_sportive s WHERE a.id = $1 AND s.id = $2`,
+			assocID, stagioneID).Scan(&anniAttivitaTxt); err != nil {
+			t.Fatalf("lettura anni_attivita di controllo: %v", err)
+		}
+		anniAttivita := decimal.RequireFromString(anniAttivitaTxt)
+
+		parametrico, err := CaricaParametricoAttivo(ctx, pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		atteso, coeffAtteso, err := istruttoria.Calcola(istruttoria.DatiDomanda{
+			ClasseAttivitaCodice:  "A",
+			NumeroSquadreFederali: 2,
+			AnniAttivita:          anniAttivita,
+			PrimaStagione:         false,
+			FDMinuti:              decimal.RequireFromString("500"),
+		}, parametrico.Istruttoria)
+		if err != nil {
+			t.Fatalf("calcolo atteso: %v", err)
+		}
+
+		if fabbisogno.PesoBase != atteso.PesoBase || fabbisogno.IncrementoSquadre != atteso.IncrementoSquadre || !fabbisogno.FRFinale.Equal(atteso.FRFinale) {
+			t.Errorf("Fabbisogno = %+v, atteso %+v", fabbisogno, atteso)
+		}
+		if !coeff.CAA.Equal(coeffAtteso.CAA) || !coeff.CRS.Equal(coeffAtteso.CRS) || !coeff.CSD.Equal(coeffAtteso.CSD) || !coeff.CP.Equal(coeffAtteso.CP) {
+			t.Errorf("Coefficienti = %+v, atteso %+v", coeff, coeffAtteso)
+		}
+		if coeff.CAA.Equal(parametrico.Istruttoria.CAANeutro) {
+			t.Error("CAA = valore neutro, atteso un valore calcolato (non prima stagione, con storia pregressa)")
+		}
+	})
 }

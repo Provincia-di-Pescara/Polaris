@@ -13,6 +13,7 @@ import (
 
 	"github.com/provincia/palestre-engine/internal/gara"
 	"github.com/provincia/palestre-engine/internal/httpapi"
+	"github.com/provincia/palestre-engine/internal/istruttoria"
 	"github.com/provincia/palestre-engine/internal/postgres"
 	"github.com/provincia/palestre-engine/internal/roundrobin"
 )
@@ -48,6 +49,16 @@ func main() {
 		},
 		EseguiRiassegnazioneResidua: func(ctx context.Context, stagioneID, semeHex string) (roundrobin.Esito, string, error) {
 			return postgres.EseguiRiassegnazioneResidua(ctx, pool, stagioneID, semeHex)
+		},
+		AnteprimaFabbisogno: func(ctx context.Context, dati httpapi.AnteprimaFabbisognoRequest) (istruttoria.Fabbisogno, istruttoria.Coefficienti, error) {
+			return postgres.CaricaAnteprimaFabbisogno(ctx, pool, postgres.DatiAnteprimaFabbisogno{
+				AssociazioneID:        dati.AssociazioneID,
+				StagioneID:            dati.StagioneID,
+				ClasseAttivitaCodice:  dati.ClasseAttivitaCodice,
+				LivelloCampionato:     dati.LivelloCampionato,
+				NumeroSquadreFederali: dati.NumeroSquadreFederali,
+				FDMinuti:              dati.FDMinuti,
+			})
 		},
 	}
 

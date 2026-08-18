@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/provincia/palestre-engine/internal/istruttoria"
 	"github.com/provincia/palestre-engine/internal/roundrobin"
+	"github.com/shopspring/decimal"
 )
 
 func TestHealthz(t *testing.T) {
@@ -189,6 +191,52 @@ func TestRiassegnazioneResidua_ErroreGenerazioneSeme(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, atteso 500", rec.Code)
+	}
+}
+
+func TestAnteprimaFabbisogno_Successo(t *testing.T) {
+	var richiestaRicevuta AnteprimaFabbisognoRequest
+	s := &Server{
+		AnteprimaFabbisogno: func(ctx context.Context, dati AnteprimaFabbisognoRequest) (istruttoria.Fabbisogno, istruttoria.Coefficienti, error) {
+			richiestaRicevuta = dati
+			return istruttoria.Fabbisogno{PesoBase: 2, IncrementoSquadre: 1, FRCalcolato: decimal.NewFromInt(180), FRFinale: decimal.NewFromInt(180)},
+				istruttoria.Coefficienti{CRS: decimal.NewFromFloat(1.1), CAA: decimal.NewFromInt(1), CSD: decimal.NewFromInt(1), CP: decimal.NewFromFloat(1.1)},
+				nil
+		},
+	}
+
+	corpo := `{"associazione_id":"ass-1","stagione_id":"stag-1","classe_attivita_codice":"B","numero_squadre_federali":3,"fd_minuti":"200"}`
+	req := httptest.NewRequest(http.MethodPost, "/anteprima-fabbisogno", strings.NewReader(corpo))
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, atteso 200, body: %s", rec.Code, rec.Body.String())
+	}
+	if richiestaRicevuta.AssociazioneID != "ass-1" || richiestaRicevuta.ClasseAttivitaCodice != "B" {
+		t.Errorf("richiesta non deserializzata correttamente: %+v", richiestaRicevuta)
+	}
+
+	var body struct {
+		FRFinaleMinuti string `json:"fr_finale_minuti"`
+		CRS            string `json:"crs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal risposta: %v", err)
+	}
+	if body.FRFinaleMinuti != "180" {
+		t.Errorf("fr_finale_minuti = %s, atteso 180", body.FRFinaleMinuti)
+	}
+}
+
+func TestAnteprimaFabbisogno_CorpoMalformato(t *testing.T) {
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodPost, "/anteprima-fabbisogno", strings.NewReader("{non è json"))
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, atteso 400", rec.Code)
 	}
 }
 
