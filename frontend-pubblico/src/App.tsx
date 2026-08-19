@@ -86,7 +86,9 @@ const AppAutenticata: React.FC = () => {
         {activeTab === 'domanda-wizard' && (
           <WizardDomandaView entities={entities} stagioneId={stagioneId} activeEntity={activeEntity} />
         )}
-        {activeTab === 'esiti-isf' && <EsitiIsfView />}
+        {activeTab === 'esiti-isf' && (
+          <EsitiIsfView entities={entities} stagioneId={stagioneId} activeEntity={activeEntity} />
+        )}
         {activeTab === 'concertazione' && <ConcertazioneView />}
         {activeTab === 'calendario-definitivo' && <CalendarioDefinitivoView />}
       </main>
