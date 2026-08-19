@@ -25,6 +25,15 @@ const ETICHETTA_TIPO: Record<AssegnazioneLettura['tipo'], string> = {
   blocco_allenamento: 'Assegnato Blocco Allenamento',
 };
 
+// Etichette usate sia nel badge della sezione "La mia domanda" sia nel
+// tabellone: la stessa domanda non deve apparire "Esclusa" in un punto e
+// "esclusa" in un altro.
+const ETICHETTA_STATO_DOMANDA: Record<Domanda['stato'], string> = {
+  presentata: 'Presentata',
+  ammessa: 'Ammessa',
+  esclusa: 'Esclusa',
+};
+
 const ETICHETTA_STATO_OSSERVAZIONE: Record<Osservazione['stato'], string> = {
   in_esame: 'In esame',
   accolta: 'Accolta',
@@ -78,6 +87,11 @@ export const EsitiIsfView: React.FC<EsitiIsfProps> = ({ entities, stagioneId, ac
 
   const [assegnazioni, setAssegnazioni] = useState<AssegnazioneLettura[]>([]);
   const [erroreAssegnazioni, setErroreAssegnazioni] = useState<string | null>(null);
+  // `assegnazioni` vale `[]` in tre casi indistinguibili tra loro (nessuno slot
+  // assegnato / fetch non ancora risolta / fetch fallita): senza questo flag il
+  // VA verrebbe mostrato come 0 e l'ISF come 0,000 (0,0%) anche quando il dato
+  // semplicemente non è noto — un numero inventato, non un dato mancante.
+  const [assegnazioniCaricate, setAssegnazioniCaricate] = useState<boolean>(false);
 
   const [osservazioni, setOsservazioni] = useState<Osservazione[]>([]);
   const [erroreOsservazioni, setErroreOsservazioni] = useState<string | null>(null);
@@ -140,17 +154,26 @@ export const EsitiIsfView: React.FC<EsitiIsfProps> = ({ entities, stagioneId, ac
     let annullato = false;
     if (!associazioneId || !stagioneId || !domandaIstruita) {
       setAssegnazioni([]);
+      // L'errore va azzerato insieme ai dati: senza questa riga, tornando su
+      // una stagione la cui domanda è ancora 'presentata' resterebbe visibile
+      // il messaggio d'errore di una stagione precedente.
+      setErroreAssegnazioni(null);
+      setAssegnazioniCaricate(false);
       return;
     }
+    setAssegnazioniCaricate(false);
     listaAssegnazioni(associazioneId, stagioneId)
       .then((lista) => {
         if (annullato) return;
         setAssegnazioni(lista);
         setErroreAssegnazioni(null);
+        setAssegnazioniCaricate(true);
       })
       .catch((err) => {
         if (annullato) return;
         setAssegnazioni([]);
+        // Resta `false`: una lista vuota per errore non è un VA pari a zero.
+        setAssegnazioniCaricate(false);
         setErroreAssegnazioni(messaggioErrore(err, 'Elenco slot assegnati non disponibile'));
       });
     return () => {
@@ -159,6 +182,14 @@ export const EsitiIsfView: React.FC<EsitiIsfProps> = ({ entities, stagioneId, ac
   }, [associazioneId, stagioneId, domandaIstruita]);
 
   const domandaId = domanda?.id ?? null;
+  // Osservabile solo una domanda esclusa/motivata il cui riesame non è già
+  // stato deciso (art. B.11): fuori da questo caso la sezione non viene
+  // renderizzata, quindi la lista non va nemmeno letta.
+  const mostraOsservazioni =
+    domanda !== null &&
+    (domanda.stato === 'esclusa' || domanda.motivazioneEsclusione !== null) &&
+    domanda.riesameStato !== 'deciso';
+
   const caricaOsservazioni = useCallback((estaAnnullato: () => boolean): void => {
     if (!domandaId) return;
     listaOsservazioni(domandaId)
@@ -175,8 +206,9 @@ export const EsitiIsfView: React.FC<EsitiIsfProps> = ({ entities, stagioneId, ac
   }, [domandaId]);
 
   useEffect(() => {
-    if (!domandaId) {
+    if (!domandaId || !mostraOsservazioni) {
       setOsservazioni([]);
+      setErroreOsservazioni(null);
       return;
     }
     let annullato = false;
@@ -184,7 +216,7 @@ export const EsitiIsfView: React.FC<EsitiIsfProps> = ({ entities, stagioneId, ac
     return () => {
       annullato = true;
     };
-  }, [domandaId, caricaOsservazioni]);
+  }, [domandaId, mostraOsservazioni, caricaOsservazioni]);
 
   if (!stagioneId) {
     return (
@@ -212,14 +244,17 @@ export const EsitiIsfView: React.FC<EsitiIsfProps> = ({ entities, stagioneId, ac
   // mai reinviati al backend, mai usati per validare o bloccare qualcosa.
   // Il backend restituisce già solo le assegnazioni 'provvisoria'/'validata'
   // (assegnazioniLettura.ts), quindi la somma è direttamente il VA attivo.
-  const valoreAssegnatoMinuti = assegnazioni.reduce((tot, a) => tot + Number(a.valoreMinuti), 0);
+  // `null` finché le assegnazioni non sono state lette con successo: il VA non
+  // è noto, e mostrarlo come 0 sarebbe un dato fabbricato.
+  const valoreAssegnatoMinuti = assegnazioniCaricate
+    ? assegnazioni.reduce((tot, a) => tot + Number(a.valoreMinuti), 0)
+    : null;
   const frNumerico = frFinaleMinuti === null ? Number.NaN : Number(frFinaleMinuti);
-  const isf = Number.isFinite(frNumerico) && frNumerico > 0 ? valoreAssegnatoMinuti / frNumerico : null;
-
-  const mostraOsservazioni =
-    domanda !== null &&
-    (domanda.stato === 'esclusa' || domanda.motivazioneEsclusione !== null) &&
-    domanda.riesameStato !== 'deciso';
+  const isf =
+    valoreAssegnatoMinuti !== null && Number.isFinite(frNumerico) && frNumerico > 0
+      ? valoreAssegnatoMinuti / frNumerico
+      : null;
+  const isfFormattato = isf === null ? '—' : `${isf.toFixed(3)} (${(isf * 100).toFixed(1)}%)`;
 
   const inviaOsservazione = async (): Promise<void> => {
     if (!domanda) return;
@@ -268,7 +303,7 @@ export const EsitiIsfView: React.FC<EsitiIsfProps> = ({ entities, stagioneId, ac
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
               <span>Protocollo <strong>{domanda.numeroProtocollo}</strong></span>
               <span className={domanda.stato === 'ammessa' ? 'badge badge-success' : 'badge badge-danger'}>
-                {domanda.stato === 'ammessa' ? 'Ammessa' : 'Esclusa'}
+                {ETICHETTA_STATO_DOMANDA[domanda.stato]}
               </span>
               {domanda.riesameStato !== 'nessuno' && (
                 <span className="badge badge-warning">
@@ -306,18 +341,20 @@ export const EsitiIsfView: React.FC<EsitiIsfProps> = ({ entities, stagioneId, ac
 
                 <div className="pa-card">
                   <div style={STILE_KPI_LABEL}>Punteggio ISF</div>
-                  <div style={{ ...STILE_KPI_VALORE, color: '#8E44AD' }}>
-                    {isf === null ? '—' : `${isf.toFixed(3)} (${(isf * 100).toFixed(1)}%)`}
-                  </div>
+                  <div style={{ ...STILE_KPI_VALORE, color: '#8E44AD' }}>{isfFormattato}</div>
                   <div style={STILE_KPI_NOTA}>
-                    ISF = VA / FR = {valoreAssegnatoMinuti} / {esitoProprio.fabbisognoRiconosciuto.frFinaleMinuti}
+                    {valoreAssegnatoMinuti === null
+                      ? 'ISF = VA / FR — valore assegnato non ancora disponibile'
+                      : `ISF = VA / FR = ${valoreAssegnatoMinuti} / ${esitoProprio.fabbisognoRiconosciuto.frFinaleMinuti}`}
                   </div>
                 </div>
 
                 <div className="pa-card">
                   <div style={STILE_KPI_LABEL}>Slot Assegnati</div>
                   <div style={{ ...STILE_KPI_VALORE, color: 'var(--pa-success)' }}>
-                    {assegnazioni.length} slot ({valoreAssegnatoMinuti} min)
+                    {valoreAssegnatoMinuti === null
+                      ? '—'
+                      : `${assegnazioni.length} slot (${valoreAssegnatoMinuti} min)`}
                   </div>
                   <div style={STILE_KPI_NOTA}>Valore assegnato (VA) ponderato per fascia</div>
                 </div>
@@ -327,7 +364,11 @@ export const EsitiIsfView: React.FC<EsitiIsfProps> = ({ entities, stagioneId, ac
             {erroreAssegnazioni && <div style={STILE_ERRORE}>{erroreAssegnazioni}</div>}
 
             <h4 style={{ fontSize: '1rem', color: 'var(--pa-blue-dark)', margin: 0 }}>Slot assegnati</h4>
-            {assegnazioni.length === 0 ? (
+            {!assegnazioniCaricate ? (
+              // Distinto da "Nessuno slot assegnato": qui il dato non è noto,
+              // non è noto-e-vuoto (in errore parla il banner qui sopra).
+              erroreAssegnazioni ? null : <div>Caricamento slot assegnati…</div>
+            ) : assegnazioni.length === 0 ? (
               <div>Nessuno slot assegnato.</div>
             ) : (
               <div className="pa-table-container">
@@ -485,11 +526,13 @@ export const EsitiIsfView: React.FC<EsitiIsfProps> = ({ entities, stagioneId, ac
                                 : 'badge badge-neutral'
                           }
                         >
-                          {e.stato}
+                          {ETICHETTA_STATO_DOMANDA[e.stato]}
                         </span>
                       </td>
                       <td>{e.fabbisognoRiconosciuto?.frFinaleMinuti ?? '—'}</td>
-                      <td>{propria && isf !== null ? `${isf.toFixed(3)} (${(isf * 100).toFixed(1)}%)` : '—'}</td>
+                      {/* Riga propria: ISF solo se il VA è effettivamente noto.
+                          Righe altrui: mai — il VA altrui non è leggibile. */}
+                      <td>{propria ? isfFormattato : '—'}</td>
                     </tr>
                   );
                 })}

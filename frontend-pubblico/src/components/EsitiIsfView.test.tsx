@@ -150,7 +150,53 @@ describe('EsitiIsfView', () => {
 
     expect(await screen.findByText(/in attesa di calcolo coefficienti/i)).toBeInTheDocument();
     expect(screen.queryByText(/punteggio isf/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/nessuno slot assegnato/i)).toBeInTheDocument();
+    expect(await screen.findByText(/nessuno slot assegnato/i)).toBeInTheDocument();
+  });
+
+  it('assegnazioni non ancora risolte: ISF "—", mai 0,000 (0,0%)', async () => {
+    vi.spyOn(domandeApi, 'listaDomandePerAssociazione').mockResolvedValue([DOMANDA_AMMESSA]);
+    vi.spyOn(domandeApi, 'elencoEsitiPubblicati').mockResolvedValue([ESITO_PROPRIO]);
+    // Promise che non si risolve mai: fotografa lo stato intermedio.
+    vi.spyOn(assegnazioniApi, 'listaAssegnazioni').mockReturnValue(new Promise(() => {}));
+    renderView();
+
+    // KPI dipendenti dal solo esito presenti, KPI dipendenti dal VA in attesa.
+    expect(await screen.findByText('420.000 minuti')).toBeInTheDocument();
+    expect(screen.queryByText(/0\.000 \(0\.0%\)/)).not.toBeInTheDocument();
+    expect(screen.getByText(/valore assegnato non ancora disponibile/i)).toBeInTheDocument();
+    expect(screen.getByText(/caricamento slot assegnati/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nessuno slot assegnato/i)).not.toBeInTheDocument();
+  });
+
+  it('assegnazioni in errore: banner di errore e ISF "—", nessun VA fabbricato a 0', async () => {
+    vi.spyOn(domandeApi, 'listaDomandePerAssociazione').mockResolvedValue([DOMANDA_AMMESSA]);
+    vi.spyOn(domandeApi, 'elencoEsitiPubblicati').mockResolvedValue([ESITO_PROPRIO]);
+    vi.spyOn(assegnazioniApi, 'listaAssegnazioni').mockRejectedValue(new ErroreRichiestaApi(500, 'boom'));
+    renderView();
+
+    expect(await screen.findByText(/elenco slot assegnati non disponibile: boom/i)).toBeInTheDocument();
+    expect(screen.queryByText(/0\.000 \(0\.0%\)/)).not.toBeInTheDocument();
+    // Contraddittorio mostrare "nessuno slot assegnato" accanto a un errore
+    // che dice che la lista non è leggibile.
+    expect(screen.queryByText(/nessuno slot assegnato/i)).not.toBeInTheDocument();
+    const rigaPropria = screen.getByText('La tua associazione').closest('tr')!;
+    expect(within(rigaPropria).getByText('—')).toBeInTheDocument();
+  });
+
+  it('cambio stagione verso una domanda non istruita: l\'errore assegnazioni precedente non resta appeso', async () => {
+    vi.spyOn(domandeApi, 'listaDomandePerAssociazione').mockImplementation(async (_ass, stagione) =>
+      stagione === 'st1' ? [DOMANDA_AMMESSA] : [{ ...DOMANDA_PRESENTATA, stagioneId: 'st2' }],
+    );
+    vi.spyOn(domandeApi, 'elencoEsitiPubblicati').mockResolvedValue([ESITO_PROPRIO]);
+    vi.spyOn(assegnazioniApi, 'listaAssegnazioni').mockRejectedValue(new ErroreRichiestaApi(500, 'boom'));
+
+    const { rerender } = renderView();
+    expect(await screen.findByText(/elenco slot assegnati non disponibile: boom/i)).toBeInTheDocument();
+
+    rerender(<EsitiIsfView entities={[ENTITA]} stagioneId="st2" activeEntity={ENTITA} />);
+
+    expect(await screen.findByText(/esito istruttoria non ancora pubblicato/i)).toBeInTheDocument();
+    expect(screen.queryByText(/elenco slot assegnati non disponibile/i)).not.toBeInTheDocument();
   });
 
   it('domanda esclusa: motivazione, form osservazione, invio e ricarica della lista', async () => {
