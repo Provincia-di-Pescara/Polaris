@@ -865,3 +865,92 @@ test('GET /pubblico/domande/:id/osservazioni', { skip: dsn ? false : 'TEST_DATAB
     assert.equal(r.status, 401);
   });
 });
+
+// --- GET /pubblico/associazioni/:associazioneId/assegnazioni (Task 2) ---
+
+async function creaAssegnazioneFixtureTest(
+  pool: Pool,
+): Promise<{ associazioneId: string; stagioneId: string; assegnazioneId: string; titolare: { id: string; token: string } }> {
+  const disciplina = await creaDisciplina(pool, { codice: `ASSPUB-${randomUUID().slice(0, 8)}`, denominazione: 'Pallavolo' });
+  const istituzione = await creaIstituzione(pool, { denominazione: `Istituto ass pub test ${randomUUID()}` });
+  const impianto = await creaImpianto(pool, { denominazione: 'Palestra ass pub test', istituzioneScolasticaId: istituzione.id });
+  const spazio = await creaSpazio(pool, { impiantoId: impianto.id, denominazione: 'Campo A', disciplineCompatibili: [disciplina.codice] });
+  const stagioneId = await creaStagioneTest(pool);
+  const slot = await creaSlot(pool, { stagioneId, spazioId: spazio.id, giornoSettimana: 1, orarioInizio: '18:00', orarioFine: '19:00' });
+  const associazioneId = await creaAssociazioneTest(pool);
+  const titolare = await creaPersonaFisicaTest(pool);
+  await creaAbilitazioneApprovataTest(pool, titolare.id, associazioneId, stagioneId);
+
+  const domanda = await creaDomanda(
+    pool,
+    {
+      associazioneId,
+      stagioneId,
+      disciplineCodici: [disciplina.codice],
+      numeroTesserati: 0,
+      numeroAtletiPartecipanti: 0,
+      numeroSquadre: 0,
+      numeroSquadreFederaliStagionePrecedente: 0,
+      attivitaGiovanile: false,
+      attivitaAgonistica: false,
+      attivitaParalimpicaInclusiva: false,
+      fabbisognoMinimoMinuti: '30.000',
+      fabbisognoOttimaleMinuti: '30.000',
+      preferenze: [slot.id],
+      blocchiAllenamento: [],
+      richiedeGiornataGara: false,
+      richiesteGiornataGara: [],
+    },
+    titolare.id,
+  );
+
+  const assegnazione = await pool.query<{ id: string }>(
+    `INSERT INTO assegnazioni (slot_id, domanda_id, associazione_id, tipo, valore_minuti, stato)
+     VALUES ($1, $2, $3, 'singola', 60.000, 'provvisoria') RETURNING id`,
+    [slot.id, domanda.id, associazioneId],
+  );
+
+  return { associazioneId, stagioneId, assegnazioneId: assegnazione.rows[0]!.id, titolare };
+}
+
+test('GET /pubblico/associazioni/:associazioneId/assegnazioni', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
+  const pool = new Pool({ connectionString: dsn });
+  const { base, chiudi } = await avviaServerTest(pool);
+  t.after(() => {
+    chiudi();
+    return pool.end();
+  });
+
+  const fx = await creaAssegnazioneFixtureTest(pool);
+
+  await t.test('200 per il titolare, array con l\'assegnazione di fixture', async () => {
+    const r = await fetch(`${base}/pubblico/associazioni/${fx.associazioneId}/assegnazioni?stagioneId=${fx.stagioneId}`, {
+      headers: { Authorization: `Bearer ${fx.titolare.token}` },
+    });
+    assert.equal(r.status, 200);
+    const body = (await r.json()) as Array<{ id: string; valoreMinuti: string }>;
+    assert.equal(body.length, 1);
+    assert.equal(body[0]?.id, fx.assegnazioneId);
+    assert.equal(body[0]?.valoreMinuti, '60.000');
+  });
+
+  await t.test('403 per una persona senza abilitazione attiva su quell\'associazione/stagione', async () => {
+    const estraneo = await creaPersonaFisicaTest(pool);
+    const r = await fetch(`${base}/pubblico/associazioni/${fx.associazioneId}/assegnazioni?stagioneId=${fx.stagioneId}`, {
+      headers: { Authorization: `Bearer ${estraneo.token}` },
+    });
+    assert.equal(r.status, 403);
+  });
+
+  await t.test('senza stagioneId: 400', async () => {
+    const r = await fetch(`${base}/pubblico/associazioni/${fx.associazioneId}/assegnazioni`, {
+      headers: { Authorization: `Bearer ${fx.titolare.token}` },
+    });
+    assert.equal(r.status, 400);
+  });
+
+  await t.test('senza token: 401', async () => {
+    const r = await fetch(`${base}/pubblico/associazioni/${fx.associazioneId}/assegnazioni?stagioneId=${fx.stagioneId}`);
+    assert.equal(r.status, 401);
+  });
+});

@@ -92,6 +92,7 @@ import {
   elencoEsitiPubblicati,
 } from './domande.ts';
 import { presentaOsservazione, trovaOsservazionePerId, listaOsservazioniPerDomanda, accogliOsservazione, respingiOsservazione } from './osservazioni.ts';
+import { listaAssegnazioniPerAssociazione } from './assegnazioniLettura.ts';
 import { pubblicaProposta, trovaPropostaProvvisoria } from './propostaProvvisoria.ts';
 import { trovaPersonaFisicaPerCf, creaPersonaFisicaShell } from './repository/personeFisiche.ts';
 import {
@@ -2646,6 +2647,34 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           return;
         }
         res.status(200).json(await listaDomandePerAssociazione(pool, associazioneId, stagioneId));
+      } catch (err) {
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/pubblico/associazioni/:associazioneId/assegnazioni',
+    richiedeAutenticazionePubblico,
+    async (req: RequestAutenticataPubblico, res) => {
+      const associazioneId = typeof req.params.associazioneId === 'string' ? req.params.associazioneId : '';
+      const stagioneId = typeof req.query.stagioneId === 'string' ? req.query.stagioneId : '';
+      if (!stagioneId) {
+        res.status(400).json({ errore: 'stagioneId obbligatorio' });
+        return;
+      }
+      try {
+        const delegante = await trovaAbilitazioneAttiva(pool, req.persona!.sub, associazioneId, stagioneId);
+        if (!delegante) {
+          res.status(403).json({ errore: 'nessuna abilitazione attiva propria su questa associazione per questa stagione' });
+          return;
+        }
+        res.status(200).json(await listaAssegnazioniPerAssociazione(pool, associazioneId, stagioneId));
       } catch (err) {
         const erroreRiferimento = comeErroreRiferimentoNonValido(err);
         if (erroreRiferimento) {
