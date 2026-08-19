@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Info, Send } from 'lucide-react';
 import type { EntitaRappresentata } from '../api/deleghe.ts';
 import {
@@ -190,16 +190,27 @@ export const EsitiIsfView: React.FC<EsitiIsfProps> = ({ entities, stagioneId, ac
     (domanda.stato === 'esclusa' || domanda.motivazioneEsclusione !== null) &&
     domanda.riesameStato !== 'deciso';
 
+  // Due chiamate indipendenti possono ricaricare le osservazioni: l'effect al
+  // mount/cambio domanda e inviaOsservazione dopo un invio riuscito. `estaAnnullato`
+  // da solo protegge solo la prima (cleanup dell'effect), non la seconda: se la
+  // fetch dell'effect (in volo da più tempo) risolve DOPO quella innescata da
+  // inviaOsservazione, sovrascriverebbe silenziosamente la lista appena aggiornata
+  // con un risultato ormai superato. Un contatore di richiesta più recente (stesso
+  // pattern "risposte fuori ordine" già in AuditSorteggioView/StatisticheView)
+  // scarta ogni risposta che non è più quella dell'ultima richiesta emessa.
+  const richiestaOsservazioniIdRef = useRef(0);
+
   const caricaOsservazioni = useCallback((estaAnnullato: () => boolean): void => {
     if (!domandaId) return;
+    const idRichiesta = ++richiestaOsservazioniIdRef.current;
     listaOsservazioni(domandaId)
       .then((lista) => {
-        if (estaAnnullato()) return;
+        if (estaAnnullato() || idRichiesta !== richiestaOsservazioniIdRef.current) return;
         setOsservazioni(lista);
         setErroreOsservazioni(null);
       })
       .catch((err) => {
-        if (estaAnnullato()) return;
+        if (estaAnnullato() || idRichiesta !== richiestaOsservazioniIdRef.current) return;
         setOsservazioni([]);
         setErroreOsservazioni(messaggioErrore(err, 'Elenco osservazioni non disponibile'));
       });
