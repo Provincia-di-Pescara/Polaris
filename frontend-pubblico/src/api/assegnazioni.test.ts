@@ -6,7 +6,8 @@ import { avviaBackendReale, type BackendReale } from '../testUtil/backendReale.t
 import { creaPersonaTest, type PersonaTest } from '../testUtil/creaPersonaTest.ts';
 import { impostaTokens, rimuoviTokens, ErroreRichiestaApi } from './client.ts';
 import { creaAssociazione } from './associazioni.ts';
-import { creaDomanda, listaDomandePerAssociazione, anteprimaFabbisogno, elencoEsitiPubblicati } from './domande.ts';
+import { listaAssegnazioni } from './assegnazioni.ts';
+import { creaDomanda } from './domande.ts';
 
 class StorageLocaleFinta implements Storage {
   private mappa = new Map<string, string>();
@@ -70,8 +71,6 @@ async function creaStagioneTest(pool: Pool): Promise<string> {
 }
 
 async function creaSlotTest(pool: Pool, stagioneId: string): Promise<string> {
-  // Crea uno spazio e uno slot settimana tipo di test.
-  // Necessario perché la schema di creaDomanda richiede almeno 1 slot UUID in preferenze.
   const impiantoRes = await pool.query<{ id: string }>(
     `INSERT INTO impianti (denominazione) VALUES ($1) RETURNING id`,
     [`Impianto Test ${randomUUID().slice(0, 8)}`],
@@ -91,7 +90,7 @@ async function creaSlotTest(pool: Pool, stagioneId: string): Promise<string> {
   return slotRes.rows[0]!.id;
 }
 
-descrivi('domande.ts', () => {
+descrivi('assegnazioni.ts', () => {
   let backend: BackendReale;
   let pool: Pool;
   const personeCreate: PersonaTest[] = [];
@@ -109,8 +108,7 @@ descrivi('domande.ts', () => {
   afterAll(async () => {
     rimuoviTokens();
     await backend.chiudi();
-    // Ripulitura: associazioni_documenti, log_operazioni, domande e correlate,
-    // abilitazioni, associazioni, infine persone_fisiche, slot, spazi, impianti.
+    // Ripulitura: assegnazioni, domande e correlate, abilitazioni, associazioni, persone
     if (associazioniCreate.length > 0) {
       const personeDaAbilitazioni = (
         await pool.query<{ persona_fisica_id: string }>(
@@ -121,9 +119,9 @@ descrivi('domande.ts', () => {
       await pool.query('DELETE FROM associazioni_documenti WHERE associazione_id = ANY($1::uuid[])', [
         associazioniCreate,
       ]);
-      // Le domande hanno FK non-cascading dalla tabella domande.
       // Cancella preferenze PRIMA di cancellare i slot (FK constraint)
       await pool.query('DELETE FROM preferenze WHERE domanda_id IN (SELECT id FROM domande WHERE associazione_id = ANY($1::uuid[]))', [associazioniCreate]);
+      await pool.query('DELETE FROM assegnazioni WHERE associazione_id = ANY($1::uuid[])', [associazioniCreate]);
       await pool.query('DELETE FROM richieste_giornata_gara WHERE domanda_id IN (SELECT id FROM domande WHERE associazione_id = ANY($1::uuid[]))', [associazioniCreate]);
       await pool.query('DELETE FROM blocco_allenamento_slot WHERE blocco_id IN (SELECT id FROM blocchi_allenamento_richiesti WHERE domanda_id IN (SELECT id FROM domande WHERE associazione_id = ANY($1::uuid[])))', [associazioniCreate]);
       await pool.query('DELETE FROM blocchi_allenamento_richiesti WHERE domanda_id IN (SELECT id FROM domande WHERE associazione_id = ANY($1::uuid[]))', [associazioniCreate]);
@@ -143,11 +141,7 @@ descrivi('domande.ts', () => {
       }
     }
     // Nota: pulizia slot/spazi/impianti saltata intenzionalmente quando i test corrono in parallelo
-    // per evitare race condition (un test potrebbe usare i slot mentre un altro li elimina).
-    // La pulizia completa avviene nel test database tra suite di test separate.
-    // Stagioni e discipline create nei test: rimosse ora che slot/domande che le
-    // referenziano sono già stati eliminati sopra (stesso ordine FK-safe di
-    // App.domanda.realBackend.test.tsx).
+    // per evitare race condition.
     if (disciplineCreate.length > 0) {
       await pool.query('DELETE FROM discipline_sportive WHERE codice = ANY($1::text[])', [disciplineCreate]);
     }
@@ -163,7 +157,7 @@ descrivi('domande.ts', () => {
     await pool.end();
   });
 
-  it('creaDomanda crea una nuova domanda con i dati forniti', async () => {
+  it('listaAssegnazioni restituisce assegnazioni per una associazione in una stagione', async () => {
     const persona = await creaPersonaTest(dsn!);
     personeCreate.push(persona);
     impostaTokens(persona.accessToken, persona.refreshToken);
@@ -175,207 +169,22 @@ descrivi('domande.ts', () => {
     // Crea una disciplina di test
     const disciplinaCodice = `DISC${randomUUID().slice(0, 6).toUpperCase()}`;
     await pool.query(
-      `INSERT INTO discipline_sportive (codice, denominazione) VALUES ($1, 'Disciplina Test')`,
+      `INSERT INTO discipline_sportive (codice, denominazione) VALUES ($1, 'Disciplina Test Assegnazioni')`,
       [disciplinaCodice],
     );
     disciplineCreate.push(disciplinaCodice);
 
     const suffisso = randomUUID().slice(0, 8);
     const associazione = await creaAssociazione({
-      denominazione: `ASD Domanda Test ${suffisso}`,
-      codiceFiscalePartitaIva: `PIVA-${suffisso}`,
+      denominazione: `ASD Assegnazioni Test ${suffisso}`,
+      codiceFiscalePartitaIva: `PIVA-6-${suffisso}`,
       stagioneId,
       rappresentanteLegaleNome: persona.persona.nome,
       rappresentanteLegaleCognome: persona.persona.cognome,
       indirizzoVia: 'Via Milano 10',
       indirizzoCivico: '10',
       indirizzoCitta: 'Pescara',
-      email: 'asd-domanda-test@example.com',
-      tipologiaSoggetto: 'associazione_sportiva',
-      iscrittaRasd: false,
-      haPersonaleAssunto: false,
-      referenteSicurezza: referenteTest,
-      referenteEmergenzeDae: referenteEmergenzeDaeTest,
-      assicurazioneRct: assicurazioneTest,
-    });
-    associazioniCreate.push(associazione.id);
-
-    // creaAssociazione crea l'abilitazione come 'in_attesa': creaDomanda richiede
-    // un'abilitazione attiva ('approvata'), quindi la promuoviamo via pg.
-    await pool.query(`UPDATE abilitazioni SET stato = 'approvata' WHERE associazione_id = $1`, [associazione.id]);
-
-    const domanda = await creaDomanda({
-      associazioneId: associazione.id,
-      stagioneId,
-      disciplineCodici: [disciplinaCodice],
-      numeroTesserati: 20,
-      numeroAtletiPartecipanti: 15,
-      numeroSquadre: 1,
-      numeroSquadreFederaliStagionePrecedente: 1,
-      attivitaGiovanile: true,
-      attivitaAgonistica: false,
-      attivitaParalimpicaInclusiva: false,
-      fabbisognoMinimoMinuti: '240',
-      fabbisognoOttimaleMinuti: '480',
-      preferenze: [slotId],
-      blocchiAllenamento: [],
-      richiedeGiornataGara: false,
-      richiesteGiornataGara: [],
-    });
-
-    expect(domanda.id).toBeTruthy();
-    expect(domanda.numeroProtocollo).toBeTruthy();
-    expect(domanda.associazioneId).toBe(associazione.id);
-    expect(domanda.stagioneId).toBe(stagioneId);
-    expect(domanda.stato).toBe('presentata');
-    expect(domanda.riesameStato).toBe('nessuno');
-    expect(domanda.motivazioneEsclusione).toBeNull();
-  });
-
-  it('listaDomandePerAssociazione restituisce le domande create', async () => {
-    const persona = await creaPersonaTest(dsn!);
-    personeCreate.push(persona);
-    impostaTokens(persona.accessToken, persona.refreshToken);
-
-    const stagioneId = await creaStagioneTest(pool);
-    stagioniCreate.push(stagioneId);
-    const slotId = await creaSlotTest(pool, stagioneId);
-
-    // Crea una disciplina di test
-    const disciplinaCodice = `DISC${randomUUID().slice(0, 6).toUpperCase()}`;
-    await pool.query(
-      `INSERT INTO discipline_sportive (codice, denominazione) VALUES ($1, 'Disciplina Test')`,
-      [disciplinaCodice],
-    );
-    disciplineCreate.push(disciplinaCodice);
-
-    const suffisso = randomUUID().slice(0, 8);
-    const associazione = await creaAssociazione({
-      denominazione: `ASD Domanda Test 2 ${suffisso}`,
-      codiceFiscalePartitaIva: `PIVA-2-${suffisso}`,
-      stagioneId,
-      rappresentanteLegaleNome: persona.persona.nome,
-      rappresentanteLegaleCognome: persona.persona.cognome,
-      indirizzoVia: 'Via Milano 10',
-      indirizzoCivico: '10',
-      indirizzoCitta: 'Pescara',
-      email: 'asd-domanda-test2@example.com',
-      tipologiaSoggetto: 'associazione_sportiva',
-      iscrittaRasd: false,
-      haPersonaleAssunto: false,
-      referenteSicurezza: referenteTest,
-      referenteEmergenzeDae: referenteEmergenzeDaeTest,
-      assicurazioneRct: assicurazioneTest,
-    });
-    associazioniCreate.push(associazione.id);
-
-    // creaAssociazione crea l'abilitazione come 'in_attesa': creaDomanda richiede
-    // un'abilitazione attiva ('approvata'), quindi la promuoviamo via pg.
-    await pool.query(`UPDATE abilitazioni SET stato = 'approvata' WHERE associazione_id = $1`, [associazione.id]);
-
-    const domanda = await creaDomanda({
-      associazioneId: associazione.id,
-      stagioneId,
-      disciplineCodici: [disciplinaCodice],
-      numeroTesserati: 20,
-      numeroAtletiPartecipanti: 15,
-      numeroSquadre: 1,
-      numeroSquadreFederaliStagionePrecedente: 1,
-      attivitaGiovanile: true,
-      attivitaAgonistica: false,
-      attivitaParalimpicaInclusiva: false,
-      fabbisognoMinimoMinuti: '240',
-      fabbisognoOttimaleMinuti: '480',
-      preferenze: [slotId],
-      blocchiAllenamento: [],
-      richiedeGiornataGara: false,
-      richiesteGiornataGara: [],
-    });
-
-    const domande = await listaDomandePerAssociazione(associazione.id);
-    expect(Array.isArray(domande)).toBe(true);
-    expect(domande.some((d) => d.id === domanda.id)).toBe(true);
-  });
-
-
-  it('anteprimaFabbisogno con dati validi restituisce 503 quando motore Go non è disponibile', async () => {
-    const persona = await creaPersonaTest(dsn!);
-    personeCreate.push(persona);
-    impostaTokens(persona.accessToken, persona.refreshToken);
-
-    const stagioneId = await creaStagioneTest(pool);
-    stagioniCreate.push(stagioneId);
-
-    const suffisso = randomUUID().slice(0, 8);
-    const associazione = await creaAssociazione({
-      denominazione: `ASD Anteprima Test 2 ${suffisso}`,
-      codiceFiscalePartitaIva: `PIVA-4-${suffisso}`,
-      stagioneId,
-      rappresentanteLegaleNome: persona.persona.nome,
-      rappresentanteLegaleCognome: persona.persona.cognome,
-      indirizzoVia: 'Via Milano 10',
-      indirizzoCivico: '10',
-      indirizzoCitta: 'Pescara',
-      email: 'asd-anteprima-test2@example.com',
-      tipologiaSoggetto: 'associazione_sportiva',
-      iscrittaRasd: false,
-      haPersonaleAssunto: false,
-      referenteSicurezza: referenteTest,
-      referenteEmergenzeDae: referenteEmergenzeDaeTest,
-      assicurazioneRct: assicurazioneTest,
-    });
-    associazioniCreate.push(associazione.id);
-
-    // creaAssociazione crea l'abilitazione come 'in_attesa': anteprimaFabbisogno richiede
-    // un'abilitazione attiva ('approvata'), quindi la promuoviamo via pg.
-    await pool.query(`UPDATE abilitazioni SET stato = 'approvata' WHERE associazione_id = $1`, [associazione.id]);
-
-    try {
-      await anteprimaFabbisogno({
-        associazioneId: associazione.id,
-        stagioneId,
-        classeAttivitaCodice: 'CLASSE-1',
-        numeroSquadreFederali: 1,
-        fdMinuti: '480',
-      });
-      expect.fail('Dovrebbe aver lanciato ErroreRichiestaApi con status 503');
-    } catch (err) {
-      expect(err).toBeInstanceOf(ErroreRichiestaApi);
-      if (err instanceof ErroreRichiestaApi) {
-        expect(err.status).toBe(503);
-      }
-    }
-  });
-
-  it('elencoEsitiPubblicati restituisce gli esiti con associazioneDenominazione', async () => {
-    const persona = await creaPersonaTest(dsn!);
-    personeCreate.push(persona);
-    impostaTokens(persona.accessToken, persona.refreshToken);
-
-    const stagioneId = await creaStagioneTest(pool);
-    stagioniCreate.push(stagioneId);
-    const slotId = await creaSlotTest(pool, stagioneId);
-
-    // Crea una disciplina di test
-    const disciplinaCodice = `DISC${randomUUID().slice(0, 6).toUpperCase()}`;
-    await pool.query(
-      `INSERT INTO discipline_sportive (codice, denominazione) VALUES ($1, 'Disciplina Test Esiti')`,
-      [disciplinaCodice],
-    );
-    disciplineCreate.push(disciplinaCodice);
-
-    const suffisso = randomUUID().slice(0, 8);
-    const denominazioneAssociazione = `ASD Esiti Test ${suffisso}`;
-    const associazione = await creaAssociazione({
-      denominazione: denominazioneAssociazione,
-      codiceFiscalePartitaIva: `PIVA-5-${suffisso}`,
-      stagioneId,
-      rappresentanteLegaleNome: persona.persona.nome,
-      rappresentanteLegaleCognome: persona.persona.cognome,
-      indirizzoVia: 'Via Milano 10',
-      indirizzoCivico: '10',
-      indirizzoCitta: 'Pescara',
-      email: 'asd-esiti-test@example.com',
+      email: 'asd-assegnazioni-test@example.com',
       tipologiaSoggetto: 'associazione_sportiva',
       iscrittaRasd: false,
       haPersonaleAssunto: false,
@@ -407,46 +216,89 @@ descrivi('domande.ts', () => {
       richiesteGiornataGara: [],
     });
 
-    // Aggiorna la domanda a 'ammessa' e inserisci FR/coefficienti via pg
+    // Ottieni il nome dell'impianto e dello spazio per le fixture
+    const slotData = await pool.query<{ spazio_id: string }>(
+      'SELECT spazio_id FROM slot_settimana_tipo WHERE id = $1',
+      [slotId],
+    );
+    const spazioId = slotData.rows[0]!.spazio_id;
+
+    const spazioData = await pool.query<{ impianto_id: string; denominazione: string }>(
+      'SELECT impianto_id, denominazione FROM spazi_sportivi WHERE id = $1',
+      [spazioId],
+    );
+    const impiantoId = spazioData.rows[0]!.impianto_id;
+    const spazioDenominazione = spazioData.rows[0]!.denominazione;
+
+    const impiantoData = await pool.query<{ denominazione: string }>(
+      'SELECT denominazione FROM impianti WHERE id = $1',
+      [impiantoId],
+    );
+    const impiantoDenominazione = impiantoData.rows[0]!.denominazione;
+
+    // Inserisci un'assegnazione via pg
     await pool.query(
-      `UPDATE domande SET stato = 'ammessa' WHERE id = $1`,
-      [domanda.id],
+      `INSERT INTO assegnazioni (slot_id, domanda_id, associazione_id, tipo, stato, valore_minuti)
+       VALUES ($1, $2, $3, 'singola', 'validata', 60.000)`,
+      [slotId, domanda.id, associazione.id],
     );
 
-    // Ottieni la versione parametrico più recente
-    const parametroRes = await pool.query<{ id: string }>(
-      `SELECT id FROM parametrico_versioni ORDER BY valida_dal DESC LIMIT 1`,
-    );
-    const parametroVersioneId = parametroRes.rows[0]!.id;
+    const assegnazioni = await listaAssegnazioni(associazione.id, stagioneId);
+    expect(Array.isArray(assegnazioni)).toBe(true);
+    expect(assegnazioni.length).toBeGreaterThan(0);
 
-    await pool.query(
-      `INSERT INTO fabbisogni_riconosciuti (domanda_id, parametrico_versione_id, peso_base, incremento_squadre, fr_calcolato_minuti, fd_minuti, fr_finale_minuti)
-       VALUES ($1, $2, 1, 0, 500.000, 200.000, 200.000)`,
-      [domanda.id, parametroVersioneId],
-    );
+    const assegnazione = assegnazioni[0]!;
+    expect(assegnazione.id).toBeTruthy();
+    expect(assegnazione.tipo).toBe('singola');
+    expect(assegnazione.stato).toBe('validata');
+    expect(assegnazione.valoreMinuti).toMatch(/^60(\.000)?$/);
+    expect(assegnazione.impiantoDenominazione).toBe(impiantoDenominazione);
+    expect(assegnazione.spazioDenominazione).toBe(spazioDenominazione);
+    expect(assegnazione.giornoSettimana).toBe(1);
+    expect(assegnazione.orarioInizio).toMatch(/^09:00/);;
+    expect(assegnazione.orarioFine).toMatch(/^10:00/);
+    expect(assegnazione.durataMinuti).toBe(60);
+    expect(assegnazione.pregiata).toBe(false);
+  });
 
-    await pool.query(
-      `INSERT INTO coefficienti_associazione (domanda_id, parametrico_versione_id, crs, caa, csd, cp)
-       VALUES ($1, $2, 1.000, 0.900, 0.800, 0.720)`,
-      [domanda.id, parametroVersioneId],
-    );
+  it('listaAssegnazioni restituisce 403 senza abilitazione approvata', async () => {
+    const persona = await creaPersonaTest(dsn!);
+    personeCreate.push(persona);
+    impostaTokens(persona.accessToken, persona.refreshToken);
 
-    const esiti = await elencoEsitiPubblicati(stagioneId);
-    const esito = esiti.find((e) => e.domandaId === domanda.id);
+    const stagioneId = await creaStagioneTest(pool);
+    stagioniCreate.push(stagioneId);
 
-    expect(esito).toBeTruthy();
-    expect(esito!.associazioneId).toBe(associazione.id);
-    expect(esito!.associazioneDenominazione).toBe(denominazioneAssociazione);
-    expect(esito!.stato).toBe('ammessa');
-    expect(esito!.motivazioneEsclusione).toBeNull();
-    expect(esito!.fabbisognoRiconosciuto).toBeTruthy();
-    expect(parseFloat(esito!.fabbisognoRiconosciuto!.frCalcolatoMinuti)).toBe(500);
-    expect(parseFloat(esito!.fabbisognoRiconosciuto!.fdMinuti)).toBe(200);
-    expect(parseFloat(esito!.fabbisognoRiconosciuto!.frFinaleMinuti)).toBe(200);
-    expect(esito!.coefficienti).toBeTruthy();
-    expect(parseFloat(esito!.coefficienti!.crs)).toBe(1);
-    expect(parseFloat(esito!.coefficienti!.caa)).toBe(0.9);
-    expect(parseFloat(esito!.coefficienti!.csd)).toBe(0.8);
-    expect(parseFloat(esito!.coefficienti!.cp)).toBeCloseTo(0.72, 2);
+    const suffisso = randomUUID().slice(0, 8);
+    const associazione = await creaAssociazione({
+      denominazione: `ASD Assegnazioni Forbidden ${suffisso}`,
+      codiceFiscalePartitaIva: `PIVA-7-${suffisso}`,
+      stagioneId,
+      rappresentanteLegaleNome: persona.persona.nome,
+      rappresentanteLegaleCognome: persona.persona.cognome,
+      indirizzoVia: 'Via Milano 10',
+      indirizzoCivico: '10',
+      indirizzoCitta: 'Pescara',
+      email: 'asd-assegnazioni-forbidden@example.com',
+      tipologiaSoggetto: 'associazione_sportiva',
+      iscrittaRasd: false,
+      haPersonaleAssunto: false,
+      referenteSicurezza: referenteTest,
+      referenteEmergenzeDae: referenteEmergenzeDaeTest,
+      assicurazioneRct: assicurazioneTest,
+    });
+    associazioniCreate.push(associazione.id);
+
+    // NON promuoviamo l'abilitazione — rimane 'in_attesa'
+
+    try {
+      await listaAssegnazioni(associazione.id, stagioneId);
+      expect.fail('Dovrebbe aver lanciato ErroreRichiestaApi con status 403');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ErroreRichiestaApi);
+      if (err instanceof ErroreRichiestaApi) {
+        expect(err.status).toBe(403);
+      }
+    }
   });
 });

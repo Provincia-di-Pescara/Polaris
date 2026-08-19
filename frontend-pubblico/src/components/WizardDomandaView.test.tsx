@@ -19,7 +19,7 @@ const ENTITA: EntitaRappresentata = {
 
 const DOMANDA_MOCK: Domanda = {
   id: 'd1', numeroProtocollo: 'PROT-2026-0001', associazioneId: 'ass1', stagioneId: 'st1',
-  stato: 'presentata', presentataIl: '2026-08-18T10:00:00.000Z',
+  stato: 'presentata', riesameStato: 'nessuno', motivazioneEsclusione: null, presentataIl: '2026-08-18T10:00:00.000Z',
   numeroTesserati: 40, numeroAtletiPartecipanti: 30, numeroSquadre: 3,
   fabbisognoMinimoMinuti: '360', fabbisognoOttimaleMinuti: '480',
 };

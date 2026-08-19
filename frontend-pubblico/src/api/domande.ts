@@ -37,6 +37,8 @@ export interface Domanda {
   associazioneId: string;
   stagioneId: string;
   stato: 'presentata' | 'ammessa' | 'esclusa';
+  riesameStato: 'nessuno' | 'richiesto' | 'deciso';
+  motivazioneEsclusione: string | null;
   presentataIl: string;
   numeroTesserati: number;
   numeroAtletiPartecipanti: number;
@@ -84,4 +86,31 @@ export function anteprimaFabbisogno(dati: DatiAnteprimaFabbisogno): Promise<Ante
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(dati),
   });
+}
+
+export interface EsitoIstruttoria {
+  frCalcolatoMinuti: string;
+  fdMinuti: string;
+  frFinaleMinuti: string;
+}
+
+export interface EsitoCoefficienti {
+  crs: string;
+  caa: string;
+  csd: string;
+  cp: string;
+}
+
+export interface EsitoPubblicato {
+  domandaId: string;
+  associazioneId: string;
+  associazioneDenominazione: string;
+  stato: 'presentata' | 'ammessa' | 'esclusa';
+  motivazioneEsclusione: string | null;
+  fabbisognoRiconosciuto: EsitoIstruttoria | null;
+  coefficienti: EsitoCoefficienti | null;
+}
+
+export function elencoEsitiPubblicati(stagioneId: string): Promise<EsitoPubblicato[]> {
+  return richiedi(`/pubblico/stagioni/${encodeURIComponent(stagioneId)}/domande/esiti`);
 }
