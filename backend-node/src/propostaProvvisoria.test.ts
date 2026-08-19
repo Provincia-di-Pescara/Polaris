@@ -72,9 +72,10 @@ async function creaFixtureConAssegnazione(pool: Pool) {
   const stagioneId = await creaStagione(pool, 'concertazione');
   const slot = await creaSlot(pool, { stagioneId, spazioId: spazio.id, giornoSettimana: 1, orarioInizio: '18:00', orarioFine: '19:00' });
 
+  const associazioneDenominazione = `ASD proposta ${randomUUID()}`;
   const associazione = await pool.query<{ id: string }>(
     `INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ($1, $2) RETURNING id`,
-    [`ASD proposta ${randomUUID()}`, `PIVA-${randomUUID().slice(0, 8)}`],
+    [associazioneDenominazione, `PIVA-${randomUUID().slice(0, 8)}`],
   );
   const associazioneId = associazione.rows[0]!.id;
   const persona = await pool.query<{ id: string }>(
@@ -126,7 +127,7 @@ async function creaFixtureConAssegnazione(pool: Pool) {
     [slot.id, domanda.id, associazioneId, elaborazioneId],
   );
 
-  return { stagioneId, slotId: slot.id, associazioneId, elaborazioneId };
+  return { stagioneId, slotId: slot.id, associazioneId, associazioneDenominazione, elaborazioneId };
 }
 
 test('trovaPropostaProvvisoria calcola l\'ISF come VA/FR arrotondato a 3 cifre (I2 final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
@@ -138,6 +139,20 @@ test('trovaPropostaProvvisoria calcola l\'ISF come VA/FR arrotondato a 3 cifre (
   assert.equal(voci.length, 1);
   // VA=60, FR finale=100 => ISF = 0.600
   assert.equal(voci[0]!.isf, '0.600');
+
+  // denominazioni leggibili e dettagli slot (Task 1 concertazione-frontend)
+  assert.equal(voci[0]!.associazioneDenominazione, fx.associazioneDenominazione);
+  assert.equal(voci[0]!.impiantoDenominazione, 'Palestra proposta');
+  assert.equal(voci[0]!.spazioDenominazione, 'Campo proposta');
+  assert.equal(voci[0]!.giornoSettimana, 1);
+  // formato HH:MM esplicito, NON HH:MM:SS (bug reale già trovato e fixato su
+  // assegnazioniLettura.test.ts in un blocco precedente — to_char, mai ::text su una colonna TIME)
+  assert.equal(voci[0]!.orarioInizio, '18:00');
+  assert.equal(voci[0]!.orarioFine, '19:00');
+  assert.match(voci[0]!.orarioInizio, /^\d{2}:\d{2}$/);
+  assert.match(voci[0]!.orarioFine, /^\d{2}:\d{2}$/);
+  assert.equal(voci[0]!.durataMinuti, 60);
+  assert.equal(typeof voci[0]!.pregiata, 'boolean');
 });
 
 test('trovaPropostaProvvisoria calcola l\'ISF cumulativo su VA totale dell\'associazione, non sulla singola riga (I2b final review)', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
