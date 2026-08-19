@@ -69,7 +69,7 @@ async function creaStagioneTest(pool: Pool): Promise<string> {
   return r.rows[0]!.id;
 }
 
-async function creaSlotTest(pool: Pool, stagioneId: string): Promise<string> {
+async function creaSlotTest(pool: Pool, stagioneId: string, impiantiCreate: string[]): Promise<string> {
   // Crea uno spazio e uno slot settimana tipo di test.
   // Necessario perché la schema di creaDomanda richiede almeno 1 slot UUID in preferenze.
   const impiantoRes = await pool.query<{ id: string }>(
@@ -77,6 +77,10 @@ async function creaSlotTest(pool: Pool, stagioneId: string): Promise<string> {
     [`Impianto Test ${randomUUID().slice(0, 8)}`],
   );
   const impiantoId = impiantoRes.rows[0]!.id;
+  // Tracciato per id (non LIKE): evita sia il leak sia la race condition di una
+  // DELETE globale che potrebbe colpire righe create da un altro file di test
+  // in esecuzione in parallelo con un prefisso di nome sovrapposto.
+  impiantiCreate.push(impiantoId);
 
   const spazioRes = await pool.query<{ id: string }>(
     `INSERT INTO spazi_sportivi (impianto_id, denominazione) VALUES ($1, $2) RETURNING id`,
@@ -98,6 +102,7 @@ descrivi('domande.ts', () => {
   const associazioniCreate: string[] = [];
   const stagioniCreate: string[] = [];
   const disciplineCreate: string[] = [];
+  const impiantiCreate: string[] = [];
 
   beforeAll(async () => {
     backend = await avviaBackendReale();
@@ -142,17 +147,22 @@ descrivi('domande.ts', () => {
         await pool.query('DELETE FROM persone_fisiche WHERE id = ANY($1::uuid[])', [idPersoneShell]);
       }
     }
-    // Nota: pulizia slot/spazi/impianti saltata intenzionalmente quando i test corrono in parallelo
-    // per evitare race condition (un test potrebbe usare i slot mentre un altro li elimina).
-    // La pulizia completa avviene nel test database tra suite di test separate.
     // Stagioni e discipline create nei test: rimosse ora che slot/domande che le
     // referenziano sono già stati eliminati sopra (stesso ordine FK-safe di
-    // App.domanda.realBackend.test.tsx).
+    // App.domanda.realBackend.test.tsx). La DELETE su stagioni_sportive fa
+    // cascare via FK anche slot_settimana_tipo (ON DELETE CASCADE), quindi gli
+    // spazi/impianti tracciati per id restano liberi da vincoli e possono essere
+    // eliminati subito dopo, senza alcun pattern LIKE globale (niente race con
+    // altri file di test in esecuzione in parallelo).
     if (disciplineCreate.length > 0) {
       await pool.query('DELETE FROM discipline_sportive WHERE codice = ANY($1::text[])', [disciplineCreate]);
     }
     if (stagioniCreate.length > 0) {
       await pool.query('DELETE FROM stagioni_sportive WHERE id = ANY($1::uuid[])', [stagioniCreate]);
+    }
+    if (impiantiCreate.length > 0) {
+      // spazi_sportivi ha ON DELETE CASCADE da impianti: basta cancellare gli impianti.
+      await pool.query('DELETE FROM impianti WHERE id = ANY($1::uuid[])', [impiantiCreate]);
     }
 
     const personeIds = personeCreate.map((p) => p.persona.id);
@@ -170,7 +180,7 @@ descrivi('domande.ts', () => {
 
     const stagioneId = await creaStagioneTest(pool);
     stagioniCreate.push(stagioneId);
-    const slotId = await creaSlotTest(pool, stagioneId);
+    const slotId = await creaSlotTest(pool, stagioneId, impiantiCreate);
 
     // Crea una disciplina di test
     const disciplinaCodice = `DISC${randomUUID().slice(0, 6).toUpperCase()}`;
@@ -239,7 +249,7 @@ descrivi('domande.ts', () => {
 
     const stagioneId = await creaStagioneTest(pool);
     stagioniCreate.push(stagioneId);
-    const slotId = await creaSlotTest(pool, stagioneId);
+    const slotId = await creaSlotTest(pool, stagioneId, impiantiCreate);
 
     // Crea una disciplina di test
     const disciplinaCodice = `DISC${randomUUID().slice(0, 6).toUpperCase()}`;
@@ -354,7 +364,7 @@ descrivi('domande.ts', () => {
 
     const stagioneId = await creaStagioneTest(pool);
     stagioniCreate.push(stagioneId);
-    const slotId = await creaSlotTest(pool, stagioneId);
+    const slotId = await creaSlotTest(pool, stagioneId, impiantiCreate);
 
     // Crea una disciplina di test
     const disciplinaCodice = `DISC${randomUUID().slice(0, 6).toUpperCase()}`;

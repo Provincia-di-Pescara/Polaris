@@ -34,7 +34,8 @@ export async function listaAssegnazioniPerAssociazione(
   }>(
     `SELECT a.id, a.tipo, a.stato, a.valore_minuti::text,
             i.denominazione AS impianto_denominazione, sp.denominazione AS spazio_denominazione,
-            s.giorno_settimana, s.orario_inizio::text, s.orario_fine::text, s.durata_minuti, s.pregiata
+            s.giorno_settimana, to_char(s.orario_inizio, 'HH24:MI') AS orario_inizio,
+            to_char(s.orario_fine, 'HH24:MI') AS orario_fine, s.durata_minuti, s.pregiata
      FROM assegnazioni a
      JOIN slot_settimana_tipo s ON s.id = a.slot_id
      JOIN spazi_sportivi sp ON sp.id = s.spazio_id

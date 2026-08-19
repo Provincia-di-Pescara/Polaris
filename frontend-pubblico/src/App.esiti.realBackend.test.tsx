@@ -225,6 +225,9 @@ descrivi('App — esiti istruttoria e tabellone ISF (backend reale)', () => {
     expect(await screen.findByText('300.000 minuti')).toBeInTheDocument();
     expect(screen.getByText(/CRS 1\.000 • CAA 1\.000 • CSD 1\.000/)).toBeInTheDocument();
     expect(await screen.findByText('1 slot (120 min)')).toBeInTheDocument();
+    // Formato orario HH:MM senza secondi: copre la regressione Node<->UI in cui
+    // il backend restituiva 'HH:MM:SS' (::text invece di to_char(...,'HH24:MI')).
+    expect(screen.getByText('17:00 - 19:00')).toBeInTheDocument();
     // L'ISF compare sia nel KPI "La mia domanda" sia nella riga propria del
     // tabellone (stesso valore, due punti della UI): findAllByText, mai
     // findByText, altrimenti "elemento multiplo trovato" a schermo pieno.

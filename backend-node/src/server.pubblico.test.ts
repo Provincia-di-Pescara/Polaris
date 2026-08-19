@@ -786,7 +786,17 @@ test('POST /pubblico/domande/anteprima-fabbisogno: motore irraggiungibile, 502',
 
 async function creaDomandaAmmessaConOsservazioneTest(
   pool: Pool,
-): Promise<{ domandaId: string; associazioneId: string; stagioneId: string; titolare: { id: string; token: string } }> {
+): Promise<{
+  domandaId: string;
+  associazioneId: string;
+  stagioneId: string;
+  titolare: { id: string; token: string };
+  disciplinaCodice: string;
+  slotId: string;
+  spazioId: string;
+  impiantoId: string;
+  istituzioneId: string;
+}> {
   const disciplina = await creaDisciplina(pool, { codice: `OSSPUB-${randomUUID().slice(0, 8)}`, denominazione: 'Pallavolo' });
   const istituzione = await creaIstituzione(pool, { denominazione: `Istituto oss pub test ${randomUUID()}` });
   const impianto = await creaImpianto(pool, { denominazione: 'Palestra oss pub test', istituzioneScolasticaId: istituzione.id });
@@ -822,7 +832,41 @@ async function creaDomandaAmmessaConOsservazioneTest(
   await ammettiDomanda(pool, domanda.id);
   await presentaOsservazione(pool, { domandaId: domanda.id, personaFisicaId: titolare.id, testo: 'non concordo con FR' });
 
-  return { domandaId: domanda.id, associazioneId, stagioneId, titolare };
+  return {
+    domandaId: domanda.id,
+    associazioneId,
+    stagioneId,
+    titolare,
+    disciplinaCodice: disciplina.codice,
+    slotId: slot.id,
+    spazioId: spazio.id,
+    impiantoId: impianto.id,
+    istituzioneId: istituzione.id,
+  };
+}
+
+// Pulizia FK-safe (figli prima dei genitori) della fixture sopra, verificata su
+// db/migrations/000001_init.up.sql — stesso ordine usato da GET /pubblico/stagioni/:id/slot
+// e dai file api/domande.test.ts e api/osservazioni.test.ts: osservazioni_istruttoria ->
+// preferenze/domanda_discipline -> domande -> abilitazioni -> slot_settimana_tipo ->
+// spazi_sportivi -> impianti -> istituzioni_scolastiche -> associazioni -> discipline_sportive
+// -> stagioni_sportive.
+async function ripulisciDomandaAmmessaConOsservazioneTest(
+  pool: Pool,
+  fx: Awaited<ReturnType<typeof creaDomandaAmmessaConOsservazioneTest>>,
+): Promise<void> {
+  await pool.query('DELETE FROM osservazioni_istruttoria WHERE domanda_id = $1', [fx.domandaId]);
+  await pool.query('DELETE FROM preferenze WHERE domanda_id = $1', [fx.domandaId]);
+  await pool.query('DELETE FROM domanda_discipline WHERE domanda_id = $1', [fx.domandaId]);
+  await pool.query('DELETE FROM domande WHERE id = $1', [fx.domandaId]);
+  await pool.query('DELETE FROM abilitazioni WHERE associazione_id = $1', [fx.associazioneId]);
+  await pool.query('DELETE FROM slot_settimana_tipo WHERE id = $1', [fx.slotId]);
+  await pool.query('DELETE FROM spazi_sportivi WHERE id = $1', [fx.spazioId]);
+  await pool.query('DELETE FROM impianti WHERE id = $1', [fx.impiantoId]);
+  await pool.query('DELETE FROM istituzioni_scolastiche WHERE id = $1', [fx.istituzioneId]);
+  await pool.query('DELETE FROM associazioni WHERE id = $1', [fx.associazioneId]);
+  await pool.query('DELETE FROM discipline_sportive WHERE codice = $1', [fx.disciplinaCodice]);
+  await pool.query('DELETE FROM stagioni_sportive WHERE id = $1', [fx.stagioneId]);
 }
 
 test('GET /pubblico/domande/:id/osservazioni', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
@@ -864,13 +908,26 @@ test('GET /pubblico/domande/:id/osservazioni', { skip: dsn ? false : 'TEST_DATAB
     const r = await fetch(`${base}/pubblico/domande/${fx.domandaId}/osservazioni`);
     assert.equal(r.status, 401);
   });
+
+  await ripulisciDomandaAmmessaConOsservazioneTest(pool, fx);
 });
 
 // --- GET /pubblico/associazioni/:associazioneId/assegnazioni (Task 2) ---
 
 async function creaAssegnazioneFixtureTest(
   pool: Pool,
-): Promise<{ associazioneId: string; stagioneId: string; assegnazioneId: string; titolare: { id: string; token: string } }> {
+): Promise<{
+  associazioneId: string;
+  stagioneId: string;
+  assegnazioneId: string;
+  domandaId: string;
+  titolare: { id: string; token: string };
+  disciplinaCodice: string;
+  slotId: string;
+  spazioId: string;
+  impiantoId: string;
+  istituzioneId: string;
+}> {
   const disciplina = await creaDisciplina(pool, { codice: `ASSPUB-${randomUUID().slice(0, 8)}`, denominazione: 'Pallavolo' });
   const istituzione = await creaIstituzione(pool, { denominazione: `Istituto ass pub test ${randomUUID()}` });
   const impianto = await creaImpianto(pool, { denominazione: 'Palestra ass pub test', istituzioneScolasticaId: istituzione.id });
@@ -910,7 +967,41 @@ async function creaAssegnazioneFixtureTest(
     [slot.id, domanda.id, associazioneId],
   );
 
-  return { associazioneId, stagioneId, assegnazioneId: assegnazione.rows[0]!.id, titolare };
+  return {
+    associazioneId,
+    stagioneId,
+    assegnazioneId: assegnazione.rows[0]!.id,
+    domandaId: domanda.id,
+    titolare,
+    disciplinaCodice: disciplina.codice,
+    slotId: slot.id,
+    spazioId: spazio.id,
+    impiantoId: impianto.id,
+    istituzioneId: istituzione.id,
+  };
+}
+
+// Pulizia FK-safe (figli prima dei genitori) della fixture sopra, stesso ordine
+// di ripulisciDomandaAmmessaConOsservazioneTest sopra (verificato su
+// db/migrations/000001_init.up.sql): assegnazioni -> preferenze/domanda_discipline
+// -> domande -> abilitazioni -> slot_settimana_tipo -> spazi_sportivi -> impianti
+// -> istituzioni_scolastiche -> associazioni -> discipline_sportive -> stagioni_sportive.
+async function ripulisciAssegnazioneFixtureTest(
+  pool: Pool,
+  fx: Awaited<ReturnType<typeof creaAssegnazioneFixtureTest>>,
+): Promise<void> {
+  await pool.query('DELETE FROM assegnazioni WHERE id = $1', [fx.assegnazioneId]);
+  await pool.query('DELETE FROM preferenze WHERE domanda_id = $1', [fx.domandaId]);
+  await pool.query('DELETE FROM domanda_discipline WHERE domanda_id = $1', [fx.domandaId]);
+  await pool.query('DELETE FROM domande WHERE id = $1', [fx.domandaId]);
+  await pool.query('DELETE FROM abilitazioni WHERE associazione_id = $1', [fx.associazioneId]);
+  await pool.query('DELETE FROM slot_settimana_tipo WHERE id = $1', [fx.slotId]);
+  await pool.query('DELETE FROM spazi_sportivi WHERE id = $1', [fx.spazioId]);
+  await pool.query('DELETE FROM impianti WHERE id = $1', [fx.impiantoId]);
+  await pool.query('DELETE FROM istituzioni_scolastiche WHERE id = $1', [fx.istituzioneId]);
+  await pool.query('DELETE FROM associazioni WHERE id = $1', [fx.associazioneId]);
+  await pool.query('DELETE FROM discipline_sportive WHERE codice = $1', [fx.disciplinaCodice]);
+  await pool.query('DELETE FROM stagioni_sportive WHERE id = $1', [fx.stagioneId]);
 }
 
 test('GET /pubblico/associazioni/:associazioneId/assegnazioni', { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' }, async (t) => {
@@ -953,4 +1044,6 @@ test('GET /pubblico/associazioni/:associazioneId/assegnazioni', { skip: dsn ? fa
     const r = await fetch(`${base}/pubblico/associazioni/${fx.associazioneId}/assegnazioni?stagioneId=${fx.stagioneId}`);
     assert.equal(r.status, 401);
   });
+
+  await ripulisciAssegnazioneFixtureTest(pool, fx);
 });

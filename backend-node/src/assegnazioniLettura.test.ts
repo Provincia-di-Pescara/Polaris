@@ -71,6 +71,13 @@ async function creaFixture(pool: Pool) {
   return {
     associazioneId,
     stagioneId,
+    impiantoId: impianto.id,
+    istituzioneId: istituzione.id,
+    spazioId: spazio.id,
+    slotIds: [slotAttivo.id, slotDecaduto.id],
+    disciplinaCodice: disciplina.codice,
+    domandaId: domanda.id,
+    personaId: persona.rows[0]!.id,
     impiantoDenominazione: impianto.denominazione,
     spazioDenominazione: spazio.denominazione,
     assegnazioneProvvisoriaId: assegnazioneProvvisoria.rows[0]!.id,
@@ -78,13 +85,43 @@ async function creaFixture(pool: Pool) {
   };
 }
 
+// Pulizia in ordine FK-safe (figli prima dei genitori), verificato su
+// db/migrations/000001_init.up.sql: assegnazioni -> preferenze/domanda_discipline
+// -> domande -> slot_settimana_tipo -> spazi_sportivi -> impianti ->
+// istituzioni_scolastiche -> persone_fisiche -> associazioni -> discipline_sportive
+// -> stagioni_sportive.
+async function ripulisciFixture(
+  pool: Pool,
+  fx: Awaited<ReturnType<typeof creaFixture>>,
+): Promise<void> {
+  await pool.query('DELETE FROM assegnazioni WHERE domanda_id = $1', [fx.domandaId]);
+  await pool.query('DELETE FROM preferenze WHERE domanda_id = $1', [fx.domandaId]);
+  await pool.query('DELETE FROM domanda_discipline WHERE domanda_id = $1', [fx.domandaId]);
+  await pool.query('DELETE FROM domande WHERE id = $1', [fx.domandaId]);
+  await pool.query('DELETE FROM slot_settimana_tipo WHERE id = ANY($1::uuid[])', [fx.slotIds]);
+  await pool.query('DELETE FROM spazi_sportivi WHERE id = $1', [fx.spazioId]);
+  await pool.query('DELETE FROM impianti WHERE id = $1', [fx.impiantoId]);
+  await pool.query('DELETE FROM istituzioni_scolastiche WHERE id = $1', [fx.istituzioneId]);
+  await pool.query('DELETE FROM persone_fisiche WHERE id = $1', [fx.personaId]);
+  await pool.query('DELETE FROM associazioni WHERE id = $1', [fx.associazioneId]);
+  await pool.query('DELETE FROM discipline_sportive WHERE codice = $1', [fx.disciplinaCodice]);
+  await pool.query('DELETE FROM stagioni_sportive WHERE id = $1', [fx.stagioneId]);
+}
+
 test(
   'listaAssegnazioniPerAssociazione restituisce solo le assegnazioni provvisoria/validata, con valoreMinuti come stringa',
   { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
   async (t) => {
     const pool = new Pool({ connectionString: dsn });
-    t.after(() => pool.end());
     const fx = await creaFixture(pool);
+    // Un solo hook che pulisce e POI chiude il pool: node:test non garantisce
+    // l'ordine di esecuzione tra hook after multipli, quindi non ci si può
+    // affidare a due t.after separati (il pool potrebbe chiudersi prima della
+    // pulizia).
+    t.after(async () => {
+      await ripulisciFixture(pool, fx);
+      await pool.end();
+    });
 
     const lista = await listaAssegnazioniPerAssociazione(pool, fx.associazioneId, fx.stagioneId);
 
@@ -98,8 +135,8 @@ test(
     assert.equal(riga.impiantoDenominazione, fx.impiantoDenominazione);
     assert.equal(riga.spazioDenominazione, fx.spazioDenominazione);
     assert.equal(riga.giornoSettimana, 1);
-    assert.equal(riga.orarioInizio, '18:00:00');
-    assert.equal(riga.orarioFine, '19:00:00');
+    assert.equal(riga.orarioInizio, '18:00');
+    assert.equal(riga.orarioFine, '19:00');
     assert.equal(riga.durataMinuti, 60);
     assert.equal(riga.pregiata, false);
   },
@@ -110,7 +147,6 @@ test(
   { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
   async (t) => {
     const pool = new Pool({ connectionString: dsn });
-    t.after(() => pool.end());
     const stagione = await pool.query<{ id: string }>(
       `INSERT INTO stagioni_sportive (nome, data_inizio, data_fine) VALUES ($1, '2030-09-01', '2031-06-30') RETURNING id`,
       [`stagione-asslet-vuota-${randomUUID()}`],
@@ -119,6 +155,11 @@ test(
       `INSERT INTO associazioni (denominazione, codice_fiscale_partita_iva) VALUES ($1, $2) RETURNING id`,
       [`ASD asslet vuota ${randomUUID()}`, `PIVA-${randomUUID().slice(0, 8)}`],
     );
+    t.after(async () => {
+      await pool.query('DELETE FROM associazioni WHERE id = $1', [associazione.rows[0]!.id]);
+      await pool.query('DELETE FROM stagioni_sportive WHERE id = $1', [stagione.rows[0]!.id]);
+      await pool.end();
+    });
 
     const lista = await listaAssegnazioniPerAssociazione(pool, associazione.rows[0]!.id, stagione.rows[0]!.id);
     assert.deepEqual(lista, []);
