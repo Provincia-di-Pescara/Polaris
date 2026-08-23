@@ -10,6 +10,7 @@ import { ConcertazioneView } from './components/ConcertazioneView';
 import { CalendarioDefinitivoView } from './components/CalendarioDefinitivoView';
 import type { EntitaRappresentata } from './api/deleghe.ts';
 import { listaStagioni, type Stagione } from './api/stagioni.ts';
+import { versioneApp } from './sentry.ts';
 
 const AppAutenticata: React.FC = () => {
   const { persona, entities, caricamento, logout, ricarica } = useAuth();
@@ -107,7 +108,13 @@ const AppAutenticata: React.FC = () => {
       }}>
         <div style={{ maxWidth: '1200px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
           <div><strong>POLARIS</strong> — Provincia di Pescara • Servizio Pubblico Spazi Sportivi Scolastici</div>
-          <div>Conforme Linee Guida AgID & Italia Design System • Accessibilità WCAG 2.1 AA</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <span>Conforme Linee Guida AgID & Italia Design System • Accessibilità WCAG 2.1 AA</span>
+            <a href="https://github.com/Provincia-di-Pescara/Polaris" target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>
+              GitHub
+            </a>
+            {versioneApp() && <span>{versioneApp()}</span>}
+          </div>
         </div>
       </footer>
     </div>
