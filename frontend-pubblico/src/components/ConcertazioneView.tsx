@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2, Send, Check, XCircle } from 'lucide-react';
 import type { EntitaRappresentata } from '../api/deleghe.ts';
 import {
@@ -132,16 +132,26 @@ export const ConcertazioneView: React.FC<ConcertazioneProps> = ({ entities, stag
     };
   }, [stagioneId, associazioneId]);
 
+  // Tre azioni indipendenti (accetta/annulla/invia proposta) possono innescare
+  // ciascuna una ricarica dell'elenco proposte, oltre all'effect al mount/cambio
+  // stagione: il flag di cancellazione da solo protegge solo il proprio cleanup,
+  // non l'ordine di arrivo tra fetch diverse — se una più lenta risolve DOPO
+  // un'altra più recente, sovrascriverebbe silenziosamente la lista appena
+  // aggiornata con dati superati. Stesso pattern "risposte fuori ordine" già in
+  // EsitiIsfView.tsx (richiestaOsservazioniIdRef) / AuditSorteggioView / StatisticheView.
+  const richiestaProposteIdRef = useRef(0);
+
   const caricaProposte = useCallback((estaAnnullato: () => boolean): void => {
     if (!stagioneId) return;
+    const idRichiesta = ++richiestaProposteIdRef.current;
     listaProposteConcertazione(stagioneId)
       .then((lista) => {
-        if (estaAnnullato()) return;
+        if (estaAnnullato() || idRichiesta !== richiestaProposteIdRef.current) return;
         setProposte(lista);
         setErroreProposte(null);
       })
       .catch((err) => {
-        if (estaAnnullato()) return;
+        if (estaAnnullato() || idRichiesta !== richiestaProposteIdRef.current) return;
         setProposte([]);
         setErroreProposte(messaggioErrore(err, 'Elenco proposte non disponibile'));
       });
@@ -406,7 +416,16 @@ export const ConcertazioneView: React.FC<ConcertazioneProps> = ({ entities, stag
                 {proposte.map((p) => {
                   const propriaParte = p.parti.find((parte) => parte.associazioneId === associazioneId) ?? null;
                   const puoAccettare = p.stato === 'in_attesa_accettazione' && propriaParte !== null && propriaParte.accettatoIl === null;
-                  const puoAnnullare = p.stato === 'in_attesa_accettazione' && p.proponenteAssociazioneId === associazioneId;
+                  // Il backend verifica proponentePersonaFisicaId === persona corrente
+                  // (route /annulla), non solo l'associazione: due delegati della stessa
+                  // associazione non sono intercambiabili, un secondo delegato che non
+                  // ha proposto lui stesso otterrebbe sempre un 403. activeEntity.personaFisicaId
+                  // è la persona fisica corrente (GET /pubblico/deleghe/mie è già filtrato
+                  // per personaFisicaId = persona autenticata, vedi docs/claude/backend-node.md).
+                  const puoAnnullare =
+                    p.stato === 'in_attesa_accettazione' &&
+                    p.proponenteAssociazioneId === associazioneId &&
+                    p.proponentePersonaFisicaId === activeEntity.personaFisicaId;
                   return (
                     <div key={p.id} style={{ ...STILE_BOX, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -494,6 +513,16 @@ export const ConcertazioneView: React.FC<ConcertazioneProps> = ({ entities, stag
                 ))}
               </select>
             </div>
+
+            {tipo === 'utilizzo_slot_libero' && (
+              <div style={{ backgroundColor: '#FEF9E7', border: '1px solid #F7DC6F', padding: '0.6rem 0.85rem', borderRadius: '6px', fontSize: '0.82rem' }}>
+                Attenzione: gli slot proposti qui sotto provengono dal bollettino della proposta provvisoria, quindi
+                risultano già assegnati. Una richiesta di "Utilizzo di uno slot libero" è valida solo su uno slot
+                realmente libero — questo form non permette ancora di individuarli. La proposta potrebbe essere
+                accettata subito (nessun'altra parte coinvolta) ma essere respinta in un secondo momento, in fase di
+                validazione da parte dell'ufficio.
+              </div>
+            )}
 
             {righe.length === 0 && (
               <div style={{ color: 'var(--pa-text-muted)', fontSize: '0.85rem' }}>Nessuna riga slot aggiunta.</div>

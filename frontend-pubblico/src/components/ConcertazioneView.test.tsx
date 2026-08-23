@@ -48,8 +48,10 @@ const PROPOSTA_PROPONENTE: Proposta = {
   ...PROPOSTA_IN_ATTESA_NON_ACCETTATA,
   id: 'p2',
   proponenteAssociazioneId: 'ass1',
+  // Stessa persona fisica di ENTITA.personaFisicaId ('p1'): è lei che ha proposto.
+  proponentePersonaFisicaId: 'p1',
   parti: [
-    { associazioneId: 'ass1', accettatoIl: '2026-08-20T10:00:00.000Z', accettatoDaPersonaFisicaId: 'pf1' },
+    { associazioneId: 'ass1', accettatoIl: '2026-08-20T10:00:00.000Z', accettatoDaPersonaFisicaId: 'p1' },
     { associazioneId: 'ass2', accettatoIl: null, accettatoDaPersonaFisicaId: null },
   ],
 };
@@ -114,6 +116,23 @@ describe('ConcertazioneView', () => {
     renderView();
 
     expect(await screen.findByRole('button', { name: /annulla/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^accetta$/i })).not.toBeInTheDocument();
+  });
+
+  it('proposta della propria associazione ma proposta da un ALTRO delegato: nessun bottone Annulla (il backend verificherebbe la persona fisica, non solo l\'associazione)', async () => {
+    // Stessa associazione proponente (ass1) di ENTITA, ma proponentePersonaFisicaId
+    // è di un altro delegato: la route /annulla del backend confronta
+    // proposta.proponentePersonaFisicaId === req.persona.sub, quindi questo
+    // delegato otterrebbe sempre un 403 se il bottone fosse mostrato.
+    vi.spyOn(concertazioneApi, 'listaProposteConcertazione').mockResolvedValue([
+      { ...PROPOSTA_PROPONENTE, proponentePersonaFisicaId: 'altro-delegato-p9' },
+    ]);
+    renderView();
+
+    await screen.findByText(/le mie proposte/i);
+    expect(screen.queryByRole('button', { name: /annulla/i })).not.toBeInTheDocument();
+    // La propria associazione ha già accettato (parte 'ass1' con accettatoIl valorizzato
+    // nel fixture), quindi neanche Accetta deve comparire.
     expect(screen.queryByRole('button', { name: /^accetta$/i })).not.toBeInTheDocument();
   });
 
@@ -186,5 +205,45 @@ describe('ConcertazioneView', () => {
 
     expect(await screen.findByText(/aggiungi almeno una riga slot/i)).toBeInTheDocument();
     expect(spyCrea).not.toHaveBeenCalled();
+  });
+
+  it('caricaProposte scarta una risposta fuori ordine: la fetch del mount, più lenta, non deve sovrascrivere una fetch più recente già risolta', async () => {
+    // Riproduce lo scenario di race del bug (stesso pattern già in EsitiIsfView):
+    // la fetch dell'effect al mount (chiamata #1) resta pendente; una seconda
+    // fetch (chiamata #2, innescata qui dall'invio di una nuova proposta) parte
+    // dopo ma risolve PRIMA. Senza il contatore monotono, la chiamata #1
+    // risolvendo più tardi sovrascriverebbe silenziosamente la lista con dati
+    // superati (qui: lista vuota) nonostante la #2 avesse già mostrato dati freschi.
+    let risolviChiamata1!: (v: Proposta[]) => void;
+    let risolviChiamata2!: (v: Proposta[]) => void;
+    const chiamata1 = new Promise<Proposta[]>((res) => { risolviChiamata1 = res; });
+    const chiamata2 = new Promise<Proposta[]>((res) => { risolviChiamata2 = res; });
+
+    const spyLista = vi.spyOn(concertazioneApi, 'listaProposteConcertazione')
+      .mockReturnValueOnce(chiamata1) // fetch dell'effect al mount
+      .mockReturnValueOnce(chiamata2); // fetch innescata da creaProposta più sotto
+    vi.spyOn(concertazioneApi, 'creaProposta').mockResolvedValue({ ...PROPOSTA_PROPONENTE, id: 'p-nuova' });
+
+    renderView();
+    await screen.findByText(/le mie proposte/i); // il bollettino/proposte sono già montati, chiamata #1 pendente
+
+    // Innesca la chiamata #2 (dopo l'invio di una nuova proposta riuscito).
+    await userEvent.click(screen.getByRole('button', { name: /aggiungi riga slot/i }));
+    await userEvent.selectOptions(screen.getByLabelText(/slot da cedere/i), 's1');
+    await userEvent.selectOptions(screen.getByLabelText(/associazione ricevente/i), 'ass2');
+    await userEvent.click(screen.getByRole('button', { name: /invia proposta/i }));
+    expect(await screen.findByText(/proposta creata con successo/i)).toBeInTheDocument();
+    expect(spyLista).toHaveBeenCalledTimes(2);
+
+    // La chiamata #2 (più recente) risolve per prima con dati freschi.
+    risolviChiamata2([PROPOSTA_PROPONENTE]);
+    expect(await screen.findByRole('button', { name: /annulla/i })).toBeInTheDocument();
+
+    // La chiamata #1 (mount, più vecchia) risolve DOPO con una lista vuota: senza
+    // il guard sovrascriverebbe silenziosamente il bottone Annulla appena mostrato.
+    risolviChiamata1([]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(screen.getByRole('button', { name: /annulla/i })).toBeInTheDocument();
   });
 });
