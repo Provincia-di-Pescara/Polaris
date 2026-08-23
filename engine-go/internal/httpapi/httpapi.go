@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/provincia/palestre-engine/internal/gara"
 	"github.com/provincia/palestre-engine/internal/istruttoria"
 	"github.com/provincia/palestre-engine/internal/roundrobin"
@@ -193,7 +194,13 @@ func scriviJSON(w http.ResponseWriter, status int, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
+// scriviErrore è l'unico punto in cui un errore applicativo diventa una risposta
+// 500 — a differenza del backend Node (dove ogni route cattura il proprio errore,
+// ~40 punti sparsi), qui c'è un solo choke point: nessun bisogno di un middleware
+// dedicato, la cattura Sentry sta direttamente qui. sentry.CaptureException è un
+// no-op sicuro se Sentry non è stato inizializzato (nessuna SENTRY_DSN).
 func scriviErrore(w http.ResponseWriter, err error) {
+	sentry.CaptureException(err)
 	scriviJSON(w, http.StatusInternalServerError, map[string]any{
 		"errore": err.Error(),
 	})

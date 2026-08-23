@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+	sentryhttp "github.com/getsentry/sentry-go/http"
 	"github.com/provincia/palestre-engine/internal/gara"
 	"github.com/provincia/palestre-engine/internal/httpapi"
 	"github.com/provincia/palestre-engine/internal/istruttoria"
@@ -19,6 +21,24 @@ import (
 )
 
 func main() {
+	// Opzionale per costruzione: mai un requisito per far girare il motore
+	// (test/CI restano invariati senza SENTRY_DSN). sendDefaultPii resta false
+	// (default della libreria) -- dati GDPR-sensibili, mai PII implicita.
+	if sentryDSN := os.Getenv("SENTRY_DSN"); sentryDSN != "" {
+		if err := sentry.Init(sentry.ClientOptions{
+			Dsn:         sentryDSN,
+			Environment: os.Getenv("SENTRY_ENVIRONMENT"),
+			// APP_VERSION è il tag immagine scelto al deploy (docker-compose.yml
+			// riusa IMAGE_TAG, vedi docs/RUNBOOK-deploy.md) — non embeddato a build
+			// time: su tag mobili (dev/latest) riflette cosa gira davvero adesso,
+			// non un valore fisso nell'immagine.
+			Release: os.Getenv("APP_VERSION"),
+		}); err != nil {
+			log.Printf("inizializzazione Sentry fallita (non bloccante): %v", err)
+		}
+		defer sentry.Flush(2 * time.Second)
+	}
+
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		log.Fatal("DATABASE_URL non impostata")
@@ -62,9 +82,14 @@ func main() {
 		},
 	}
 
+	// sentryHandler è un wrapper sicuro anche senza SENTRY_DSN (nessun client Sentry
+	// inizializzato => no-op) -- cattura i panic che sfuggono agli handler (scriviErrore
+	// in httpapi.go copre invece gli errori applicativi già gestiti, vedi lì).
+	sentryHandler := sentryhttp.New(sentryhttp.Options{Repanic: true})
+
 	httpServer := &http.Server{
 		Addr:              ":" + porta,
-		Handler:           server.Routes(),
+		Handler:           sentryHandler.Handle(server.Routes()),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
