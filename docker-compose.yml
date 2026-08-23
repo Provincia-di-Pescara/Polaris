@@ -77,6 +77,28 @@ services:
     networks:
       - polaris-net
 
+  frontend-pubblico:
+    image: ghcr.io/provincia-di-pescara/polaris-frontend-pubblico:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PUBBLICO_PORT:-8082}:80"
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - polaris-net
+
+  frontend-backoffice:
+    image: ghcr.io/provincia-di-pescara/polaris-frontend-backoffice:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_BACKOFFICE_PORT:-8083}:80"
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - polaris-net
+
   # Backup logico giornaliero (pg_dump, mai bind mount — output su volume named
   # dedicato). Rotazione 7 giornalieri/4 settimanali/6 mensili di default (immagine
   # verificata attiva e con supporto Postgres 18 al momento della scelta, luglio 2026 —

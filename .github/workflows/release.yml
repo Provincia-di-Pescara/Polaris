@@ -27,6 +27,12 @@ jobs:
           - immagine: polaris-backend
             context: backend-node
             dockerfile: backend-node/Dockerfile
+          - immagine: polaris-frontend-pubblico
+            context: frontend-pubblico
+            dockerfile: frontend-pubblico/Dockerfile
+          - immagine: polaris-frontend-backoffice
+            context: frontend-backoffice
+            dockerfile: frontend-backoffice/Dockerfile
     steps:
       - uses: actions/checkout@v7
 
