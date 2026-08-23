@@ -52,8 +52,10 @@ services:
   backend:
     image: ghcr.io/provincia-di-pescara/polaris-backend:${IMAGE_TAG:-latest}
     restart: unless-stopped
-    ports:
-      - "${BACKEND_PORT:-8080}:8080"
+    # Nessuna porta pubblicata sull'host: come "engine", è puramente interno alla
+    # rete Docker — entrambi i frontend lo raggiungono via proxy nginx interno
+    # (http://backend:8080), mai dall'esterno. Per debug diretto dell'API,
+    # pubblicare temporaneamente una porta a mano (o docker compose exec).
     environment:
       NODE_ENV: production
       PORT: "8080"
