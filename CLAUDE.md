@@ -53,6 +53,10 @@ Questo file resta volutamente snello (overview + vincoli sempre validi). Il dett
 
 Infrastruttura: Docker, CI/CD via GitHub Actions → GHCR, reverse proxy davanti ai frontend/API.
 
+## Workflow di sviluppo
+
+Solo io e il committente su questo progetto: **lavoro diretto su `master`, mai PR**. Worktree/branch temporanei per isolamento durante l'implementazione vanno bene, ma l'integrazione finale è sempre merge diretto (fast-forward quando possibile) su `master`, mai una pull request da rivedere.
+
 ## Vincoli progettuali non negoziabili
 
 - **Determinismo**: stesso input → stesso output, sempre. Vietato usare fonti di non-determinismo non seedate (orologio di sistema, ordine di iterazione di map non ordinate, float non specificato) nel motore Go.
