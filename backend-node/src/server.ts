@@ -4,6 +4,7 @@ import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import cors from 'cors';
 import { timingSafeEqual } from 'node:crypto';
+import { middlewareSentry } from './sentry.ts';
 import type { Pool, PoolClient } from 'pg';
 import type { Db } from './db.ts';
 import { listaStagioni, creaStagione } from './stagioni.ts';
@@ -268,6 +269,7 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
 
   app.use(express.json());
   app.use(cookieParser(segretoCookie()));
+  middlewareSentry(app);
 
   app.get('/healthz', (_req, res) => {
     res.status(200).send('ok');

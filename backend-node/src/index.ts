@@ -1,6 +1,10 @@
 import { creaPool } from './db.ts';
 import { creaApp } from './server.ts';
 import { avviaSchedulerHousekeeping } from './housekeeping/scheduler.ts';
+import { inizializzaSentry, catturaErroriProcesso } from './sentry.ts';
+
+inizializzaSentry();
+catturaErroriProcesso();
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
