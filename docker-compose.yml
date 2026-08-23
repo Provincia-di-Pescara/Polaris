@@ -3,11 +3,11 @@ name: polaris
 # PRODUZIONE: immagini da registry, solo volumi named, nessun bind mount.
 # Per lo sviluppo vedi docker-compose.override.yml (attivato da COMPOSE_FILE in .env).
 #
-# Le migration (db/migrations/, naming compatibile golang-migrate — vedi CLAUDE.md)
-# NON girano più come container in questo stack: le esegue la pipeline
-# (.github/workflows/release.yml) prima del deploy delle nuove immagini, non a
-# runtime. Vedi CLAUDE.md sezione CI/CD per il perché e cosa manca ancora
-# (endpoint DB di produzione raggiungibile dal runner, non ancora configurato).
+# Le migration (db/migrations/, naming compatibile golang-migrate) girano
+# nell'entrypoint del container "backend" stesso ad ogni avvio/redeploy —
+# idempotenti, serializzate da un lock Postgres se più istanze si sovrappongono.
+# Postgres di produzione resta su rete privata Docker, mai raggiunto da GitHub
+# Actions: vedi docs/claude/cicd-docker.md.
 
 services:
 

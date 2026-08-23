@@ -25,7 +25,11 @@ jobs:
             context: engine-go
             dockerfile: engine-go/Dockerfile
           - immagine: polaris-backend
-            context: backend-node
+            # Contesto = radice del repo (non backend-node/): il Dockerfile copia anche
+            # db/migrations/ — le migration girano nell'entrypoint del container stesso
+            # ad ogni avvio (Postgres di produzione su rete privata, non raggiungibile
+            # da un runner GitHub-hosted — vedi docs/claude/cicd-docker.md).
+            context: .
             dockerfile: backend-node/Dockerfile
           - immagine: polaris-frontend-pubblico
             context: frontend-pubblico
@@ -63,22 +67,3 @@ jobs:
           tags: ${{ steps.tag.outputs.tags }}
           cache-from: type=gha,scope=${{ matrix.immagine }}
           cache-to: type=gha,mode=max,scope=${{ matrix.immagine }}
-
-  migrate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Applica le migration al database di produzione
-        env:
-          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
-        run: |
-          if [ -z "$DATABASE_URL" ]; then
-            echo "::warning::PRODUCTION_DATABASE_URL non configurato — migration NON applicate. \
-          Il runner GitHub-hosted deve poter raggiungere il Postgres di produzione: se resta \
-          dietro rete privata serve un self-hosted runner (o un endpoint esposto con allowlist), \
-          decisione non ancora presa. Configurare il secret quando l'infrastruttura è pronta."
-            exit 0
-          fi
-          docker run --rm -v "$PWD/db/migrations:/migrations:ro" migrate/migrate:v4.18.1 \
-            -path=/migrations -database "$DATABASE_URL" up

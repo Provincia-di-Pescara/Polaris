@@ -1,0 +1,15 @@
+# Usato SOLO dal build del backend, unico servizio con contesto = radice del repo
+# (serve db/migrations/ insieme a backend-node/ — vedi backend-node/Dockerfile).
+# Gli altri servizi (engine-go, frontend-pubblico, frontend-backoffice) hanno
+# contesto scoped alla propria sottocartella e il proprio .dockerignore locale.
+.git
+.claude
+.serena
+docs
+documenti
+engine-go
+frontend-pubblico
+frontend-backoffice
+backend-node/node_modules
+backend-node/data
+**/*.log
