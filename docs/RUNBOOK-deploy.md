@@ -31,3 +31,11 @@ Da Portainer, senza shell: **Containers → `<nome container>` → dettagli** mo
 ## Migration
 
 Girano da sole nell'entrypoint del container `backend` ad ogni avvio/redeploy — nessuna azione manuale richiesta, nessun job/servizio dedicato nello stack. Idempotenti: un redeploy senza nuove migration stampa `no change` nei log del container e prosegue normalmente. Dettagli/motivazione in `docs/claude/cicd-docker.md`.
+
+## Sentry / GlitchTip (opzionale)
+
+Nell'editor dello stack Portainer, sezione **Environment variables**, imposta uno o più tra `SENTRY_DSN_ENGINE`/`SENTRY_DSN_BACKEND`/`SENTRY_DSN_PUBBLICO`/`SENTRY_DSN_BACKOFFICE` (un progetto GlitchTip per servizio consigliato — dashboard/alert distinti). Vuoto/assente = nessun reporting per quel servizio, mai un requisito per far girare lo stack.
+
+Ogni evento riporta `release` = `IMAGE_TAG` (lo stesso canale scelto sopra) — utile per distinguere errori tra build diversi su un canale mobile come `dev`, senza dover risalire al digest manualmente.
+
+I due frontend mostrano la stessa versione nel footer (link al repository GitHub incluso) — iniettata a runtime dall'entrypoint nginx del container, non embeddata nell'immagine: la stessa immagine gira su più istanze con `IMAGE_TAG`/DSN diversi, un redeploy con `IMAGE_TAG` cambiato aggiorna il footer senza rebuild.
