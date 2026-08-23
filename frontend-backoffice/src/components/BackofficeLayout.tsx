@@ -3,6 +3,7 @@ import { Outlet } from 'react-router';
 import { Sidebar } from './Sidebar.tsx';
 import { Header } from './Header.tsx';
 import { listaStagioni, type Stagione } from '../api/stagioni.ts';
+import { versioneApp } from '../sentry.ts';
 
 export function BackofficeLayout(): React.ReactElement {
   const [seasons, setSeasons] = useState<Stagione[]>([]);
@@ -40,6 +41,25 @@ export function BackofficeLayout(): React.ReactElement {
               proprio). */}
           <Outlet context={selectedSeasonId} />
         </main>
+        <footer style={{
+          padding: '0.75rem 1.75rem',
+          fontSize: '0.75rem',
+          color: 'var(--pa-text-muted)',
+          borderTop: '1px solid var(--pa-border)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '0.5rem',
+        }}>
+          <span>POLARIS Backoffice — Provincia di Pescara</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <a href="https://github.com/Provincia-di-Pescara/Polaris" target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>
+              GitHub
+            </a>
+            {versioneApp() && <span>{versioneApp()}</span>}
+          </span>
+        </footer>
       </div>
     </div>
   );
