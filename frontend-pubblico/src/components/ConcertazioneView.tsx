@@ -1,161 +1,588 @@
-import React, { useState } from 'react';
-import { mockConcertazioneProposals } from '../mockData';
-import { ConcertazioneProposal } from '../types';
-import { RefreshCw, ArrowLeftRight, Check, X, ShieldAlert, Sparkles, Send } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Plus, Trash2, Send, Check, XCircle } from 'lucide-react';
+import type { EntitaRappresentata } from '../api/deleghe.ts';
+import {
+  propostaProvvisoria,
+  creaProposta,
+  listaProposteConcertazione,
+  accettaProposta,
+  annullaProposta,
+  type VocePropostaProvvisoria,
+  type TipoProposta,
+  type StatoProposta,
+  type Proposta,
+  type DatiCreaProposta,
+} from '../api/concertazione.ts';
+import { ErroreRichiestaApi } from '../api/client.ts';
 
-export const ConcertazioneView: React.FC = () => {
-  const [proposals, setProposals] = useState<ConcertazioneProposal[]>(mockConcertazioneProposals);
-  const [showNewProposalModal, setShowNewProposalModal] = useState(false);
+interface ConcertazioneProps {
+  entities: EntitaRappresentata[];
+  stagioneId: string | null;
+  activeEntity: EntitaRappresentata | null;
+}
 
-  const handleAccept = (id: string) => {
-    setProposals(prev => prev.map(p => p.id === id ? { ...p, stato: 'accettato' } : p));
+interface RigaSlotForm {
+  slotCedutoId: string;
+  associazioneRiceventeId: string;
+  slotRicevutoId: string;
+}
+
+function nuovaRiga(): RigaSlotForm {
+  return { slotCedutoId: '', associazioneRiceventeId: '', slotRicevutoId: '' };
+}
+
+const GIORNI = ['—', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'];
+
+const ETICHETTA_TIPO: Record<TipoProposta, string> = {
+  scambio_bilaterale: 'Scambio bilaterale',
+  scambio_multilaterale: 'Scambio multilaterale',
+  cessione: 'Cessione',
+  utilizzo_slot_libero: 'Utilizzo di uno slot libero',
+  accorpamento: 'Accorpamento',
+  ampliamento: 'Ampliamento',
+};
+
+const ETICHETTA_STATO: Record<StatoProposta, string> = {
+  in_attesa_accettazione: 'In attesa di accettazione',
+  accettata_da_tutti: 'Accettata, in attesa di validazione',
+  validata: 'Validata',
+  rigettata: 'Rigettata',
+  annullata: 'Annullata',
+};
+
+const CLASSE_BADGE_STATO: Record<StatoProposta, string> = {
+  in_attesa_accettazione: 'badge badge-warning',
+  accettata_da_tutti: 'badge badge-info',
+  validata: 'badge badge-success',
+  rigettata: 'badge badge-danger',
+  annullata: 'badge badge-neutral',
+};
+
+const STILE_ERRORE: React.CSSProperties = {
+  backgroundColor: 'var(--pa-danger-bg)',
+  color: 'var(--pa-danger)',
+  padding: '0.6rem 0.85rem',
+  borderRadius: '6px',
+};
+
+const STILE_BOX: React.CSSProperties = {
+  backgroundColor: '#F8FAFC',
+  padding: '1rem',
+  borderRadius: '8px',
+  border: '1px solid #E2E8F0',
+};
+
+function etichettaGiornoOrario(v: VocePropostaProvvisoria): string {
+  const giorno = GIORNI[v.giornoSettimana] ?? `Giorno ${v.giornoSettimana}`;
+  return `${giorno} ${v.orarioInizio}–${v.orarioFine} (${v.durataMinuti} min)${v.pregiata ? ' · fascia pregiata' : ''}`;
+}
+
+function messaggioErrore(err: unknown, prefisso: string): string {
+  return err instanceof ErroreRichiestaApi ? `${prefisso}: ${err.message}` : `${prefisso}.`;
+}
+
+export const ConcertazioneView: React.FC<ConcertazioneProps> = ({ entities, stagioneId, activeEntity }) => {
+  const associazioneId = activeEntity?.associazioneId ?? null;
+
+  const [bollettino, setBollettino] = useState<VocePropostaProvvisoria[]>([]);
+  const [caricamentoBollettino, setCaricamentoBollettino] = useState<boolean>(true);
+  // Messaggio mostrato verbatim: il caso atteso è un 409 ErroreStatoNonValidoPerTransizione
+  // ("la concertazione non è ancora aperta per questa stagione"), ma qualunque
+  // errore su questa fetch nasconde le sezioni sottostanti — senza bollettino
+  // non c'è nulla di coerente da mostrare (né lookup slot, né form di proposta).
+  const [erroreBollettino, setErroreBollettino] = useState<string | null>(null);
+
+  const [proposte, setProposte] = useState<Proposta[]>([]);
+  const [erroreProposte, setErroreProposte] = useState<string | null>(null);
+
+  const [azioneInCorsoId, setAzioneInCorsoId] = useState<string | null>(null);
+  const [erroreAzione, setErroreAzione] = useState<string | null>(null);
+
+  const [tipo, setTipo] = useState<TipoProposta>('scambio_bilaterale');
+  const [righe, setRighe] = useState<RigaSlotForm[]>([]);
+  const [erroreForm, setErroreForm] = useState<string | null>(null);
+  const [invioInCorso, setInvioInCorso] = useState<boolean>(false);
+  const [messaggioSuccesso, setMessaggioSuccesso] = useState<string | null>(null);
+
+  useEffect(() => {
+    let annullato = false;
+    if (!stagioneId || !associazioneId) {
+      setCaricamentoBollettino(false);
+      return;
+    }
+    setCaricamentoBollettino(true);
+    propostaProvvisoria(stagioneId)
+      .then((voci) => {
+        if (annullato) return;
+        setBollettino(voci);
+        setErroreBollettino(null);
+      })
+      .catch((err) => {
+        if (annullato) return;
+        setBollettino([]);
+        setErroreBollettino(
+          err instanceof ErroreRichiestaApi ? err.message : 'Errore imprevisto nel caricamento del bollettino.',
+        );
+      })
+      .finally(() => {
+        if (!annullato) setCaricamentoBollettino(false);
+      });
+    return () => {
+      annullato = true;
+    };
+  }, [stagioneId, associazioneId]);
+
+  const caricaProposte = useCallback((estaAnnullato: () => boolean): void => {
+    if (!stagioneId) return;
+    listaProposteConcertazione(stagioneId)
+      .then((lista) => {
+        if (estaAnnullato()) return;
+        setProposte(lista);
+        setErroreProposte(null);
+      })
+      .catch((err) => {
+        if (estaAnnullato()) return;
+        setProposte([]);
+        setErroreProposte(messaggioErrore(err, 'Elenco proposte non disponibile'));
+      });
+  }, [stagioneId]);
+
+  useEffect(() => {
+    if (!stagioneId || !associazioneId) {
+      setProposte([]);
+      setErroreProposte(null);
+      return;
+    }
+    let annullato = false;
+    caricaProposte(() => annullato);
+    return () => {
+      annullato = true;
+    };
+  }, [stagioneId, associazioneId, caricaProposte]);
+
+  // Due mappe di lookup condivise da tutte le sezioni sotto, derivate dal
+  // bollettino: mai ricalcolate ad ogni render.
+  const mappaSlot = useMemo(() => {
+    const m = new Map<string, VocePropostaProvvisoria>();
+    bollettino.forEach((v) => m.set(v.slotId, v));
+    return m;
+  }, [bollettino]);
+
+  const mappaAssociazioni = useMemo(() => {
+    const m = new Map<string, string>();
+    bollettino.forEach((v) => {
+      if (!m.has(v.associazioneId)) m.set(v.associazioneId, v.associazioneDenominazione);
+    });
+    return m;
+  }, [bollettino]);
+
+  if (!stagioneId) {
+    return (
+      <div className="pa-container">
+        <div className="pa-card">Seleziona una stagione dall'intestazione.</div>
+      </div>
+    );
+  }
+
+  if (!activeEntity || !associazioneId) {
+    return (
+      <div className="pa-container">
+        <div className="pa-card">
+          Seleziona un'associazione con delega approvata.
+          {entities.length === 0 && ' Non risultano associazioni rappresentate: richiedi prima un accreditamento.'}
+        </div>
+      </div>
+    );
+  }
+
+  const etichettaSlotPerId = (slotId: string): string => {
+    const voce = mappaSlot.get(slotId);
+    if (!voce) return slotId;
+    return `${voce.impiantoDenominazione} — ${voce.spazioDenominazione} · ${etichettaGiornoOrario(voce)}`;
   };
 
-  const handleReject = (id: string) => {
-    setProposals(prev => prev.map(p => p.id === id ? { ...p, stato: 'rifiutato' } : p));
+  const denominazionePerId = (id: string): string => mappaAssociazioni.get(id) ?? id;
+
+  // Righe form: slot proprie disponibili come "slot da cedere".
+  const vociProprie = bollettino.filter((v) => v.associazioneId === associazioneId);
+  const associazioniDistinte = Array.from(mappaAssociazioni.entries());
+
+  const aggiungiRiga = (): void => {
+    setRighe((prec) => [...prec, nuovaRiga()]);
+  };
+
+  const rimuoviRiga = (indice: number): void => {
+    setRighe((prec) => prec.filter((_, i) => i !== indice));
+  };
+
+  const aggiornaRiga = (indice: number, campo: keyof RigaSlotForm, valore: string): void => {
+    setRighe((prec) =>
+      prec.map((r, i) => {
+        if (i !== indice) return r;
+        // Cambiando l'associazione ricevente le opzioni di "slot ricevuto"
+        // cambiano: una selezione precedente non più coerente va azzerata.
+        if (campo === 'associazioneRiceventeId') return { ...r, associazioneRiceventeId: valore, slotRicevutoId: '' };
+        return { ...r, [campo]: valore };
+      }),
+    );
+  };
+
+  // Simulazione ISF — UNICO calcolo client-side ammesso: mai inviato al
+  // backend, mai autoritativo, solo stima informativa aggiornata ad ogni
+  // modifica del form.
+  const vaAttualeMinuti = vociProprie.reduce((tot, v) => tot + Number(v.valoreMinutiAssegnato), 0);
+  const frProprioMinuti = vociProprie[0]?.fabbisognoRiconosciutoMinuti ?? null;
+  const minutiCeduti = righe.reduce((tot, r) => {
+    if (tipo === 'utilizzo_slot_libero' || !r.slotCedutoId) return tot;
+    return tot + (mappaSlot.get(r.slotCedutoId)?.durataMinuti ?? 0);
+  }, 0);
+  const minutiRicevuti = righe.reduce((tot, r) => {
+    if (!r.slotRicevutoId || r.associazioneRiceventeId !== associazioneId) return tot;
+    return tot + (mappaSlot.get(r.slotRicevutoId)?.durataMinuti ?? 0);
+  }, 0);
+  const vaStimatoMinuti = vaAttualeMinuti - minutiCeduti + minutiRicevuti;
+  const frProprioNumerico = frProprioMinuti === null ? Number.NaN : Number(frProprioMinuti);
+  const isfStimato =
+    Number.isFinite(frProprioNumerico) && frProprioNumerico > 0 ? vaStimatoMinuti / frProprioNumerico : null;
+  const mostraSimulazione = vociProprie.length > 0;
+
+  const validaForm = (): string | null => {
+    if (righe.length === 0) return 'Aggiungi almeno una riga slot prima di inviare la proposta.';
+    if (tipo !== 'utilizzo_slot_libero') {
+      const indiceMancante = righe.findIndex((r) => !r.slotCedutoId);
+      if (indiceMancante !== -1) return `Riga #${indiceMancante + 1}: seleziona lo slot da cedere.`;
+    }
+    return null;
+  };
+
+  const inviaProposta = async (): Promise<void> => {
+    const errore = validaForm();
+    if (errore) {
+      setErroreForm(errore);
+      return;
+    }
+    setErroreForm(null);
+    setMessaggioSuccesso(null);
+    setInvioInCorso(true);
+    try {
+      // Specchio del refine zod backend: associazioneCedenteId assente per
+      // 'utilizzo_slot_libero', presente per tutti gli altri tipi. Ogni riga
+      // del form può generare fino a due voci slot: la cessione del proprio
+      // slot verso la ricevente e, se compilata, la ricezione di uno slot
+      // della ricevente in cambio (bilaterale/multilaterale/accorpamento/
+      // ampliamento) — per una cessione semplice si compila solo la prima.
+      const slot: DatiCreaProposta['slot'] = [];
+      righe.forEach((r) => {
+        if (tipo !== 'utilizzo_slot_libero' && r.slotCedutoId) {
+          slot.push({
+            slotId: r.slotCedutoId,
+            associazioneCedenteId: associazioneId,
+            associazioneRiceventeId: r.associazioneRiceventeId,
+          });
+        }
+        if (r.slotRicevutoId) {
+          slot.push({
+            slotId: r.slotRicevutoId,
+            ...(tipo !== 'utilizzo_slot_libero' ? { associazioneCedenteId: r.associazioneRiceventeId } : {}),
+            associazioneRiceventeId: associazioneId,
+          });
+        }
+      });
+      const creata = await creaProposta({ stagioneId, proponenteAssociazioneId: associazioneId, tipo, slot });
+      setRighe([]);
+      setMessaggioSuccesso(`Proposta creata con successo (id ${creata.id}).`);
+      caricaProposte(() => false);
+    } catch (err) {
+      setErroreForm(
+        err instanceof ErroreRichiestaApi ? err.message : 'Errore imprevisto durante l\'invio della proposta.',
+      );
+    } finally {
+      setInvioInCorso(false);
+    }
+  };
+
+  const accetta = async (proposta: Proposta): Promise<void> => {
+    setErroreAzione(null);
+    setAzioneInCorsoId(proposta.id);
+    try {
+      await accettaProposta(proposta.id, associazioneId);
+      caricaProposte(() => false);
+    } catch (err) {
+      setErroreAzione(
+        err instanceof ErroreRichiestaApi ? err.message : 'Errore imprevisto durante l\'accettazione della proposta.',
+      );
+    } finally {
+      setAzioneInCorsoId(null);
+    }
+  };
+
+  const annulla = async (proposta: Proposta): Promise<void> => {
+    setErroreAzione(null);
+    setAzioneInCorsoId(proposta.id);
+    try {
+      await annullaProposta(proposta.id);
+      caricaProposte(() => false);
+    } catch (err) {
+      setErroreAzione(
+        err instanceof ErroreRichiestaApi ? err.message : 'Errore imprevisto durante l\'annullamento della proposta.',
+      );
+    } finally {
+      setAzioneInCorsoId(null);
+    }
   };
 
   return (
     <div className="pa-container" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {/* Title */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h2 style={{ fontSize: '1.5rem', color: 'var(--pa-blue-dark)' }}>
-            Piattaforma di Concertazione & Scambio Slot (Fase 11 - Art. B.24-B.26)
-          </h2>
-          <p style={{ color: 'var(--pa-text-muted)', fontSize: '0.9rem' }}>
-            Modulo per proposte bilaterali di scambio slot tra associazioni concorrenti con simulazione ISF live
-          </p>
-        </div>
-
-        <button onClick={() => setShowNewProposalModal(true)} className="btn btn-primary">
-          <ArrowLeftRight size={16} />
-          <span>Proponi Nuovo Scambio Slot</span>
-        </button>
+      <div>
+        <h2 style={{ fontSize: '1.5rem', color: 'var(--pa-blue-dark)' }}>
+          Concertazione tra associazioni
+        </h2>
+        <p style={{ color: 'var(--pa-text-muted)', fontSize: '0.9rem' }}>
+          Proposta provvisoria e scambi/cessioni tra associazioni per{' '}
+          {activeEntity.associazioneDenominazione ?? 'l\'associazione selezionata'} (artt. B.23-B.28 Allegato B)
+        </p>
       </div>
 
-      {/* Notice Card */}
-      <div className="pa-card" style={{ backgroundColor: '#EBF5FB', borderLeft: '4px solid var(--pa-blue-primary)' }}>
-        <div style={{ display: 'flex', gap: '0.85rem' }}>
-          <Sparkles size={24} color="var(--pa-blue-primary)" style={{ flexShrink: 0 }} />
-          <div>
-            <h4 style={{ color: 'var(--pa-blue-dark)', margin: 0 }}>Risoluzione Concorrente FIFO & Validazione Automated (Art. B.27)</h4>
-            <p style={{ fontSize: '0.825rem', color: '#1B4F72', marginTop: '2px' }}>
-              Le proposte concordate da entrambe le associazioni vengono validate serialmente in ordine FIFO. Il motore Go verifica la compatibilità temporale e l'assenza di sovrapposizioni a livello DB con lock ottimistico.
-            </p>
-          </div>
-        </div>
-      </div>
+      {caricamentoBollettino && <div className="pa-card">Caricamento bollettino…</div>}
 
-      {/* Active Proposals Table */}
-      <div className="pa-card">
-        <h3 style={{ fontSize: '1.1rem', color: 'var(--pa-blue-dark)', marginBottom: '1rem' }}>
-          Proposte di Scambio Ricevute ed Inviate
-        </h3>
+      {!caricamentoBollettino && erroreBollettino && <div className="pa-card" style={STILE_ERRORE}>{erroreBollettino}</div>}
 
-        <div className="pa-table-container">
-          <table className="pa-table">
-            <thead>
-              <tr>
-                <th>Associazione Proponente</th>
-                <th>Slot Offerto</th>
-                <th>Slot Richiesto in Cambio</th>
-                <th>Impatto ISF Stimato</th>
-                <th>Stato Proposta</th>
-                <th>Azione</th>
-              </tr>
-            </thead>
-            <tbody>
-              {proposals.map(p => (
-                <tr key={p.id}>
-                  <td><strong>{p.associazioneProponente}</strong></td>
-                  <td>
-                    <div style={{ fontSize: '0.825rem', color: 'var(--pa-blue-primary)', fontWeight: 600 }}>{p.slotOfferto}</div>
-                  </td>
-                  <td>
-                    <div style={{ fontSize: '0.825rem', color: 'var(--pa-blue-dark)', fontWeight: 600 }}>{p.slotRichiesto}</div>
-                  </td>
-                  <td>
-                    <span className="badge badge-success">
-                      +{(p.impattoIsfRicevente * 100).toFixed(1)}% ISF
-                    </span>
-                  </td>
-                  <td>
-                    {p.stato === 'in_attesa' && <span className="badge badge-warning">In Attesa Tua Risposta</span>}
-                    {p.stato === 'accettato' && <span className="badge badge-success">Accettato & Validato</span>}
-                    {p.stato === 'rifiutato' && <span className="badge badge-danger">Rifiutato</span>}
-                  </td>
-                  <td>
-                    {p.stato === 'in_attesa' && (
-                      <div style={{ display: 'flex', gap: '0.35rem' }}>
-                        <button onClick={() => handleAccept(p.id)} className="btn btn-success btn-sm" style={{ padding: '0.2rem 0.5rem' }}>
-                          <Check size={14} /> Accetta
-                        </button>
-                        <button onClick={() => handleReject(p.id)} className="btn btn-danger btn-sm" style={{ padding: '0.2rem 0.5rem' }}>
-                          <X size={14} /> Rifiuta
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {!caricamentoBollettino && !erroreBollettino && (
+        <>
+          <div className="pa-card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <h3 style={{ fontSize: '1.1rem', color: 'var(--pa-blue-dark)', margin: 0 }}>
+              Bollettino proposta provvisoria (art. B.23)
+            </h3>
 
-      {/* New Proposal Modal */}
-      {showNewProposalModal && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ padding: '1.5rem' }}>
-            <h3 style={{ marginBottom: '1rem', color: 'var(--pa-blue-dark)' }}>Proponi Scambio Slot ad Altra ASD</h3>
-
-            <div className="form-group">
-              <label className="form-label">Seleziona Associazione Destinataria dello Scambio:</label>
-              <select className="form-control">
-                <option value="ass-02">ASD Basket Pescara 1976</option>
-                <option value="ass-03">SSD Montesilvano Calcio a 5</option>
-              </select>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Tuo Slot da Cedere / Offrire:</label>
-              <select className="form-control">
-                <option value="s1">Lunedì 17:00 - 19:00 @ Palestra Galilei</option>
-              </select>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Slot Desiderato dell'Altra Associazione:</label>
-              <select className="form-control">
-                <option value="s2">Martedì 17:00 - 19:00 @ Palestra Galilei</option>
-              </select>
-            </div>
-
-            <div style={{ backgroundColor: '#E8F8F5', padding: '0.85rem', borderRadius: '6px', marginBottom: '1.25rem' }}>
-              <div style={{ fontSize: '0.775rem', fontWeight: 700, color: 'var(--pa-success)' }}>SIMULAZIONE IMPATTO ISF:</div>
-              <div style={{ fontSize: '0.85rem', color: '#16A085', marginTop: '2px' }}>
-                Accettando lo scambio il tuo ISF passerà da <strong>0,857</strong> a <strong>0,892 (+3.5%)</strong>
+            {bollettino.length === 0 ? (
+              <div>Nessuna voce nel bollettino per questa stagione.</div>
+            ) : (
+              <div className="pa-table-container">
+                <table className="pa-table">
+                  <thead>
+                    <tr>
+                      <th>Impianto &amp; Spazio Sportivo</th>
+                      <th>Giorno / Orario</th>
+                      <th>Associazione</th>
+                      <th>FR</th>
+                      <th>ISF</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bollettino.map((v) => {
+                      const propria = v.associazioneId === associazioneId;
+                      return (
+                        <tr key={v.slotId} style={propria ? { fontWeight: 700 } : undefined}>
+                          <td>
+                            <strong>{v.impiantoDenominazione}</strong>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--pa-text-muted)' }}>{v.spazioDenominazione}</div>
+                          </td>
+                          <td>{etichettaGiornoOrario(v)}</td>
+                          <td>
+                            {v.associazioneDenominazione}
+                            {propria && <span className="badge badge-info" style={{ marginLeft: '0.5rem' }}>La tua associazione</span>}
+                          </td>
+                          <td>{v.fabbisognoRiconosciutoMinuti ?? '—'}</td>
+                          <td>{v.isf ?? '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
+            )}
+          </div>
+
+          <div className="pa-card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <h3 style={{ fontSize: '1.1rem', color: 'var(--pa-blue-dark)', margin: 0 }}>Le mie proposte</h3>
+
+            {erroreProposte && <div style={STILE_ERRORE}>{erroreProposte}</div>}
+            {erroreAzione && <div style={STILE_ERRORE}>{erroreAzione}</div>}
+
+            {proposte.length === 0 ? (
+              <div>Nessuna proposta di concertazione presente.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {proposte.map((p) => {
+                  const propriaParte = p.parti.find((parte) => parte.associazioneId === associazioneId) ?? null;
+                  const puoAccettare = p.stato === 'in_attesa_accettazione' && propriaParte !== null && propriaParte.accettatoIl === null;
+                  const puoAnnullare = p.stato === 'in_attesa_accettazione' && p.proponenteAssociazioneId === associazioneId;
+                  return (
+                    <div key={p.id} style={{ ...STILE_BOX, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span className="badge badge-primary">{ETICHETTA_TIPO[p.tipo]}</span>
+                        <span className={CLASSE_BADGE_STATO[p.stato]}>{ETICHETTA_STATO[p.stato]}</span>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--pa-text-muted)' }}>
+                          Proponente: {denominazionePerId(p.proponenteAssociazioneId)}
+                        </span>
+                      </div>
+
+                      {p.stato === 'rigettata' && p.motivazioneRigetto && (
+                        <div style={{ fontSize: '0.85rem' }}>
+                          <strong>Motivazione rigetto:</strong> {p.motivazioneRigetto}
+                        </div>
+                      )}
+
+                      <div style={{ fontSize: '0.82rem' }}>
+                        <strong>Parti coinvolte:</strong>
+                        <ul style={{ margin: '0.25rem 0 0 1rem' }}>
+                          {p.parti.map((parte) => (
+                            <li key={parte.associazioneId}>
+                              {denominazionePerId(parte.associazioneId)} —{' '}
+                              {parte.accettatoIl !== null ? 'ha accettato' : 'non ha ancora accettato'}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      <div style={{ fontSize: '0.82rem' }}>
+                        <strong>Slot coinvolti:</strong>
+                        <ul style={{ margin: '0.25rem 0 0 1rem' }}>
+                          {p.slot.map((s, i) => (
+                            <li key={`${s.slotId}-${i}`}>
+                              {etichettaSlotPerId(s.slotId)} —{' '}
+                              {s.associazioneCedenteId
+                                ? `da ${denominazionePerId(s.associazioneCedenteId)} a ${denominazionePerId(s.associazioneRiceventeId)}`
+                                : `verso ${denominazionePerId(s.associazioneRiceventeId)}`}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      {(puoAccettare || puoAnnullare) && (
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          {puoAccettare && (
+                            <button
+                              type="button"
+                              className="btn btn-success btn-sm"
+                              disabled={azioneInCorsoId === p.id}
+                              onClick={() => accetta(p)}
+                            >
+                              <Check size={14} />
+                              <span>Accetta</span>
+                            </button>
+                          )}
+                          {puoAnnullare && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              disabled={azioneInCorsoId === p.id}
+                              onClick={() => annulla(p)}
+                            >
+                              <XCircle size={14} />
+                              <span>Annulla</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="pa-card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <h3 style={{ fontSize: '1.1rem', color: 'var(--pa-blue-dark)', margin: 0 }}>Proponi nuova concertazione</h3>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="conc-tipo">Tipo proposta:</label>
+              <select id="conc-tipo" className="form-control" value={tipo}
+                onChange={(e) => setTipo(e.target.value as TipoProposta)}>
+                {(Object.keys(ETICHETTA_TIPO) as TipoProposta[]).map((t) => (
+                  <option key={t} value={t}>{ETICHETTA_TIPO[t]}</option>
+                ))}
+              </select>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
-              <button onClick={() => setShowNewProposalModal(false)} className="btn btn-secondary">
-                Annulla
+            {righe.length === 0 && (
+              <div style={{ color: 'var(--pa-text-muted)', fontSize: '0.85rem' }}>Nessuna riga slot aggiunta.</div>
+            )}
+
+            {righe.map((r, i) => (
+              <div key={i} style={{ ...STILE_BOX, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: tipo === 'utilizzo_slot_libero' ? '1fr 1fr' : '1fr 1fr 1fr', gap: '1rem' }}>
+                  {tipo !== 'utilizzo_slot_libero' && (
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label" htmlFor={`conc-riga-ceduto-${i}`}>Slot da cedere:</label>
+                      <select id={`conc-riga-ceduto-${i}`} className="form-control" value={r.slotCedutoId}
+                        onChange={(e) => aggiornaRiga(i, 'slotCedutoId', e.target.value)}>
+                        <option value="">Seleziona…</option>
+                        {vociProprie.map((v) => (
+                          <option key={v.slotId} value={v.slotId}>
+                            {v.impiantoDenominazione} — {v.spazioDenominazione} · {etichettaGiornoOrario(v)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label" htmlFor={`conc-riga-ricevente-${i}`}>Associazione ricevente:</label>
+                    <select id={`conc-riga-ricevente-${i}`} className="form-control" value={r.associazioneRiceventeId}
+                      onChange={(e) => aggiornaRiga(i, 'associazioneRiceventeId', e.target.value)}>
+                      <option value="">Seleziona…</option>
+                      {associazioniDistinte.map(([id, denom]) => (
+                        <option key={id} value={id}>{denom}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label" htmlFor={`conc-riga-ricevuto-${i}`}>Slot ricevuto:</label>
+                    <select id={`conc-riga-ricevuto-${i}`} className="form-control" value={r.slotRicevutoId}
+                      disabled={!r.associazioneRiceventeId}
+                      onChange={(e) => aggiornaRiga(i, 'slotRicevutoId', e.target.value)}>
+                      <option value="">Seleziona…</option>
+                      {bollettino.filter((v) => v.associazioneId === r.associazioneRiceventeId).map((v) => (
+                        <option key={v.slotId} value={v.slotId}>
+                          {v.impiantoDenominazione} — {v.spazioDenominazione} · {etichettaGiornoOrario(v)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => rimuoviRiga(i)}>
+                    <Trash2 size={14} /> Rimuovi riga
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            <div>
+              <button type="button" className="btn btn-secondary" onClick={aggiungiRiga}>
+                <Plus size={16} /> Aggiungi riga slot
               </button>
-              <button
-                onClick={() => {
-                  alert('Proposta di scambio inviata all\'associazione partner!');
-                  setShowNewProposalModal(false);
-                }}
-                className="btn btn-primary"
-              >
+            </div>
+
+            {mostraSimulazione && (
+              <div style={{ backgroundColor: '#E8F8F5', border: '1px solid #A3E4D7', padding: '1rem', borderRadius: '8px' }}>
+                <div style={{ fontSize: '0.775rem', fontWeight: 700, color: 'var(--pa-success)' }}>
+                  SIMULAZIONE ISF (stima informativa — il valore reale sarà confermato in fase di validazione)
+                </div>
+                <div style={{ fontSize: '0.85rem', color: '#16A085', marginTop: '4px' }}>
+                  VA stimato: <strong>{vaStimatoMinuti}</strong> min (attuale {vaAttualeMinuti} min, -{minutiCeduti} ceduti, +{minutiRicevuti} ricevuti)
+                  {isfStimato !== null && (
+                    <> — ISF stimato: <strong>{isfStimato.toFixed(3)} ({(isfStimato * 100).toFixed(1)}%)</strong></>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {erroreForm && <div style={STILE_ERRORE}>{erroreForm}</div>}
+            {messaggioSuccesso && (
+              <div style={{ backgroundColor: '#E8F8F5', color: 'var(--pa-success)', padding: '0.6rem 0.85rem', borderRadius: '6px' }}>
+                {messaggioSuccesso}
+              </div>
+            )}
+
+            <div>
+              <button type="button" className="btn btn-primary" onClick={inviaProposta} disabled={invioInCorso}>
                 <Send size={16} />
-                <span>Invia Proposta di Scambio</span>
+                <span>{invioInCorso ? 'Invio in corso…' : 'Invia proposta'}</span>
               </button>
             </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
