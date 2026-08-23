@@ -150,7 +150,10 @@ export const Sidebar: React.FC = () => {
           })}
       </nav>
 
-      {/* Footer / System Version + Logout */}
+      {/* Footer / Logout — la versione è nel footer di BackofficeLayout (dato
+          reale da APP_VERSION, non duplicata qui). "Versione POLARIS v2.4.0" e
+          "Engine Go: Connected" erano testo fisso ereditato dal mock originale,
+          mai stati dati veri — rimossi (bug trovato in produzione 2026-08-23). */}
       <div style={{
         padding: '1rem 1.25rem',
         borderTop: '1px solid rgba(255,255,255,0.1)',
@@ -160,14 +163,6 @@ export const Sidebar: React.FC = () => {
         flexDirection: 'column',
         gap: '0.5rem'
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span>Versione POLARIS</span>
-          <span style={{ color: 'var(--pa-accent)', fontWeight: 600 }}>v2.4.0</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span>Engine Go</span>
-          <span style={{ color: '#2ECC71', fontWeight: 600 }}>Connected</span>
-        </div>
         <button
           onClick={() => logout()}
           style={{
