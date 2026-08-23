@@ -164,4 +164,14 @@ test('trovaSettimanaTipoDefinitiva: fasce assegnate + slot liberi + efficacia do
   assert.equal(esito.fasce.length, 1);
   assert.equal(esito.fasce[0]!.efficace, false); // convenzione ancora in_attesa
   assert.deepEqual(esito.slotLiberi, [slotLibero.rows[0]!.id]);
+
+  const fascia = esito.fasce[0]!;
+  assert.equal(fascia.associazioneDenominazione.startsWith('ASD stt '), true);
+  assert.equal(fascia.impiantoDenominazione, 'Palestra stt');
+  assert.equal(fascia.spazioDenominazione, 'Campo stt');
+  assert.equal(fascia.giornoSettimana, 1);
+  assert.match(fascia.orarioInizio, /^\d{2}:\d{2}$/);
+  assert.equal(fascia.orarioInizio, '18:00');
+  assert.equal(fascia.orarioFine, '19:00');
+  assert.equal(fascia.durataMinuti, 60);
 });

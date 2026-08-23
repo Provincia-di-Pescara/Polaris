@@ -71,6 +71,7 @@ export async function approvaSettimanaTipoDefinitiva(
 export interface VoceSettimanaTipoDefinitiva {
   slotId: string;
   associazioneId: string;
+  associazioneDenominazione: string;
   tipo: 'singola' | 'blocco_gara' | 'blocco_allenamento';
   valoreMinutiAssegnato: string;
   fabbisognoRiconosciutoMinuti: string | null;
@@ -78,11 +79,18 @@ export interface VoceSettimanaTipoDefinitiva {
   sorteggioRiferimento: { sorteggioId: string; articoloRiferimento: string } | null;
   concertazioneProposaId: string | null;
   efficace: boolean;
+  impiantoDenominazione: string;
+  spazioDenominazione: string;
+  giornoSettimana: number;
+  orarioInizio: string;
+  orarioFine: string;
+  durataMinuti: number;
 }
 
 interface RigaVoceDefinitiva {
   slot_id: string;
   associazione_id: string;
+  associazione_denominazione: string;
   tipo: 'singola' | 'blocco_gara' | 'blocco_allenamento';
   valore_minuti: string;
   fr_finale_minuti: string | null;
@@ -91,6 +99,12 @@ interface RigaVoceDefinitiva {
   articolo_riferimento: string | null;
   concertazione_proposta_id: string | null;
   efficace: boolean;
+  impianto_denominazione: string;
+  spazio_denominazione: string;
+  giorno_settimana: number;
+  orario_inizio: string;
+  orario_fine: string;
+  durata_minuti: number;
 }
 
 // Esportata: è la precondizione "esiste una settimana tipo definitiva su cui operare",
@@ -119,12 +133,19 @@ export async function trovaSettimanaTipoDefinitiva(
   }
 
   const fasce = await db.query<RigaVoceDefinitiva>(
-    `SELECT a.slot_id, a.associazione_id, a.tipo, a.valore_minuti::text AS valore_minuti,
+    `SELECT a.slot_id, a.associazione_id, ass.denominazione AS associazione_denominazione,
+            a.tipo, a.valore_minuti::text AS valore_minuti,
             ${COLONNE_ISF_SORTEGGIO},
             a.concertazione_proposta_id,
-            COALESCE(c.stato = 'perfezionata', false) AS efficace
+            COALESCE(c.stato = 'perfezionata', false) AS efficace,
+            i.denominazione AS impianto_denominazione, sp.denominazione AS spazio_denominazione,
+            st.giorno_settimana, to_char(st.orario_inizio, 'HH24:MI') AS orario_inizio,
+            to_char(st.orario_fine, 'HH24:MI') AS orario_fine, st.durata_minuti
      FROM assegnazioni a
      JOIN slot_settimana_tipo st ON st.id = a.slot_id
+     JOIN spazi_sportivi sp ON sp.id = st.spazio_id
+     JOIN impianti i ON i.id = sp.impianto_id
+     JOIN associazioni ass ON ass.id = a.associazione_id
      ${JOIN_ISF_SORTEGGIO}
      LEFT JOIN convenzioni c ON c.assegnazione_id = a.id
      WHERE st.stagione_id = $1 AND a.stato IN ('provvisoria', 'validata')
@@ -144,6 +165,7 @@ export async function trovaSettimanaTipoDefinitiva(
     fasce: fasce.rows.map((v) => ({
       slotId: v.slot_id,
       associazioneId: v.associazione_id,
+      associazioneDenominazione: v.associazione_denominazione,
       tipo: v.tipo,
       valoreMinutiAssegnato: v.valore_minuti,
       fabbisognoRiconosciutoMinuti: v.fr_finale_minuti,
@@ -151,6 +173,12 @@ export async function trovaSettimanaTipoDefinitiva(
       sorteggioRiferimento: v.sorteggio_id ? { sorteggioId: v.sorteggio_id, articoloRiferimento: v.articolo_riferimento! } : null,
       concertazioneProposaId: v.concertazione_proposta_id,
       efficace: v.efficace,
+      impiantoDenominazione: v.impianto_denominazione,
+      spazioDenominazione: v.spazio_denominazione,
+      giornoSettimana: v.giorno_settimana,
+      orarioInizio: v.orario_inizio,
+      orarioFine: v.orario_fine,
+      durataMinuti: v.durata_minuti,
     })),
     slotLiberi: slotLiberi.rows.map((r) => r.id),
   };
