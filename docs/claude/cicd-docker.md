@@ -17,7 +17,12 @@ Riferimento diretto usato per la struttura (stesso pattern prod/dev, stesso moti
 
 **`.github/workflows/ci.yml`** — due job paralleli (`engine-go`, `backend-node`), ciascuno con un service container Postgres 18 (stesso pattern degli ephemeral container usati manualmente tutta la sessione, qui automatizzato), migration applicate via `psql -f` prima dei test, poi build/vet/gofmt/test per Go e typecheck/test per Node — inclusi i test che richiedono `TEST_DATABASE_URL` (skippati finora in locale se non impostata, qui sempre eseguiti). Terzo job valida `docker compose -f docker-compose.yml config --quiet`.
 
-**`.github/workflows/release.yml`** — build+push di `polaris-engine`/`polaris-backend`/`polaris-frontend-pubblico`/`polaris-frontend-backoffice` su push a `master` (tag `:dev`) e su tag `v*` (tag `:vX.Y.Z`+`:latest`). **Gotcha reale, confermato applicabile qui**: il nome org (`Provincia-di-Pescara`) ha maiuscole — `ghcr.io` rifiuta namespace non lowercase, quindi il namespace immagine è hardcoded (`provincia-di-pescara`) invece di derivato da `github.repository`. Stesso identico problema documentato da ComunicaPA, stessa causa.
+**`.github/workflows/release.yml`** — build+push di `polaris-engine`/`polaris-backend`/`polaris-frontend-pubblico`/`polaris-frontend-backoffice`, sempre dal **Dockerfile prod** (mai `Dockerfile.dev` — niente hot-reload senza bind-mount, un'immagine remota da `Dockerfile.dev` sarebbe solo una build peggiore di quella prod, stesso snapshot statico del codice). Schema tag (standard semver pre-release):
+- Push a `master` (nessun tag) → `:dev` (canale floating, "ultimo build testabile").
+- Tag `vX.Y.Z` (release vera, nessun trattino nell'identificatore) → `:vX.Y.Z` (immagine esatta, per pin/rollback) **+** `:latest`.
+- Tag `vX.Y.Z-<identificatore>` (pre-release, es. `v1.0.0-dev.1`, `v1.0.0-rc.1` — un trattino segna l'inizio dell'identificatore pre-release, [semver.org #9](https://semver.org/#spec-item-9)) → `:vX.Y.Z-<identificatore>` (esatta) **+** `:dev` (stesso canale floating del push su master — **mai** `:latest`, che si muove solo su una vera release).
+
+**Gotcha reale, confermato applicabile qui**: il nome org (`Provincia-di-Pescara`) ha maiuscole — `ghcr.io` rifiuta namespace non lowercase, quindi il namespace immagine è hardcoded (`provincia-di-pescara`) invece di derivato da `github.repository`. Stesso identico problema documentato da ComunicaPA, stessa causa.
 
 Versioni Actions verificate via API (non assunte): `actions/checkout@v7`, `actions/setup-go@v7`, `actions/setup-node@v7`, `pnpm/action-setup@v6`, `docker/build-push-action@v7`, `docker/login-action@v4`, `docker/setup-buildx-action@v4`.
 
