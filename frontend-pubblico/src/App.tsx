@@ -92,7 +92,9 @@ const AppAutenticata: React.FC = () => {
         {activeTab === 'concertazione' && (
           <ConcertazioneView entities={entities} stagioneId={stagioneId} activeEntity={activeEntity} />
         )}
-        {activeTab === 'calendario-definitivo' && <CalendarioDefinitivoView />}
+        {activeTab === 'calendario-definitivo' && (
+          <CalendarioDefinitivoView entities={entities} stagioneId={stagioneId} activeEntity={activeEntity} />
+        )}
       </main>
 
       <footer style={{
