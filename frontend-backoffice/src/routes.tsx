@@ -2,6 +2,8 @@ import type { RouteObject } from 'react-router';
 import { ProtectedRoute } from './auth/ProtectedRoute.tsx';
 import { BackofficeLayout } from './components/BackofficeLayout.tsx';
 import { LoginView } from './components/LoginView.tsx';
+import { BootstrapView } from './components/BootstrapView.tsx';
+import { BootstrapVerificaView } from './components/BootstrapVerificaView.tsx';
 import { ControlRoomView } from './components/ControlRoomView.tsx';
 import { ImpiantiSpaziView } from './components/ImpiantiSpaziView.tsx';
 import { DelegheAccreditamentiView } from './components/DelegheAccreditamentiView.tsx';
@@ -15,6 +17,8 @@ import { StatisticheView } from './components/StatisticheView.tsx';
 // in un unico posto evita che i due possano divergere silenziosamente.
 export const routes: RouteObject[] = [
   { path: '/login', element: <LoginView /> },
+  { path: '/bootstrap', element: <BootstrapView /> },
+  { path: '/bootstrap/verifica', element: <BootstrapVerificaView /> },
   {
     element: <ProtectedRoute />,
     children: [

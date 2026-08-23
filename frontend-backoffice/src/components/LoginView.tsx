@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { Navigate } from 'react-router';
+import React, { useEffect, useState } from 'react';
+import { Navigate, Link } from 'react-router';
 import { Landmark } from 'lucide-react';
 import { useAuth, ErroreServizioNonRaggiungibile } from '../auth/AuthContext.tsx';
+import { statoBootstrap } from '../api/bootstrap.ts';
 
 export function LoginView(): React.ReactElement {
   const { login, utente } = useAuth();
@@ -9,6 +10,22 @@ export function LoginView(): React.ReactElement {
   const [password, setPassword] = useState('');
   const [errore, setErrore] = useState<string | null>(null);
   const [inCorso, setInCorso] = useState(false);
+  const [bootstrapDisponibile, setBootstrapDisponibile] = useState(false);
+
+  useEffect(() => {
+    let annullato = false;
+    statoBootstrap()
+      .then((s) => {
+        if (!annullato) setBootstrapDisponibile(s.disponibile);
+      })
+      .catch(() => {
+        // Nessun admin configurabile via link se il check fallisce: il wizard
+        // resta comunque raggiungibile navigando a /bootstrap direttamente.
+      });
+    return () => {
+      annullato = true;
+    };
+  }, []);
 
   if (utente) {
     return <Navigate to="/" replace />;
@@ -115,6 +132,12 @@ export function LoginView(): React.ReactElement {
         <button type="submit" className="btn btn-primary" disabled={inCorso}>
           {inCorso ? 'Accesso in corso...' : 'Accedi'}
         </button>
+
+        {bootstrapDisponibile && (
+          <Link to="/bootstrap" style={{ textAlign: 'center', fontSize: '0.85rem' }}>
+            Nessun amministratore configurato? Crea il primo account
+          </Link>
+        )}
       </form>
     </div>
   );
