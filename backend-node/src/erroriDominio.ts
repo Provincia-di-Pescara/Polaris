@@ -7,6 +7,12 @@ import { DatabaseError } from 'pg';
 export class ErroreValoreDuplicato extends Error {}
 export class ErroreNonTrovato extends Error {}
 
+// Modifica/eliminazione di una stagione consentita solo in stato 'censimento' e
+// senza dati load-bearing collegati (slot/domande/elaborazioni/proposte) -- vedi
+// stagioni.ts:verificaStagioneModificabile. Sempre 409: la richiesta è
+// sintatticamente valida, solo non applicabile allo stato/dati attuali della risorsa.
+export class ErroreStagioneNonModificabile extends Error {}
+
 // Riferimento malformato o inesistente passato dal client: un id nel path che non è un
 // UUID valido, o un id referenziato nel body (es. istituzioneScolasticaId) che non esiste
 // in tabella. In entrambi i casi la richiesta del client è malformata (400), mai un 500

@@ -109,6 +109,11 @@ export const schemaCreaStagione = z
   });
 export type CreaStagioneRequest = z.infer<typeof schemaCreaStagione>;
 
+// Stessa forma di schemaCreaStagione: PUT /backoffice/stagioni/:id riusa
+// nome/dataInizio/dataFine identici, solo il verbo e il target cambiano.
+export const schemaAggiornaStagione = schemaCreaStagione;
+export type AggiornaStagioneRequest = z.infer<typeof schemaAggiornaStagione>;
+
 export const schemaRespingiDelega = z.object({
   motivazione: z.string().min(1),
 });

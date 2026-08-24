@@ -545,6 +545,101 @@ test(
 );
 
 test(
+  'PUT/DELETE /backoffice/stagioni/:id: solo admin, solo in censimento',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const pool = new Pool({ connectionString: dsn });
+    const { base, chiudi } = await avviaServerTest(pool);
+    t.after(() => {
+      chiudi();
+      return pool.end();
+    });
+
+    const admin = await creaUtenteBackofficeTest(pool, 'admin');
+    const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+
+    async function creaStagioneFixture(): Promise<{ id: string; nome: string }> {
+      const nome = `stagione-put-http-${randomUUID()}`;
+      const r = await fetch(`${base}/backoffice/stagioni`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ nome, dataInizio: '2070-09-01', dataFine: '2071-06-30' }),
+      });
+      const body = (await r.json()) as { id: string; nome: string };
+      return body;
+    }
+
+    await t.test('admin, PUT: 200, log_operazioni scritto', async () => {
+      const s = await creaStagioneFixture();
+      const nomeAggiornato = `${s.nome}-rinominata`;
+      const r = await fetch(`${base}/backoffice/stagioni/${s.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ nome: nomeAggiornato, dataInizio: '2070-09-15', dataFine: '2071-07-15' }),
+      });
+      assert.equal(r.status, 200);
+      const body = (await r.json()) as { nome: string };
+      assert.equal(body.nome, nomeAggiornato);
+
+      const log = await pool.query(
+        `SELECT entita_id FROM log_operazioni WHERE utente_backoffice_id = $1 AND azione = 'aggiorna_stagione' AND entita_id = $2`,
+        [admin.id, s.id],
+      );
+      assert.equal(log.rowCount, 1);
+    });
+
+    await t.test('operatore, PUT/DELETE: 403 su entrambe', async () => {
+      const s = await creaStagioneFixture();
+      const rPut = await fetch(`${base}/backoffice/stagioni/${s.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ nome: s.nome, dataInizio: '2070-09-01', dataFine: '2071-06-30' }),
+      });
+      assert.equal(rPut.status, 403);
+      const rDelete = await fetch(`${base}/backoffice/stagioni/${s.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${operatore.token}` },
+      });
+      assert.equal(rDelete.status, 403);
+    });
+
+    await t.test('admin, PUT fuori censimento: 409', async () => {
+      const s = await creaStagioneFixture();
+      await pool.query(`UPDATE stagioni_sportive SET stato = 'concertazione' WHERE id = $1`, [s.id]);
+      const r = await fetch(`${base}/backoffice/stagioni/${s.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ nome: s.nome, dataInizio: '2070-09-01', dataFine: '2071-06-30' }),
+      });
+      assert.equal(r.status, 409);
+    });
+
+    await t.test('admin, DELETE: 204, riga sparita; su id inesistente 409', async () => {
+      const s = await creaStagioneFixture();
+      const r = await fetch(`${base}/backoffice/stagioni/${s.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      assert.equal(r.status, 204);
+      const riga = await pool.query('SELECT 1 FROM stagioni_sportive WHERE id = $1', [s.id]);
+      assert.equal(riga.rowCount, 0);
+
+      const log = await pool.query(
+        `SELECT 1 FROM log_operazioni WHERE utente_backoffice_id = $1 AND azione = 'elimina_stagione' AND entita_id = $2`,
+        [admin.id, s.id],
+      );
+      assert.equal(log.rowCount, 1);
+
+      const rRiprova = await fetch(`${base}/backoffice/stagioni/${s.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      assert.equal(rRiprova.status, 409, 'stagione già eliminata: verificaStagioneModificabile la tratta come "non trovata" -> 409, non 404 (coerente con ErroreStagioneNonModificabile, mai un codice a parte per questo caso raro)');
+    });
+  },
+);
+
+test(
   'PUT /backoffice/deleghe/:id/approva|respingi',
   { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
   async (t) => {

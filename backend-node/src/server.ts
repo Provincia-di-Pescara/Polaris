@@ -7,7 +7,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { middlewareSentry } from './sentry.ts';
 import type { Pool, PoolClient } from 'pg';
 import type { Db } from './db.ts';
-import { listaStagioni, creaStagione } from './stagioni.ts';
+import { listaStagioni, creaStagione, aggiornaStagione, eliminaStagione } from './stagioni.ts';
 import { eseguiLogin, eseguiLogout, eseguiRefresh } from './auth/login.ts';
 import { eseguiCallbackOidc, eseguiLogoutPubblico, eseguiRefreshPubblico } from './auth/loginPubblico.ts';
 import { ErroreCredenzialiNonValide, ErroreRefreshTokenNonValido, ErroreUtenteDisattivato } from './auth/errori.ts';
@@ -56,7 +56,7 @@ import {
   aPubblico,
 } from './repository/utentiBackoffice.ts';
 import { revocaSessioniUtente } from './repository/sessioni.ts';
-import { ErroreValoreDuplicato, ErroreNonTrovato, ErroreStatoNonValidoPerTransizione, ErroreOrdineFasiNonRispettato, ErroreElaborazioneInCorso, ErroreRiferimentoNonValido, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
+import { ErroreValoreDuplicato, ErroreNonTrovato, ErroreStatoNonValidoPerTransizione, ErroreOrdineFasiNonRispettato, ErroreElaborazioneInCorso, ErroreRiferimentoNonValido, ErroreStagioneNonModificabile, comeErroreRiferimentoNonValido } from './erroriDominio.ts';
 import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './discipline.ts';
 import { listaClassiAttivita } from './classiAttivita.ts';
 import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstituzione } from './istituzioni.ts';
@@ -64,7 +64,7 @@ import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } fro
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
 import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaQueryListaDeleghe, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione, schemaCreaProvvedimento, schemaQueryListaLogOperazioni, schemaRipristinoBackup } from './backofficeSchema.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaAggiornaStagione, schemaRespingiDelega, schemaQueryListaDeleghe, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione, schemaCreaProvvedimento, schemaQueryListaLogOperazioni, schemaRipristinoBackup } from './backofficeSchema.ts';
 import { listaBackup, eseguiBackupManuale, elencoTabelle, eseguiRipristino, percorsoBackupValido, ErroreBackupNonTrovato, ErrorePercorsoNonValido } from './backup.ts';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
@@ -1080,6 +1080,85 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         res.status(201).json(stagione);
       } catch (err) {
         if (err instanceof ErroreValoreDuplicato) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // Modifica/eliminazione consentite solo in stato 'censimento' e senza dati
+  // load-bearing collegati (verificaStagioneModificabile in stagioni.ts) --
+  // deliberatamente NON bloccate da abilitazioni/associazioni_documenti (routine
+  // per-stagione, un'associazione già iscritta le riattiva ad ogni stagione).
+  app.put(
+    '/backoffice/stagioni/:id',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaAggiornaStagione.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        const stagione = await eseguiInTransazione(pool, async (client) => {
+          const s = await aggiornaStagione(client, id, parsed.data);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'aggiorna_stagione',
+            entitaTipo: 'stagioni_sportive',
+            entitaId: s.id,
+            dettaglio: s as unknown as Record<string, unknown>,
+          });
+          return s;
+        });
+        res.status(200).json(stagione);
+      } catch (err) {
+        if (err instanceof ErroreStagioneNonModificabile) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErroreValoreDuplicato) {
+          res.status(409).json({ errore: err.message });
+          return;
+        }
+        const erroreRiferimento = comeErroreRiferimentoNonValido(err);
+        if (erroreRiferimento) {
+          res.status(400).json({ errore: erroreRiferimento.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.delete(
+    '/backoffice/stagioni/:id',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      const id = typeof req.params.id === 'string' ? req.params.id : '';
+      try {
+        await eseguiInTransazione(pool, async (client) => {
+          await eliminaStagione(client, id);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'elimina_stagione',
+            entitaTipo: 'stagioni_sportive',
+            entitaId: id,
+          });
+        });
+        res.status(204).end();
+      } catch (err) {
+        if (err instanceof ErroreStagioneNonModificabile) {
           res.status(409).json({ errore: err.message });
           return;
         }
