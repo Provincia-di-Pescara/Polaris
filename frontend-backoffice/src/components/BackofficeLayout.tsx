@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Outlet } from 'react-router';
+import { Outlet, useLocation } from 'react-router';
 import { Sidebar } from './Sidebar.tsx';
 import { Header } from './Header.tsx';
 import { listaStagioni, type Stagione } from '../api/stagioni.ts';
@@ -25,9 +25,15 @@ export function BackofficeLayout(): React.ReactElement {
       });
   }, []);
 
+  const location = useLocation();
   useEffect(() => {
+    // Rieseguito anche ad ogni cambio di rotta (non solo al mount): la
+    // creazione/modifica/eliminazione stagioni vive in StagioniView.tsx, una
+    // rotta figlia separata -- questo layout persiste tra le navigazioni (non
+    // rimonta), quindi senza questo il selettore in Header resterebbe con la
+    // lista stagioni non aggiornata finché non si ricarica l'intera pagina.
     ricaricaStagioni();
-  }, [ricaricaStagioni]);
+  }, [location.pathname, ricaricaStagioni]);
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: 'var(--pa-bg-gray)' }}>
@@ -37,7 +43,6 @@ export function BackofficeLayout(): React.ReactElement {
           seasons={seasons}
           selectedSeasonId={selectedSeasonId}
           setSelectedSeasonId={setSelectedSeasonId}
-          onStagioneCreata={ricaricaStagioni}
         />
         <main style={{ flex: 1, padding: '1.75rem', overflowY: 'auto' }}>
           {/* Stagione selezionata dall'operatore in Header, propagata alle viste

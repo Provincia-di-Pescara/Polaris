@@ -11,6 +11,7 @@ import {
   Landmark,
   Users,
   DatabaseBackup,
+  CalendarRange,
   ChevronDown,
   ChevronRight
 } from 'lucide-react';
@@ -56,6 +57,7 @@ export const Sidebar: React.FC = () => {
         { id: 'impostazioni-oidc', label: 'OIDC (SPID/CIE)', icon: ShieldCheck },
         { id: 'utenti', label: 'Utenti Backoffice', icon: Users },
         { id: 'backup', label: 'Backup & Ripristino', icon: DatabaseBackup },
+        { id: 'stagioni', label: 'Stagioni', icon: CalendarRange },
       ],
     },
     { tipo: 'link', id: 'audit-sorteggio', label: 'Audit Log & Sorteggi HMAC', icon: ShieldCheck, roles: ['admin', 'operatore'] },
