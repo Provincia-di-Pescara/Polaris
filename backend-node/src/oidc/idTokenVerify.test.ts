@@ -26,6 +26,19 @@ async function avviaServerJwks(publicKeyJwk: Record<string, unknown>): Promise<{
   return { server, jwksUri: `http://127.0.0.1:${address.port}/jwks` };
 }
 
+async function avviaServerJwksMultiChiave(jwks: Array<Record<string, unknown>>): Promise<{ server: Server; jwksUri: string }> {
+  const server = createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ keys: jwks }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('indirizzo server mock non disponibile');
+  }
+  return { server, jwksUri: `http://127.0.0.1:${address.port}/jwks` };
+}
+
 test('verificaIdToken accetta un id_token firmato correttamente con la chiave JWKS', async () => {
   const { publicKey, privateKey } = generaCoppiaChiavi();
   const jwk = publicKey.export({ format: 'jwk' });
@@ -98,6 +111,53 @@ test('verificaIdToken rifiuta un token firmato con una chiave diversa da quella 
       audience: AUDIENCE,
     });
     await assert.rejects(() => verificaIdToken(tokenFalsificato, jwksUri, ISSUER, AUDIENCE));
+  } finally {
+    server.close();
+  }
+});
+
+// Comportamento reale osservato contro pa-sso-proxy in produzione (2026-08-24):
+// id_token senza kid nell'header. Legittimo quando il JWKS pubblica una sola
+// chiave -- jwks-rsa lo gestisce nativamente in getSigningKey(undefined),
+// prima bloccato qui prima ancora di interpellare la libreria.
+test('verificaIdToken accetta un id_token SENZA kid nell\'header se il JWKS pubblica una sola chiave', async () => {
+  const { publicKey, privateKey } = generaCoppiaChiavi();
+  const jwk = publicKey.export({ format: 'jwk' });
+  const { server, jwksUri } = await avviaServerJwks(jwk as Record<string, unknown>);
+
+  try {
+    // Nessun keyid passato a jsonwebtoken.sign: l'header del token non conterrà "kid".
+    const token = jsonwebtoken.sign({ sub: 'utente-1' }, privateKey, {
+      algorithm: 'RS256',
+      issuer: ISSUER,
+      audience: AUDIENCE,
+      expiresIn: '5m',
+    });
+
+    const payload = await verificaIdToken(token, jwksUri, ISSUER, AUDIENCE);
+    assert.equal(payload['sub'], 'utente-1');
+  } finally {
+    server.close();
+  }
+});
+
+test('verificaIdToken rifiuta un id_token senza kid se il JWKS pubblica PIÙ di una chiave (ambiguo)', async () => {
+  const { publicKey: chiave1, privateKey: privata1 } = generaCoppiaChiavi();
+  const { publicKey: chiave2 } = generaCoppiaChiavi();
+  const jwks = [
+    { ...(chiave1.export({ format: 'jwk' }) as Record<string, unknown>), kid: 'kid-1', use: 'sig', alg: 'RS256' },
+    { ...(chiave2.export({ format: 'jwk' }) as Record<string, unknown>), kid: 'kid-2', use: 'sig', alg: 'RS256' },
+  ];
+  const { server, jwksUri } = await avviaServerJwksMultiChiave(jwks);
+
+  try {
+    const token = jsonwebtoken.sign({ sub: 'utente-1' }, privata1, {
+      algorithm: 'RS256',
+      issuer: ISSUER,
+      audience: AUDIENCE,
+      expiresIn: '5m',
+    });
+    await assert.rejects(() => verificaIdToken(token, jwksUri, ISSUER, AUDIENCE));
   } finally {
     server.close();
   }

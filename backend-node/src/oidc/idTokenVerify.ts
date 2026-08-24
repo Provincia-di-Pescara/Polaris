@@ -28,11 +28,14 @@ export function verificaIdToken(
       reject(new Error('id_token non decodificabile'));
       return;
     }
-    const kid = decodificato.header.kid;
-    if (!kid) {
-      reject(new Error('id_token privo di kid nell\'header'));
-      return;
-    }
+    // kid assente: legittimo se il JWKS pubblica una sola chiave (comportamento
+    // reale osservato contro pa-sso-proxy in produzione, 2026-08-24 — non un
+    // caso teorico). jwks-rsa gestisce già questo caso in getSigningKey():
+    // con kid undefined/null usa l'unica chiave se ce n'è una, altrimenti
+    // rifiuta con SigningKeyNotFoundError se il JWKS ne pubblica più di una
+    // (a quel punto servirebbe davvero il kid per scegliere, giustamente
+    // non indoviniamo). Non serve replicare quella logica qui.
+    const kid = decodificato.header.kid ?? undefined;
 
     ottieniClient(jwksUri).getSigningKey(kid, (err, key) => {
       if (err || !key) {
