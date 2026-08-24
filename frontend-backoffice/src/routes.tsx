@@ -10,6 +10,7 @@ import { DelegheAccreditamentiView } from './components/DelegheAccreditamentiVie
 import { ParametriSistemaView } from './components/ParametriSistemaView.tsx';
 import { ImpostazioniOidcView } from './components/ImpostazioniOidcView.tsx';
 import { UtentiView } from './components/UtentiView.tsx';
+import { BackupView } from './components/BackupView.tsx';
 import { AuditSorteggioView } from './components/AuditSorteggioView.tsx';
 import { StatisticheView } from './components/StatisticheView.tsx';
 
@@ -38,6 +39,7 @@ export const routes: RouteObject[] = [
               { path: 'parametri-sistema', element: <ParametriSistemaView /> },
               { path: 'impostazioni-oidc', element: <ImpostazioniOidcView /> },
               { path: 'utenti', element: <UtentiView /> },
+              { path: 'backup', element: <BackupView /> },
             ],
           },
           { path: 'audit-sorteggio', element: <AuditSorteggioView /> },
