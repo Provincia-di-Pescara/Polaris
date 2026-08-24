@@ -119,5 +119,45 @@ export async function scambiaCode(pool: Pool, code: string, state: string): Prom
     throw new ErroreScambioCode('id_token privo di claim sub');
   }
 
-  return { oidcSubject, claims: estraiClaimPersona(claimsVerificati) };
+  const claimsCompleti = await arricchisciConUserinfo(claimsVerificati, oidcSubject, endpoint.userinfoEndpoint, payload.access_token);
+
+  return { oidcSubject, claims: estraiClaimPersona(claimsCompleti) };
+}
+
+// pa-sso-proxy emette un id_token minimale (solo claim JWT standard: iss/sub/
+// aud/iat/exp/at_hash) — i dati di profilo SPID/CIE (codice fiscale, nome,
+// cognome) arrivano dall'endpoint UserInfo, non dall'id_token. Trovato in
+// produzione (2026-08-24), confermato contro lo stesso pattern già in uso in
+// Comune-di-Montesilvano/ComunicaPA (stesso pa-sso-proxy). Mai un requisito
+// bloccante: se l'endpoint manca o non risponde, si prosegue con i soli claim
+// dell'id_token (estraiClaimPersona fallirà comunque con un errore leggibile
+// se mancano i dati necessari, invece di un errore di rete opaco qui).
+async function arricchisciConUserinfo(
+  claimsIdToken: Record<string, unknown>,
+  oidcSubject: string,
+  userinfoEndpoint: string | undefined,
+  accessToken: string | undefined,
+): Promise<Record<string, unknown>> {
+  if (!userinfoEndpoint || !accessToken) {
+    return claimsIdToken;
+  }
+  try {
+    const res = await fetch(userinfoEndpoint, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      return claimsIdToken;
+    }
+    const userinfo = (await res.json()) as Record<string, unknown>;
+    // Il claim sub di UserInfo DEVE combaciare con quello (verificato) dell'id_token
+    // (art. 5.3.2 OIDC Core) -- altrimenti l'access_token non è legato a questo
+    // login, ignora silenziosamente invece di fidarsi di dati non collegati.
+    if (userinfo['sub'] !== undefined && String(userinfo['sub']) !== oidcSubject) {
+      return claimsIdToken;
+    }
+    return { ...claimsIdToken, ...userinfo };
+  } catch {
+    return claimsIdToken;
+  }
 }

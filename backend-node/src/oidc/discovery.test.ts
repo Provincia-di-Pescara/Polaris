@@ -23,6 +23,7 @@ async function avviaServerMock(): Promise<ServerMock> {
           authorization_endpoint: `${issuer}/OIDC/authorization`,
           token_endpoint: `${issuer}/OIDC/token`,
           jwks_uri: `${issuer}/OIDC/jwks`,
+          userinfo_endpoint: `${issuer}/OIDC/userinfo`,
         }),
       );
       return;
@@ -41,13 +42,14 @@ async function avviaServerMock(): Promise<ServerMock> {
   return { server, issuer, numeroChiamate: () => chiamate };
 }
 
-test('scopriEndpoint legge authorization/token/jwks endpoint dal documento di discovery', async () => {
+test('scopriEndpoint legge authorization/token/jwks/userinfo endpoint dal documento di discovery', async () => {
   const mock = await avviaServerMock();
   try {
     const endpoint = await scopriEndpoint(mock.issuer);
     assert.equal(endpoint.authorizationEndpoint, `${mock.issuer}/OIDC/authorization`);
     assert.equal(endpoint.tokenEndpoint, `${mock.issuer}/OIDC/token`);
     assert.equal(endpoint.jwksUri, `${mock.issuer}/OIDC/jwks`);
+    assert.equal(endpoint.userinfoEndpoint, `${mock.issuer}/OIDC/userinfo`);
   } finally {
     mock.server.close();
   }

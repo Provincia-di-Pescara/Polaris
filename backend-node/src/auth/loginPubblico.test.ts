@@ -33,6 +33,11 @@ interface MockIdp {
   // per far restituire un id_token con claim persona specifici
   impostaClaimPersona: (claim: Record<string, unknown>) => void;
   impostaSub: (sub: string) => void;
+  // pa-sso-proxy reale (produzione, 2026-08-24): id_token minimale, i claim
+  // persona arrivano da /OIDC/userinfo -- di default null (comportamento
+  // esistente, claim già nell'id_token), un test dedicato lo imposta.
+  impostaClaimUserinfo: (claim: Record<string, unknown> | null) => void;
+  ultimoHeaderAuthorizationUserinfo: () => string | undefined;
 }
 
 async function avviaMockIdp(): Promise<MockIdp> {
@@ -48,6 +53,9 @@ async function avviaMockIdp(): Promise<MockIdp> {
     given_name: 'Mario',
     family_name: 'Rossi',
   };
+  let claimUserinfo: Record<string, unknown> | null = null;
+  let ultimoAuthUserinfo: string | undefined;
+  const ACCESS_TOKEN = 'access-token-mock';
 
   const server = createServer(async (req, res) => {
     if (req.url === '/.well-known/openid-configuration') {
@@ -58,8 +66,21 @@ async function avviaMockIdp(): Promise<MockIdp> {
           authorization_endpoint: `${issuer}/OIDC/authorization`,
           token_endpoint: `${issuer}/OIDC/token`,
           jwks_uri: `${issuer}/OIDC/jwks`,
+          userinfo_endpoint: `${issuer}/OIDC/userinfo`,
         }),
       );
+      return;
+    }
+
+    if (req.url === '/OIDC/userinfo') {
+      ultimoAuthUserinfo = req.headers.authorization;
+      if (ultimoAuthUserinfo !== `Bearer ${ACCESS_TOKEN}`) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'invalid_token' }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ sub: subCorrente, ...(claimUserinfo ?? {}) }));
       return;
     }
 
@@ -85,15 +106,16 @@ async function avviaMockIdp(): Promise<MockIdp> {
         return;
       }
 
-      const idToken = jsonwebtoken.sign({ sub: subCorrente, ...claimPersona }, privateKey, {
-        algorithm: 'RS256',
-        keyid: KID,
-        issuer,
-        audience: CLIENT_ID,
-        expiresIn: '5m',
-      });
+      // Se un test ha impostato claimUserinfo, l'id_token resta minimale (solo
+      // sub) come il vero pa-sso-proxy in produzione -- i claim persona
+      // arrivano SOLO da /OIDC/userinfo, mai dall'id_token in quello scenario.
+      const idToken = jsonwebtoken.sign(
+        { sub: subCorrente, ...(claimUserinfo === null ? claimPersona : {}) },
+        privateKey,
+        { algorithm: 'RS256', keyid: KID, issuer, audience: CLIENT_ID, expiresIn: '5m' },
+      );
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ id_token: idToken, access_token: 'access-token-non-usato' }));
+      res.end(JSON.stringify({ id_token: idToken, access_token: ACCESS_TOKEN }));
       return;
     }
 
@@ -121,6 +143,10 @@ async function avviaMockIdp(): Promise<MockIdp> {
     impostaSub: (sub) => {
       subCorrente = sub;
     },
+    impostaClaimUserinfo: (claim) => {
+      claimUserinfo = claim;
+    },
+    ultimoHeaderAuthorizationUserinfo: () => ultimoAuthUserinfo,
   };
 }
 
@@ -169,6 +195,41 @@ test(
       assert.ok(idp.ultimoHeaderAuthorization()?.startsWith('Basic '));
       assert.equal(idp.ultimoBodyToken()?.has('client_secret'), false);
       assert.equal(idp.ultimoBodyToken()?.get('code_verifier') !== undefined, true);
+    });
+
+    // Scenario reale trovato in produzione (2026-08-24): pa-sso-proxy emette un
+    // id_token con SOLO i claim JWT standard (iss/sub/aud/iat/exp/at_hash), i
+    // dati di profilo SPID/CIE arrivano da /OIDC/userinfo. Confermato contro lo
+    // stesso pattern già in uso in Comune-di-Montesilvano/ComunicaPA.
+    await t.test('id_token minimale (senza claim persona): i dati arrivano da UserInfo', async () => {
+      // sub dedicato: le altre subtest di questo blocco condividono lo stesso
+      // oidc_subject di default e dipendono dal suo stato (upsert persona
+      // fisica) -- un sub distinto evita di alterarlo. Reset manuale a fine
+      // test (non t.after: quel `t` è del test PADRE qui, non di questa
+      // subtest -- il cleanup scatterebbe solo a fine blocco, troppo tardi,
+      // inquinando le subtest successive che condividono lo stesso idp mock).
+      idp.impostaSub('oidc-subject-userinfo-test');
+      idp.impostaClaimUserinfo({
+        fiscal_number: 'TINIT-BNCLRA85C03H501X',
+        given_name: 'Laura',
+        family_name: 'Bianchi',
+      });
+      try {
+        const { url: urlAutorizzazione } = await costruisciUrlAutorizzazione(pool);
+        const url = new URL(urlAutorizzazione);
+        const state = url.searchParams.get('state');
+        assert.ok(state);
+
+        const esito = await eseguiCallbackOidc(pool, 'code-userinfo', state, '127.0.0.1');
+
+        assert.equal(esito.persona.codiceFiscale, 'BNCLRA85C03H501X');
+        assert.equal(esito.persona.nome, 'Laura');
+        assert.equal(esito.persona.cognome, 'Bianchi');
+        assert.equal(idp.ultimoHeaderAuthorizationUserinfo(), 'Bearer access-token-mock');
+      } finally {
+        idp.impostaSub('oidc-subject-1');
+        idp.impostaClaimUserinfo(null);
+      }
     });
 
     await t.test('stesso state riusato una seconda volta viene rifiutato (consumo one-shot)', async () => {
