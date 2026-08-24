@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import { leggiConfigOidc } from './config.ts';
+import { leggiConfigOidc, redirectUriOidc } from './config.ts';
 import { scopriEndpoint } from './discovery.ts';
 import { generaPkce } from './pkce.ts';
 import { salvaStatoPkce, consumaStatoPkce } from '../repository/oidcPkceState.ts';
@@ -15,12 +15,20 @@ export interface EsitoScambioCode {
   claims: ClaimPersona;
 }
 
+// redirectUri fa parte della "configurazione completa" tanto quanto issuer/clientId
+// anche se ora vive in un env var (FRONTEND_PUBBLICO_BASE_URL) invece che in DB — un
+// deploy che dimentica di impostarlo deve fallire qui con lo stesso errore leggibile
+// di un OIDC mai configurato, non mandare un redirect_uri "null"/vuoto all'IdP.
 async function richiediConfig(pool: Pool) {
   const config = await leggiConfigOidc(pool);
   if (!config) {
     throw new ErroreOidcNonConfigurato('configurazione OIDC non presente (impostazioni_sistema, chiave "oidc")');
   }
-  return config;
+  const redirectUri = redirectUriOidc();
+  if (!redirectUri) {
+    throw new ErroreOidcNonConfigurato('FRONTEND_PUBBLICO_BASE_URL non impostata: redirect_uri non calcolabile');
+  }
+  return { ...config, redirectUri };
 }
 
 export interface UrlAutorizzazione {

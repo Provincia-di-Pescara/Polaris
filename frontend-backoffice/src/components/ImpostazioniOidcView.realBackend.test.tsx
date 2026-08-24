@@ -91,9 +91,9 @@ descrivi('ImpostazioniOidcView (backend reale)', () => {
     const clientId = screen.getByLabelText(/client id/i);
     await userEvent.clear(clientId);
     await userEvent.type(clientId, 'client-e2e');
-    const redirectUri = screen.getByLabelText(/redirect uri/i);
-    await userEvent.clear(redirectUri);
-    await userEvent.type(redirectUri, 'http://localhost:5174/oidc/callback');
+    // redirectUri non è più un campo del form: è calcolato server-side da
+    // FRONTEND_PUBBLICO_BASE_URL (non impostata per questo backend di test),
+    // mostrato in sola lettura -- niente da compilare qui.
     await userEvent.type(screen.getByLabelText(/client secret/i), 'secret-e2e-test');
 
     await userEvent.click(screen.getByRole('button', { name: /salva configurazione/i }));

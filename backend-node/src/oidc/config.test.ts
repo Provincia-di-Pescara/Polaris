@@ -5,6 +5,7 @@ import {
   leggiConfigOidc,
   leggiConfigOidcPubblica,
   scriviConfigOidc,
+  redirectUriOidc,
   ErroreClientSecretMancante,
 } from './config.ts';
 import { creaDatabaseDedicato } from '../testutil/dbDedicato.ts';
@@ -25,7 +26,7 @@ test(
     try {
       const issuer1 = `https://idp-test-${randomUUID()}.invalid`;
       await assert.rejects(
-        () => scriviConfigOidc(pool, { issuer: issuer1, clientId: 'client-a', redirectUri: 'https://app.invalid/cb' }),
+        () => scriviConfigOidc(pool, { issuer: issuer1, clientId: 'client-a' }),
         ErroreClientSecretMancante,
         'primo salvataggio in assoluto senza clientSecret deve fallire',
       );
@@ -34,13 +35,12 @@ test(
         issuer: issuer1,
         clientId: 'client-a',
         clientSecret: 'segreto-iniziale',
-        redirectUri: 'https://app.invalid/cb',
       });
       const dopoPrimo = await leggiConfigOidc(pool);
       assert.equal(dopoPrimo?.clientSecret, 'segreto-iniziale');
 
       const issuer2 = `https://idp-test-${randomUUID()}.invalid`;
-      await scriviConfigOidc(pool, { issuer: issuer2, clientId: 'client-a', redirectUri: 'https://app.invalid/cb2' });
+      await scriviConfigOidc(pool, { issuer: issuer2, clientId: 'client-a' });
       const dopoSecondo = await leggiConfigOidc(pool);
       assert.equal(dopoSecondo?.issuer, issuer2, 'issuer aggiornato');
       assert.equal(dopoSecondo?.clientSecret, 'segreto-iniziale', 'clientSecret invariato perché omesso');
@@ -53,3 +53,20 @@ test(
     }
   },
 );
+
+test('redirectUriOidc: null se FRONTEND_PUBBLICO_BASE_URL non impostata, calcolato con /oidc/callback altrimenti', () => {
+  const originale = process.env.FRONTEND_PUBBLICO_BASE_URL;
+  try {
+    delete process.env.FRONTEND_PUBBLICO_BASE_URL;
+    assert.equal(redirectUriOidc(), null);
+
+    process.env.FRONTEND_PUBBLICO_BASE_URL = 'https://pubblico.esempio.it';
+    assert.equal(redirectUriOidc(), 'https://pubblico.esempio.it/oidc/callback');
+
+    process.env.FRONTEND_PUBBLICO_BASE_URL = 'https://pubblico.esempio.it/';
+    assert.equal(redirectUriOidc(), 'https://pubblico.esempio.it/oidc/callback', 'slash finale rimosso');
+  } finally {
+    if (originale === undefined) delete process.env.FRONTEND_PUBBLICO_BASE_URL;
+    else process.env.FRONTEND_PUBBLICO_BASE_URL = originale;
+  }
+});

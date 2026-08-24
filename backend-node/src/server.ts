@@ -1566,7 +1566,7 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
             attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
             azione: 'aggiorna_impostazioni_oidc',
             entitaTipo: 'impostazioni_sistema',
-            dettaglio: { issuer: parsed.data.issuer, clientId: parsed.data.clientId, redirectUri: parsed.data.redirectUri },
+            dettaglio: { issuer: parsed.data.issuer, clientId: parsed.data.clientId },
           });
           return leggiConfigOidcPubblica(client);
         });

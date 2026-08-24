@@ -1,20 +1,21 @@
 import React, { useEffect, useState } from 'react';
-import { KeyRound, Lock } from 'lucide-react';
+import { AlertTriangle, Copy, Check, KeyRound, Lock } from 'lucide-react';
 import { leggiConfigOidc, salvaConfigOidc, type ConfigOidc, type DatiSalvaConfigOidc, ErroreRichiestaApi } from '../api/impostazioniOidc.ts';
 
 export const ImpostazioniOidcView: React.FC = () => {
   const [config, setConfig] = useState<ConfigOidc | null | undefined>(undefined);
-  const [dati, setDati] = useState<DatiSalvaConfigOidc>({ issuer: '', clientId: '', redirectUri: '', clientSecret: undefined });
+  const [dati, setDati] = useState<DatiSalvaConfigOidc>({ issuer: '', clientId: '', clientSecret: undefined });
   const [errore, setErrore] = useState<string | null>(null);
   const [messaggioSalvato, setMessaggioSalvato] = useState<string | null>(null);
   const [inCorso, setInCorso] = useState(false);
+  const [copiato, setCopiato] = useState(false);
 
   useEffect(() => {
     leggiConfigOidc()
       .then((c) => {
         setConfig(c);
         if (c) {
-          setDati({ issuer: c.issuer, clientId: c.clientId, redirectUri: c.redirectUri, clientSecret: undefined });
+          setDati({ issuer: c.issuer, clientId: c.clientId, clientSecret: undefined });
         }
       })
       .catch((err) => setErrore(err instanceof ErroreRichiestaApi ? err.message : 'Impossibile caricare la configurazione OIDC.'));
@@ -28,13 +29,20 @@ export const ImpostazioniOidcView: React.FC = () => {
     try {
       const salvato = await salvaConfigOidc(dati);
       setConfig(salvato);
-      setDati({ issuer: salvato.issuer, clientId: salvato.clientId, redirectUri: salvato.redirectUri, clientSecret: undefined });
+      setDati({ issuer: salvato.issuer, clientId: salvato.clientId, clientSecret: undefined });
       setMessaggioSalvato('Configurazione salvata.');
     } catch (err) {
       setErrore(err instanceof ErroreRichiestaApi ? err.message : 'Errore imprevisto.');
     } finally {
       setInCorso(false);
     }
+  };
+
+  const handleCopiaRedirectUri = async (): Promise<void> => {
+    if (!config?.redirectUri) return;
+    await navigator.clipboard.writeText(config.redirectUri);
+    setCopiato(true);
+    setTimeout(() => setCopiato(false), 2000);
   };
 
   if (config === undefined) {
@@ -60,6 +68,31 @@ export const ImpostazioniOidcView: React.FC = () => {
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="pa-card">
+        <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', marginBottom: '0.35rem' }}>Redirect URI</label>
+        <p style={{ fontSize: '0.8rem', color: 'var(--pa-text-muted)', marginTop: 0, marginBottom: '0.5rem' }}>
+          Calcolato dal server (frontend pubblico + <code>/oidc/callback</code>), non editabile — incollalo nella
+          registrazione del client lato IdP.
+        </p>
+        {config?.redirectUri ? (
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <input className="form-control" value={config.redirectUri} readOnly style={{ fontFamily: 'monospace' }} />
+            <button type="button" className="btn btn-secondary" onClick={handleCopiaRedirectUri}>
+              {copiato ? <Check size={16} /> : <Copy size={16} />}
+              <span>{copiato ? 'Copiato' : 'Copia'}</span>
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-start', color: 'var(--pa-danger)', fontSize: '0.85rem' }}>
+            <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
+            <span>
+              <code>FRONTEND_PUBBLICO_BASE_URL</code> non è impostata in questo ambiente: nessun redirect URI
+              calcolabile, il login SPID/CIE pubblico non funzionerà finché non viene configurata a livello di deploy.
+            </span>
+          </div>
+        )}
       </div>
 
       {errore && (
@@ -92,11 +125,6 @@ export const ImpostazioniOidcView: React.FC = () => {
           <label htmlFor="oidc-client-id" style={{ fontSize: '0.85rem', fontWeight: 600 }}>Client ID</label>
           <input id="oidc-client-id" className="form-control" autoComplete="off" value={dati.clientId}
             onChange={(e) => setDati((p) => ({ ...p, clientId: e.target.value }))} required />
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-          <label htmlFor="oidc-redirect-uri" style={{ fontSize: '0.85rem', fontWeight: 600 }}>Redirect URI</label>
-          <input id="oidc-redirect-uri" className="form-control" autoComplete="off" value={dati.redirectUri}
-            onChange={(e) => setDati((p) => ({ ...p, redirectUri: e.target.value }))} required />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
           <label htmlFor="oidc-client-secret" style={{ fontSize: '0.85rem', fontWeight: 600 }}>

@@ -12,6 +12,11 @@ import { ErroreStatoNonValido } from '../oidc/flow.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 process.env.JWT_SECRET ??= 'segreto-di-test-non-usare-in-produzione';
+// redirectUri non è più un campo di scriviConfigOidc: è calcolato da questa var
+// (vedi oidc/config.ts:redirectUriOidc) — il mock IdP sotto non ne valida il
+// valore, serve solo perché costruisciUrlAutorizzazione/scambiaCode falliscono
+// con ErroreOidcNonConfigurato se assente.
+process.env.FRONTEND_PUBBLICO_BASE_URL ??= 'http://frontend-pubblico.invalid';
 
 const KID = 'mock-idp-key-1';
 const CLIENT_ID = 'polaris-test-client';
@@ -133,7 +138,6 @@ test(
       issuer: idp.issuer,
       clientId: CLIENT_ID,
       clientSecret: CLIENT_SECRET,
-      redirectUri: idp.redirectUri,
     });
 
     await t.test('costruisciUrlAutorizzazione produce un URL con PKCE e state', async () => {

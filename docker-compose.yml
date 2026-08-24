@@ -87,6 +87,10 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-}
       BACKOFFICE_BASE_URL: ${BACKOFFICE_BASE_URL:-}
+      # URL pubblico del frontend pubblico (SPID/CIE) -- usato per calcolare il
+      # redirect_uri OIDC (<questo>/oidc/callback), mai più un campo digitato a
+      # mano in UI (vedi backend-node/src/oidc/config.ts:redirectUriOidc).
+      FRONTEND_PUBBLICO_BASE_URL: ${FRONTEND_PUBBLICO_BASE_URL:-}
       DOCUMENTI_STORAGE_PATH: /data/documenti
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       TRUST_PROXY: ${TRUST_PROXY:-}

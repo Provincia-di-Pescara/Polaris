@@ -9,6 +9,11 @@ import { scriviConfigOidc } from './oidc/config.ts';
 
 const dsn = process.env.TEST_DATABASE_URL;
 process.env.JWT_SECRET ??= 'segreto-di-test-non-usare-in-produzione';
+// redirectUri non è più un campo di scriviConfigOidc: è calcolato da questa var
+// (vedi oidc/config.ts:redirectUriOidc) — il mock IdP sotto non ne valida il
+// valore, serve solo perché costruisciUrlAutorizzazione/scambiaCode falliscono
+// con ErroreOidcNonConfigurato se assente.
+process.env.FRONTEND_PUBBLICO_BASE_URL ??= 'http://frontend-pubblico.invalid';
 
 const KID = 'server-test-idp-key';
 const CLIENT_ID = 'polaris-server-test';
@@ -79,7 +84,6 @@ test(
       issuer: idp.issuer,
       clientId: CLIENT_ID,
       clientSecret: CLIENT_SECRET,
-      redirectUri: 'http://frontend.invalid/callback',
     });
 
     const app = creaApp(pool);

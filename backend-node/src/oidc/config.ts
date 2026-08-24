@@ -13,21 +13,20 @@ export interface ConfigOidc {
   issuer: string;
   clientId: string;
   clientSecret: string;
-  redirectUri: string;
 }
 
 export interface ConfigOidcInput {
   issuer: string;
   clientId: string;
-  redirectUri: string;
   clientSecret?: string | undefined;
 }
 
-// DTO per la GET HTTP: mai il secret, nemmeno cifrato.
+// DTO per la GET HTTP: mai il secret, nemmeno cifrato. redirectUri è calcolato
+// (mai persistito né editabile da un admin) — vedi redirectUriOidc().
 export interface ConfigOidcPubblica {
   issuer: string;
   clientId: string;
-  redirectUri: string;
+  redirectUri: string | null;
   clientSecretConfigurato: boolean;
 }
 
@@ -35,7 +34,20 @@ interface ConfigOidcMemorizzata {
   issuer: string;
   clientId: string;
   clientSecretCifrato: string;
-  redirectUri: string;
+}
+
+// redirectUri NON è più un campo che un admin digita: prima di questo era il
+// valore inviato letteralmente all'IdP (oidc/flow.ts) — un errore di battitura
+// rompeva il login SPID/CIE in modo silenzioso, scoperto solo al primo tentativo
+// reale. Ora è calcolato da FRONTEND_PUBBLICO_BASE_URL (stesso pattern di
+// BACKOFFICE_BASE_URL già esistente per il link di invito email), esposto in
+// sola lettura in UI con un pulsante "copia" — l'unica cosa che un admin deve
+// fare è incollarlo nella registrazione client lato IdP. Nessun valore
+// inventato/derivato da request headers: solo l'env var esplicita, o null.
+export function redirectUriOidc(): string | null {
+  const base = process.env.FRONTEND_PUBBLICO_BASE_URL;
+  if (!base) return null;
+  return `${base.replace(/\/+$/, '')}/oidc/callback`;
 }
 
 export async function leggiConfigOidc(db: Db): Promise<ConfigOidc | null> {
@@ -47,7 +59,6 @@ export async function leggiConfigOidc(db: Db): Promise<ConfigOidc | null> {
     issuer: memorizzata.issuer,
     clientId: memorizzata.clientId,
     clientSecret: await decifra(memorizzata.clientSecretCifrato),
-    redirectUri: memorizzata.redirectUri,
   };
 }
 
@@ -59,7 +70,7 @@ export async function leggiConfigOidcPubblica(db: Db): Promise<ConfigOidcPubblic
   return {
     issuer: memorizzata.issuer,
     clientId: memorizzata.clientId,
-    redirectUri: memorizzata.redirectUri,
+    redirectUri: redirectUriOidc(),
     clientSecretConfigurato: Boolean(memorizzata.clientSecretCifrato),
   };
 }
@@ -85,7 +96,6 @@ export async function scriviConfigOidc(
     issuer: config.issuer,
     clientId: config.clientId,
     clientSecretCifrato,
-    redirectUri: config.redirectUri,
   };
   await scriviImpostazione(db, CHIAVE_IMPOSTAZIONE, memorizzata, aggiornataDa);
 }

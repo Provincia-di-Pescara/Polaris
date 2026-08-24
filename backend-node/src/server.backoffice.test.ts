@@ -752,7 +752,6 @@ test(
         body: JSON.stringify({
           issuer: 'https://idp-http-test.invalid',
           clientId: 'client-http-test',
-          redirectUri: 'https://app-http-test.invalid/cb',
         }),
       });
       assert.equal(r.status, 400);
@@ -766,13 +765,16 @@ test(
           issuer: 'https://idp-http-test.invalid',
           clientId: 'client-http-test',
           clientSecret: 'segreto-http-test',
-          redirectUri: 'https://app-http-test.invalid/cb',
         }),
       });
       assert.equal(rPut.status, 200);
       const bodyPut = (await rPut.json()) as Record<string, unknown>;
       assert.equal('clientSecret' in bodyPut, false, 'PUT non deve mai riflettere il secret nella risposta');
       assert.equal(bodyPut.clientSecretConfigurato, true);
+      // redirectUri è calcolato da FRONTEND_PUBBLICO_BASE_URL, non impostata in
+      // questo file di test (non serve: nessun test qui esercita il flusso di
+      // login reale) — null, mai un valore inventato.
+      assert.equal(bodyPut.redirectUri, null);
 
       const rGet = await fetch(`${base}/backoffice/impostazioni/oidc`, {
         headers: { Authorization: `Bearer ${admin.token}` },
@@ -781,6 +783,7 @@ test(
       const bodyGet = (await rGet.json()) as Record<string, unknown>;
       assert.equal('clientSecret' in bodyGet, false);
       assert.equal(bodyGet.issuer, 'https://idp-http-test.invalid');
+      assert.equal(bodyGet.redirectUri, null);
 
       const log = await pool.query(
         `SELECT dettaglio FROM log_operazioni WHERE utente_backoffice_id = $1 AND azione = 'aggiorna_impostazioni_oidc' ORDER BY avvenuta_il DESC LIMIT 1`,
@@ -798,7 +801,6 @@ test(
         body: JSON.stringify({
           issuer: 'https://idp-http-test-2.invalid',
           clientId: 'client-http-test',
-          redirectUri: 'https://app-http-test.invalid/cb',
         }),
       });
       assert.equal(rPut.status, 200);
@@ -821,7 +823,6 @@ test(
         body: JSON.stringify({
           issuer: 'https://idp-http-test-3.invalid/',
           clientId: 'client-http-test',
-          redirectUri: 'https://app-http-test.invalid/cb',
         }),
       });
       assert.equal(rPut.status, 200);

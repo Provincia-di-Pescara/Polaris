@@ -5,14 +5,15 @@ export { ErroreRichiestaApi };
 export interface ConfigOidc {
   issuer: string;
   clientId: string;
-  redirectUri: string;
+  // Calcolato server-side da FRONTEND_PUBBLICO_BASE_URL, mai persistito/editabile —
+  // null se quella env var non è impostata nel deploy corrente.
+  redirectUri: string | null;
   clientSecretConfigurato: boolean;
 }
 
 export interface DatiSalvaConfigOidc {
   issuer: string;
   clientId: string;
-  redirectUri: string;
   clientSecret?: string | undefined;
 }
 

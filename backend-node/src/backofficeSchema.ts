@@ -148,13 +148,14 @@ export const schemaCambiaStatoUtenteBackoffice = z.object({
 });
 export type CambiaStatoUtenteBackofficeRequest = z.infer<typeof schemaCambiaStatoUtenteBackoffice>;
 
+// redirectUri NON è (più) un campo del body: è calcolato server-side da
+// FRONTEND_PUBBLICO_BASE_URL, vedi oidc/config.ts:redirectUriOidc().
 export const schemaImpostazioniOidc = z.object({
   issuer: z
     .string()
     .url()
     .transform((s) => s.replace(/\/+$/, '')),
   clientId: z.string().min(1),
-  redirectUri: z.string().url(),
   clientSecret: z.string().min(1).optional(),
 });
 export type ImpostazioniOidcRequest = z.infer<typeof schemaImpostazioniOidc>;
