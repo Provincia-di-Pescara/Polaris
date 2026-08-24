@@ -330,3 +330,10 @@ export const schemaQueryListaLogOperazioni = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 });
+
+// Il backup dietro `nome` è sempre full (mai parzializzato al momento del dump) —
+// tabelleEscluse si applica solo qui, in fase di ripristino (vedi backup.ts).
+export const schemaRipristinoBackup = z.object({
+  tabelleEscluse: z.array(z.string().min(1)).default([]),
+});
+export type RipristinoBackupRequest = z.infer<typeof schemaRipristinoBackup>;

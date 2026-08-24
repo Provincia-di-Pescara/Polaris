@@ -64,7 +64,10 @@ import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } fro
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
 import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaQueryListaDeleghe, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione, schemaCreaProvvedimento, schemaQueryListaLogOperazioni } from './backofficeSchema.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaRespingiDelega, schemaQueryListaDeleghe, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione, schemaCreaProvvedimento, schemaQueryListaLogOperazioni, schemaRipristinoBackup } from './backofficeSchema.ts';
+import { listaBackup, eseguiBackupManuale, elencoTabelle, eseguiRipristino, percorsoBackupValido, ErroreBackupNonTrovato, ErrorePercorsoNonValido } from './backup.ts';
+import { createReadStream } from 'node:fs';
+import path from 'node:path';
 import { registraUtilizzo, trovaUtilizzoPerId, listaUtilizziPerAssegnazione, accogliGiustificazione, rigettaGiustificazione, presentaGiustificazione, listaUtilizziPerAssociazione } from './utilizziEffettivi.ts';
 import { codaMancatiUtilizzi, creaProvvedimento, listaProvvedimentiPerAssegnazione, applicaDecadenza } from './provvedimenti.ts';
 import { creaAssociazione, trovaAssociazionePerId, creaDocumentoAssociazione, listaDocumentiPerAssociazione, trovaDocumentoPerId, creaReferenteAssociazione, creaAssicurazioneAssociazione, listaReferentiPerAssociazione, listaAssicurazioniPerAssociazione } from './associazioni.ts';
@@ -1570,6 +1573,117 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         res.status(200).json(config);
       } catch (err) {
         if (err instanceof ErroreClientSecretMancante) {
+          res.status(400).json({ errore: err.message });
+          return;
+        }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // --- Backup / ripristino manuale (art. nessuno — operativo, non normativo) ---
+  // Il backup schedulato giornaliero resta il container "backup" in
+  // docker-compose.yml — questo blocco aggiunge solo trigger manuale (sempre un
+  // dump FULL) + ripristino selettivo per tabella (mai al momento del backup,
+  // solo qui). Vedi backup.ts per il perché del formato custom (-Fc) e del
+  // meccanismo di esclusione via TOC di pg_restore.
+
+  app.get('/backoffice/backup', richiedeAutenticazione, richiedeRuolo('admin'), async (_req, res) => {
+    try {
+      res.status(200).json(await listaBackup());
+    } catch (err) {
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post(
+    '/backoffice/backup/esegui',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      try {
+        const voce = await eseguiBackupManuale();
+        await registraOperazione(pool, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+          azione: 'esegui_backup_manuale',
+          entitaTipo: 'backup',
+          dettaglio: { nome: voce.nome, dimensioneByte: voce.dimensioneByte },
+        });
+        res.status(201).json(voce);
+      } catch (err) {
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get('/backoffice/backup/:nome/tabelle', richiedeAutenticazione, richiedeRuolo('admin'), async (req, res) => {
+    try {
+      const nome = typeof req.params.nome === 'string' ? decodeURIComponent(req.params.nome) : '';
+      res.status(200).json(await elencoTabelle(nome));
+    } catch (err) {
+      if (err instanceof ErroreBackupNonTrovato) {
+        res.status(404).json({ errore: err.message });
+        return;
+      }
+      if (err instanceof ErrorePercorsoNonValido) {
+        res.status(400).json({ errore: err.message });
+        return;
+      }
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/backoffice/backup/:nome/scarica', richiedeAutenticazione, richiedeRuolo('admin'), async (req, res) => {
+    try {
+      const nome = typeof req.params.nome === 'string' ? decodeURIComponent(req.params.nome) : '';
+      const percorso = await percorsoBackupValido(nome);
+      // Nome scaricato corretto (.dump), mai il *.sql.gz fuorviante dell'immagine
+      // upstream del backup schedulato — vedi il commento in testa a backup.ts.
+      // path.extname toglie solo l'ULTIMA estensione (".sql.gz" -> ".sql.dump",
+      // sbagliato) — split sul primo punto per togliere tutto in un colpo.
+      const nomeScaricato = `${path.basename(nome).split('.')[0]}.dump`;
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeScaricato}"`);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      createReadStream(percorso).pipe(res);
+    } catch (err) {
+      if (err instanceof ErroreBackupNonTrovato) {
+        res.status(404).json({ errore: err.message });
+        return;
+      }
+      if (err instanceof ErrorePercorsoNonValido) {
+        res.status(400).json({ errore: err.message });
+        return;
+      }
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post(
+    '/backoffice/backup/:nome/ripristina',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaRipristinoBackup.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        const nome = typeof req.params.nome === 'string' ? decodeURIComponent(req.params.nome) : '';
+        const esito = await eseguiRipristino(nome, parsed.data.tabelleEscluse);
+        await registraOperazione(pool, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+          azione: 'ripristina_backup',
+          entitaTipo: 'backup',
+          dettaglio: { nome, tabelleRipristinate: esito.tabelleRipristinate, tabelleEscluse: esito.tabelleEscluse },
+        });
+        res.status(200).json(esito);
+      } catch (err) {
+        if (err instanceof ErroreBackupNonTrovato) {
+          res.status(404).json({ errore: err.message });
+          return;
+        }
+        if (err instanceof ErrorePercorsoNonValido) {
           res.status(400).json({ errore: err.message });
           return;
         }

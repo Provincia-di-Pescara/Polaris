@@ -11,7 +11,10 @@ COPY backend-node/package.json backend-node/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --ignore-scripts --prod
 
 FROM node:24-alpine
-RUN apk add --no-cache tzdata
+# postgresql18-client: pg_dump/pg_restore/psql, stessa versione major del server
+# (postgres:18-alpine) — usati per il backup/ripristino manuale da UI (backup.ts),
+# non solo dal driver pg (che parla il protocollo di rete, non fa dump/restore).
+RUN apk add --no-cache tzdata postgresql18-client
 ENV TZ=Europe/Rome NODE_ENV=production
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules

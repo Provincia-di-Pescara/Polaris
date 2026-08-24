@@ -49,6 +49,22 @@ services:
     networks:
       - polaris-net
 
+  # One-shot: prepara la sottocartella "manual" nel volume di backup con i
+  # permessi giusti PRIMA che "backend" parta. La radice del volume è di
+  # proprietà root (fissata dall'entrypoint del container "backup" sotto, che
+  # gira come root solo lui) — "backend" gira sempre come utente non privilegiato
+  # (immagine node:24-alpine, USER node → uid 1000) e non può creare/scrivere lì
+  # da sé. Bug reale trovato con un bring-up completo: senza questo passaggio,
+  # sia il trigger di backup manuale sia il ripristino fallivano con EACCES.
+  backup-init:
+    image: busybox
+    restart: "no"
+    volumes:
+      - postgres_backups:/backups
+    command: sh -c "mkdir -p /backups/manual && chown -R 1000:1000 /backups/manual"
+    networks:
+      - polaris-net
+
   backend:
     image: ghcr.io/provincia-di-pescara/polaris-backend:${IMAGE_TAG:-latest}
     restart: unless-stopped
@@ -77,13 +93,20 @@ services:
       # Sentry/GlitchTip, opzionale — vedi commento gemello sul servizio "engine".
       SENTRY_DSN: ${SENTRY_DSN_BACKEND:-}
       APP_VERSION: ${IMAGE_TAG:-latest}
+      # Stesso volume del servizio "backup" sotto — il backend legge/scrive lì
+      # per backup manuali + ripristino da UI (backup.ts), senza bisogno di
+      # accesso shell al container schedulato. Vedi docs/claude/backend-node.md.
+      BACKUP_DIR: /backups
     volumes:
       - documenti_associazioni:/data/documenti
+      - postgres_backups:/backups
     depends_on:
       postgres:
         condition: service_healthy
       engine:
         condition: service_started
+      backup-init:
+        condition: service_completed_successfully
     networks:
       - polaris-net
 
@@ -140,6 +163,13 @@ services:
       BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
       BACKUP_KEEP_WEEKS: ${BACKUP_KEEP_WEEKS:-4}
       BACKUP_KEEP_MONTHS: ${BACKUP_KEEP_MONTHS:-6}
+      # Formato custom (pg_dump -Fc), non plain SQL: è l'unico che pg_restore sa
+      # filtrare per tabella in fase di ripristino (vedi backup.ts) — il nome
+      # file resta *.sql.gz (l'immagine non lo rende configurabile), ma il
+      # contenuto è binario PGDMP, verificato con un bring-up reale (`pg_restore
+      # --list` lo legge direttamente, nessun problema nonostante l'estensione
+      # fuorviante — backend.ts rileva il formato dai magic byte, mai dal nome).
+      POSTGRES_EXTRA_OPTS: -Fc
     volumes:
       - postgres_backups:/backups
     depends_on:
