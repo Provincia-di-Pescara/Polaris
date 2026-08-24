@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import {
   Layers,
@@ -9,9 +9,30 @@ import {
   BarChart3,
   LogOut,
   Landmark,
-  Users
+  Users,
+  DatabaseBackup,
+  ChevronDown,
+  ChevronRight
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.tsx';
+
+interface VoceSemplice {
+  tipo: 'link';
+  id: string;
+  label: string;
+  icon: typeof Layers;
+  roles: Array<'admin' | 'operatore'>;
+  badge?: string;
+}
+
+interface VoceGruppo {
+  tipo: 'gruppo';
+  id: string;
+  label: string;
+  icon: typeof Layers;
+  roles: Array<'admin' | 'operatore'>;
+  figli: Array<{ id: string; label: string; icon: typeof Layers }>;
+}
 
 export const Sidebar: React.FC = () => {
   const { utente, logout } = useAuth();
@@ -20,16 +41,29 @@ export const Sidebar: React.FC = () => {
   const role = utente!.ruolo;
   const currentTab = location.pathname === '/' ? 'control-room' : location.pathname.replace(/^\//, '');
 
-  const menuItems = [
-    { id: 'control-room', label: 'Control Room Procedura', icon: Layers, roles: ['admin', 'operatore'] },
-    { id: 'impianti-spazi', label: 'Impianti & Spazi Sportivi', icon: Building2, roles: ['admin', 'operatore'] },
-    { id: 'deleghe-accreditamenti', label: 'Deleghe & Accreditamenti', icon: FileCheck2, roles: ['admin', 'operatore'], badge: '2' },
-    { id: 'parametri-sistema', label: 'Parametri di Sistema', icon: Settings2, roles: ['admin'] },
-    { id: 'impostazioni-oidc', label: 'Impostazioni OIDC', icon: ShieldCheck, roles: ['admin'] },
-    { id: 'utenti', label: 'Utenti Backoffice', icon: Users, roles: ['admin'] },
-    { id: 'audit-sorteggio', label: 'Audit Log & Sorteggi HMAC', icon: ShieldCheck, roles: ['admin', 'operatore'] },
-    { id: 'statistiche', label: 'Analisi & Statistiche', icon: BarChart3, roles: ['admin', 'operatore'] }
+  const menuItems: Array<VoceSemplice | VoceGruppo> = [
+    { tipo: 'link', id: 'control-room', label: 'Control Room Procedura', icon: Layers, roles: ['admin', 'operatore'] },
+    { tipo: 'link', id: 'impianti-spazi', label: 'Impianti & Spazi Sportivi', icon: Building2, roles: ['admin', 'operatore'] },
+    { tipo: 'link', id: 'deleghe-accreditamenti', label: 'Deleghe & Accreditamenti', icon: FileCheck2, roles: ['admin', 'operatore'], badge: '2' },
+    {
+      tipo: 'gruppo',
+      id: 'impostazioni',
+      label: 'Impostazioni',
+      icon: Settings2,
+      roles: ['admin'],
+      figli: [
+        { id: 'parametri-sistema', label: 'Parametri di Sistema', icon: Settings2 },
+        { id: 'impostazioni-oidc', label: 'OIDC (SPID/CIE)', icon: ShieldCheck },
+        { id: 'utenti', label: 'Utenti Backoffice', icon: Users },
+        { id: 'backup', label: 'Backup & Ripristino', icon: DatabaseBackup },
+      ],
+    },
+    { tipo: 'link', id: 'audit-sorteggio', label: 'Audit Log & Sorteggi HMAC', icon: ShieldCheck, roles: ['admin', 'operatore'] },
+    { tipo: 'link', id: 'statistiche', label: 'Analisi & Statistiche', icon: BarChart3, roles: ['admin', 'operatore'] },
   ];
+
+  const idFigliImpostazioni = menuItems.find((v): v is VoceGruppo => v.tipo === 'gruppo')?.figli.map((f) => f.id) ?? [];
+  const [impostazioniAperte, setImpostazioniAperte] = useState(idFigliImpostazioni.includes(currentTab));
 
   return (
     <aside style={{
@@ -96,6 +130,74 @@ export const Sidebar: React.FC = () => {
           .filter(item => item.roles.includes(role))
           .map(item => {
             const Icon = item.icon;
+
+            if (item.tipo === 'gruppo') {
+              const gruppoAttivo = item.figli.some((f) => f.id === currentTab);
+              return (
+                <div key={item.id} style={{ marginBottom: '0.4rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setImpostazioniAperte((v) => !v)}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '0.75rem 1rem',
+                      borderRadius: '6px',
+                      border: 'none',
+                      backgroundColor: gruppoAttivo && !impostazioniAperte ? 'var(--pa-blue-primary)' : 'transparent',
+                      color: gruppoAttivo ? 'white' : 'rgba(255,255,255,0.75)',
+                      cursor: 'pointer',
+                      fontWeight: gruppoAttivo ? 600 : 400,
+                      fontSize: '0.875rem',
+                      textAlign: 'left'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <Icon size={18} />
+                      <span>{item.label}</span>
+                    </div>
+                    {impostazioniAperte ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                  </button>
+
+                  {impostazioniAperte && (
+                    <div style={{ paddingLeft: '1.1rem', marginTop: '0.3rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                      {item.figli.map((figlio) => {
+                        const FiglioIcon = figlio.icon;
+                        const isActive = currentTab === figlio.id;
+                        return (
+                          <button
+                            key={figlio.id}
+                            type="button"
+                            onClick={() => navigate(`/${figlio.id}`)}
+                            style={{
+                              width: '100%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.65rem',
+                              padding: '0.6rem 0.85rem',
+                              borderRadius: '6px',
+                              border: 'none',
+                              backgroundColor: isActive ? 'var(--pa-blue-primary)' : 'transparent',
+                              color: isActive ? 'white' : 'rgba(255,255,255,0.65)',
+                              cursor: 'pointer',
+                              fontWeight: isActive ? 600 : 400,
+                              fontSize: '0.82rem',
+                              textAlign: 'left'
+                            }}
+                          >
+                            <FiglioIcon size={15} />
+                            <span>{figlio.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
             const isActive = currentTab === item.id;
             return (
               <button

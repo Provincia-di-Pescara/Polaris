@@ -73,20 +73,29 @@ export const ImpostazioniOidcView: React.FC = () => {
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="pa-card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '520px' }}>
+      {/*
+        autoComplete="off" sul <form> non basta da solo contro i password manager
+        (Chrome/Firefox lo ignorano per euristica su un form con un campo
+        type="password" — vedono "issuer"/"redirectUri" come URL e ci compilano
+        sopra credenziali salvate a caso). Fix per-campo: autoComplete="off" sui
+        campi testo, "new-password" sul secret (unico valore che i browser
+        rispettano davvero per sopprimere l'autofill su un campo password,
+        trucco standard — "off" da solo su un password field è spesso ignorato).
+      */}
+      <form onSubmit={handleSubmit} className="pa-card" autoComplete="off" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '520px' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
           <label htmlFor="oidc-issuer" style={{ fontSize: '0.85rem', fontWeight: 600 }}>Issuer</label>
-          <input id="oidc-issuer" className="form-control" value={dati.issuer}
+          <input id="oidc-issuer" className="form-control" autoComplete="off" value={dati.issuer}
             onChange={(e) => setDati((p) => ({ ...p, issuer: e.target.value }))} required />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
           <label htmlFor="oidc-client-id" style={{ fontSize: '0.85rem', fontWeight: 600 }}>Client ID</label>
-          <input id="oidc-client-id" className="form-control" value={dati.clientId}
+          <input id="oidc-client-id" className="form-control" autoComplete="off" value={dati.clientId}
             onChange={(e) => setDati((p) => ({ ...p, clientId: e.target.value }))} required />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
           <label htmlFor="oidc-redirect-uri" style={{ fontSize: '0.85rem', fontWeight: 600 }}>Redirect URI</label>
-          <input id="oidc-redirect-uri" className="form-control" value={dati.redirectUri}
+          <input id="oidc-redirect-uri" className="form-control" autoComplete="off" value={dati.redirectUri}
             onChange={(e) => setDati((p) => ({ ...p, redirectUri: e.target.value }))} required />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
@@ -94,7 +103,7 @@ export const ImpostazioniOidcView: React.FC = () => {
             <KeyRound size={14} style={{ verticalAlign: 'middle', marginRight: '0.3rem' }} />
             Client Secret
           </label>
-          <input id="oidc-client-secret" type="password" className="form-control" value={dati.clientSecret ?? ''}
+          <input id="oidc-client-secret" type="password" className="form-control" autoComplete="new-password" value={dati.clientSecret ?? ''}
             placeholder={config?.clientSecretConfigurato ? 'Invariato (lascia vuoto per non modificarlo)' : 'Obbligatorio al primo salvataggio'}
             onChange={(e) => setDati((p) => ({ ...p, clientSecret: e.target.value || undefined }))} />
         </div>
