@@ -77,6 +77,10 @@ descrivi('App — accreditamento (backend reale)', () => {
 
     render(<App />);
 
+    // Nessuna preselezione automatica (2026-08-24, vedi App.tsx) -- selezione
+    // esplicita necessaria prima che il bottone "richiedi nuova delega" si
+    // abiliti (AccreditamentoDelegaView.tsx lo disabilita senza stagione).
+    await userEvent.selectOptions(await screen.findByRole('combobox', { name: /stagione/i }), stagioneId);
     await userEvent.click(await screen.findByRole('button', { name: /richiedi nuova delega/i }));
 
     const suffisso = randomUUID().slice(0, 8);

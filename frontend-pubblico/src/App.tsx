@@ -35,11 +35,12 @@ const AppAutenticata: React.FC = () => {
       .then((s) => {
         if (annullato) return;
         setStagioni(s);
-        // Default: prima stagione non chiusa, ordine già data_inizio DESC dal
-        // backend (vedi backend-node/src/stagioni.ts:22-26) — se tutte chiuse,
-        // fallback alla prima in assoluto.
-        const nonChiusa = s.find((st) => st.stato !== 'chiusa');
-        setStagioneId((prev) => prev ?? nonChiusa?.id ?? s[0]?.id ?? null);
+        // NIENT'AUTO-SELEZIONE (deciso 2026-08-24, vedi
+        // docs/superpowers/specs/2026-08-24-gestione-stagioni-design.md): più
+        // stagioni non-chiuse possono coesistere in fasi diverse (una verso la
+        // chiusura, la successiva già in censimento) -- "la più recente" non è
+        // necessariamente quella su cui il cittadino ha azioni pendenti.
+        // Selezione sempre esplicita.
       })
       .catch(() => {
         // Nessuna stagione disponibile non deve bloccare il resto dell'app —

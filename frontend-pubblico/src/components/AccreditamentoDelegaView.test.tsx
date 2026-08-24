@@ -102,18 +102,16 @@ describe('AccreditamentoDelegaView', () => {
     expect(await vi.waitFor(() => onRicarica)).toHaveBeenCalled();
   });
 
-  it('senza stagioneId selezionato: mostra errore, non chiama creaAssociazione', async () => {
-    const spy = vi.spyOn(associazioniApi, 'creaAssociazione');
+  it('senza stagioneId selezionato: il bottone "richiedi nuova delega" resta disabilitato, mai chiamata creaAssociazione', () => {
+    // Bug reale trovato 2026-08-24: prima si poteva compilare l'intero form
+    // (denominazione, CF, tutti i campi obbligatori, upload documento) e
+    // scoprire solo al submit che mancava la stagione -- ora il bottone che
+    // apre il form resta disabilitato finché non c'è una stagione selezionata
+    // (l'errore a submit-time in handleSubmit resta come difesa in profondità,
+    // non più il percorso normale).
     render(<AccreditamentoDelegaView entities={[]} stagioneId={null} onRicarica={vi.fn()} persona={PERSONA_MOCK} />);
 
-    await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
-    await userEvent.type(screen.getByLabelText(/denominazione ufficiale/i), 'ASD Nuova');
-    await userEvent.type(screen.getByLabelText(/codice fiscale \/ p\.iva/i), '123');
-    compilaCampiObbligatoriAssociazione();
-    await userEvent.click(screen.getByRole('button', { name: /invia delega/i }));
-
-    expect(screen.getByText(/seleziona una stagione/i)).toBeInTheDocument();
-    expect(spy).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /richiedi nuova delega/i })).toBeDisabled();
   });
 
   it('creazione associazione riuscita ma upload documento fallito: mostra avviso distinto, chiama comunque onRicarica', async () => {

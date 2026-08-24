@@ -4,6 +4,18 @@ import type { EntitaRappresentata } from '../api/deleghe.ts';
 import type { Stagione } from '../api/stagioni.ts';
 import { Landmark, ShieldCheck, User, Building, FileCheck2, Calculator, BarChart2, RefreshCw, Calendar, LogOut } from 'lucide-react';
 
+const ETICHETTA_STATO: Record<string, string> = {
+  censimento: 'Censimento',
+  bando_aperto: 'Bando aperto',
+  istruttoria: 'Istruttoria',
+  pubblicazione_istruttoria: 'Pubblicazione istruttoria',
+  blocchi_gara: 'Blocchi gara',
+  prima_assegnazione: 'Prima assegnazione',
+  concertazione: 'Concertazione',
+  definitiva: 'Definitiva',
+  chiusa: 'Chiusa',
+};
+
 interface HeaderProps {
   persona: PersonaAutenticata;
   entities: EntitaRappresentata[];
@@ -85,7 +97,7 @@ export const Header: React.FC<HeaderProps> = ({
           <div>
             <h1 style={{ color: 'white', fontSize: '1.4rem', margin: 0 }}>POLARIS — Portale Spazi Sportivi</h1>
             <div style={{ fontSize: '0.8rem', opacity: 0.8, marginTop: '2px' }}>
-              Assegnazione Palestre Scolastiche Provinciali • Stagione 2026/2027
+              Assegnazione Palestre Scolastiche Provinciali
             </div>
           </div>
         </div>
@@ -132,8 +144,11 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Season Selector */}
-        {stagioni.length > 0 && (
+        {/* Season Selector -- solo le non-chiuse, nessuna preselezionata: più
+            stagioni possono coesistere in fasi diverse (una verso la chiusura,
+            la successiva già in censimento), la scelta è sempre esplicita —
+            vedi docs/superpowers/specs/2026-08-24-gestione-stagioni-design.md. */}
+        {stagioni.filter(s => s.stato !== 'chiusa').length > 0 && (
           <div style={{
             backgroundColor: 'rgba(255,255,255,0.08)',
             border: '1px solid rgba(255,255,255,0.2)',
@@ -160,9 +175,10 @@ export const Header: React.FC<HeaderProps> = ({
                   outline: 'none'
                 }}
               >
-                {stagioni.map(s => (
+                <option value="" style={{ color: 'black' }}>— seleziona —</option>
+                {stagioni.filter(s => s.stato !== 'chiusa').map(s => (
                   <option key={s.id} value={s.id} style={{ color: 'black' }}>
-                    {s.nome}
+                    {s.nome} — {ETICHETTA_STATO[s.stato] ?? s.stato}
                   </option>
                 ))}
               </select>

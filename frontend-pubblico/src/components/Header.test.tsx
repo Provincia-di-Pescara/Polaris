@@ -68,16 +68,32 @@ describe('Header', () => {
 
   const STAGIONE: Stagione = { id: 'st1', nome: 'Stagione 2026/2027', dataInizio: '2026-09-01', dataFine: '2027-06-30', stato: 'censimento' };
 
-  it('mostra il selettore stagione con le stagioni fornite', () => {
+  it('mostra il selettore stagione con le stagioni fornite, etichettate col proprio stato', () => {
     render(
       <Header persona={PERSONA} entities={[]} activeEntity={null} setActiveEntity={vi.fn()}
         activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()}
         stagioni={[STAGIONE]} stagioneId="st1" setStagioneId={vi.fn()} />,
     );
-    // getByText non basta: il banner statico contiene già "Stagione
-    // 2026/2027" nel sottotitolo, quindi disambiguiamo sull'opzione del
-    // nuovo <select> del selettore stagione.
-    expect(screen.getByRole('option', { name: 'Stagione 2026/2027' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Stagione 2026/2027 — Censimento' })).toBeInTheDocument();
+  });
+
+  it('nessuna stagione preselezionata (stagioneId=null): mostra l\'opzione placeholder', () => {
+    render(
+      <Header persona={PERSONA} entities={[]} activeEntity={null} setActiveEntity={vi.fn()}
+        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()}
+        stagioni={[STAGIONE]} stagioneId={null} setStagioneId={vi.fn()} />,
+    );
+    expect(screen.getByRole('combobox', { name: /stagione/i })).toHaveValue('');
+  });
+
+  it('stagione chiusa: esclusa dalle opzioni selezionabili', () => {
+    const CHIUSA: Stagione = { ...STAGIONE, id: 'st-chiusa', nome: 'Vecchia', stato: 'chiusa' };
+    render(
+      <Header persona={PERSONA} entities={[]} activeEntity={null} setActiveEntity={vi.fn()}
+        activeTab="accreditamento" setActiveTab={vi.fn()} onLogout={vi.fn()}
+        stagioni={[STAGIONE, CHIUSA]} stagioneId={null} setStagioneId={vi.fn()} />,
+    );
+    expect(screen.queryByRole('option', { name: /Vecchia/ })).not.toBeInTheDocument();
   });
 
   it('nessuna stagione: non mostra il selettore stagione', () => {

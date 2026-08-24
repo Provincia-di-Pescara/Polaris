@@ -69,20 +69,21 @@ describe('App', () => {
     expect(await screen.findByText(/Mario Rossi/)).toBeInTheDocument();
   });
 
-  it('carica le stagioni e seleziona di default la prima non chiusa', async () => {
+  it('carica le stagioni ma non ne pre-seleziona nessuna (2026-08-24: più stagioni non chiuse possono coesistere)', async () => {
     vi.spyOn(authApi, 'leggiPersonaAutenticata').mockResolvedValue({ sub: 'p1', codiceFiscale: 'CF', nome: 'Mario', cognome: 'Rossi' });
     vi.spyOn(deleghe, 'listaEntitaRappresentate').mockResolvedValue([]);
     vi.spyOn(stagioniApi, 'listaStagioni').mockResolvedValue([
       { id: 'st-chiusa', nome: 'Vecchia', dataInizio: '2024-09-01', dataFine: '2025-06-30', stato: 'chiusa' },
-      { id: 'st-attiva', nome: 'Corrente', dataInizio: '2026-09-01', dataFine: '2027-06-30', stato: 'censimento' },
+      { id: 'st-definitiva', nome: 'Corrente', dataInizio: '2025-09-01', dataFine: '2026-06-30', stato: 'definitiva' },
+      { id: 'st-censimento', nome: 'Prossima', dataInizio: '2026-09-01', dataFine: '2027-06-30', stato: 'censimento' },
     ]);
     render(<App />);
-    // Non basta verificare la presenza testuale di "Corrente": Header.tsx
-    // renderizza un'<option> per ogni stagione, quindi il testo sarebbe
-    // presente anche se la selezione di default fosse errata (es. la
-    // stagione chiusa). Verifichiamo il valore effettivamente selezionato
-    // nel combobox della stagione.
-    expect(await screen.findByRole('combobox', { name: /stagione/i })).toHaveValue('st-attiva');
+    const selettore = await screen.findByRole('combobox', { name: /stagione/i });
+    expect(selettore).toHaveValue('');
+    // Entrambe le non-chiuse selezionabili, quella chiusa esclusa dalle opzioni.
+    expect(screen.getByRole('option', { name: /Corrente — Definitiva/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Prossima — Censimento/ })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Vecchia/ })).not.toBeInTheDocument();
   });
 
   it('un ricarica() successivo (es. dopo upload fallito) non smonta la view e non ne cancella lo stato locale', async () => {
@@ -111,6 +112,9 @@ describe('App', () => {
     render(<App />);
 
     await screen.findByText(/Mario Rossi/);
+    // Selezione esplicita: nessun default automatico (2026-08-24) -- il
+    // bottone "Richiedi nuova delega" resta disabilitato senza una stagione.
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /stagione/i }), 'st1');
     await userEvent.click(screen.getByRole('button', { name: /richiedi nuova delega/i }));
     await userEvent.type(screen.getByLabelText(/denominazione ufficiale/i), 'ASD Nuova');
     await userEvent.type(screen.getByLabelText(/codice fiscale \/ p\.iva/i), '123');

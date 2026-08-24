@@ -55,6 +55,10 @@ Nuova `StagioniView.tsx` sotto il gruppo "Impostazioni" della Sidebar (stessa gu
 - `Header.tsx`: il `<select>` stagione aggiunge un'opzione placeholder ("— seleziona una stagione —", value vuoto) quando `stagioneId` è `null`; ogni opzione mostra `nome` **+ badge/etichetta di stato** (es. "2026/2027 — Censimento", "2025/2026 — Definitiva") invece del solo nome. Rimuovere anche la stringa statica hardcoded "Stagione 2026/2027" nel sottotitolo dell'header (bug minore trovato durante l'indagine, mai stata dinamica).
 - Le 5 view che dipendono da `stagioneId` (`AccreditamentoDelegaView`, `WizardDomandaView`, `EsitiIsfView`, `ConcertazioneView`, `CalendarioDefinitivoView`) devono gestire esplicitamente `stagioneId === null`: messaggio "Seleziona una stagione dall'intestazione per continuare" invece di un fetch con id vuoto/errore silenzioso. Verificare per ciascuna cosa succede oggi passando `stagioneId=null` (alcune potrebbero già gestirlo per via del guard `if (!stagioneId) return`, altre no).
 
+## Residuo aperto (2026-08-24)
+
+`App.domanda.realBackend.test.tsx` fallisce per timeout (40s dichiarati) dopo questo giro di modifiche, riprodotto due volte in isolamento con processi puliti — non un semplice rallentamento: l'intero processo vitest resta bloccato per ~12 minuti dopo il fallimento del singolo test prima di uscire, sintomo di un hang reale (probabile `afterAll`/chiusura backend o pool bloccata), non ancora isolato con certezza. Gli altri 4 file `App.*.realBackend.test.tsx` e l'intera suite non-realBackend restano verdi. Da investigare con calma prima di considerare chiuso questo blocco.
+
 ## Test
 
 - Backend: unit test su `aggiornaStagione`/`eliminaStagione` (già in corso in questa sessione, `stagioni.test.ts`) — copre: modifica ok in censimento, 409 fuori censimento, 409 con dati collegati (una fixture per ciascuna delle 4 tabelle), 409 su nome duplicato, DELETE 204 + verifica riga sparita.

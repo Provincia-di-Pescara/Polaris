@@ -298,7 +298,19 @@ export const AccreditamentoDelegaView: React.FC<AccreditamentoDelegaProps> = ({ 
             Accreditamento della tua persona fisica (SPID) a nome delle Associazioni Sportive della Provincia
           </p>
         </div>
-        <button onClick={() => setShowModal(true)} className="btn btn-primary">
+        {/* Disabilitato invece di bloccare l'intera view (a differenza delle altre
+            4 view stagione-scoped): questa gestisce ANCHE le sub-deleghe sulle
+            entità già approvate, indipendenti dalla stagione -- un guard a
+            livello di intera view spezzerebbe quella parte. Solo la creazione
+            di una NUOVA associazione richiede una stagione (bug reale trovato
+            2026-08-24: prima falliva silenziosamente solo al submit, dopo aver
+            fatto compilare l'intero form). */}
+        <button
+          onClick={() => setShowModal(true)}
+          className="btn btn-primary"
+          disabled={!stagioneId}
+          title={stagioneId ? undefined : 'Seleziona una stagione dall\'intestazione prima di richiedere una nuova delega'}
+        >
           <Plus size={16} />
           <span>Richiedi Nuova Delega Rappresentanza</span>
         </button>
