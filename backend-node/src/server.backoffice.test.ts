@@ -745,6 +745,45 @@ test(
       assert.equal(r.status, 404);
     });
 
+    // Bug reale trovato in produzione (2026-08-24): senza questo endpoint separato,
+    // il redirect URI calcolato era leggibile solo attraverso la GET sopra --
+    // inutilizzabile alla primissima configurazione (404 finché nulla è ancora
+    // salvato), impedendo a un admin di leggerlo/copiarlo PRIMA di registrare il
+    // client lato IdP. redirectUriOidc() è puro (solo env var), quindi questo
+    // endpoint deve rispondere 200 indipendentemente dallo stato della config.
+    await t.test('admin, GET redirect-uri: 200 anche senza nessuna config OIDC salvata', async () => {
+      const r = await fetch(`${base}/backoffice/impostazioni/oidc/redirect-uri`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      assert.equal(r.status, 200);
+      const body = (await r.json()) as { redirectUri: string | null };
+      // FRONTEND_PUBBLICO_BASE_URL non impostata in questo file di test.
+      assert.equal(body.redirectUri, null);
+    });
+
+    await t.test('operatore, GET redirect-uri: 403', async () => {
+      const r = await fetch(`${base}/backoffice/impostazioni/oidc/redirect-uri`, {
+        headers: { Authorization: `Bearer ${operatore.token}` },
+      });
+      assert.equal(r.status, 403);
+    });
+
+    await t.test('admin, GET redirect-uri: calcolato da FRONTEND_PUBBLICO_BASE_URL quando impostata', async () => {
+      const originale = process.env.FRONTEND_PUBBLICO_BASE_URL;
+      process.env.FRONTEND_PUBBLICO_BASE_URL = 'https://pubblico-http-test.invalid';
+      try {
+        const r = await fetch(`${base}/backoffice/impostazioni/oidc/redirect-uri`, {
+          headers: { Authorization: `Bearer ${admin.token}` },
+        });
+        assert.equal(r.status, 200);
+        const body = (await r.json()) as { redirectUri: string | null };
+        assert.equal(body.redirectUri, 'https://pubblico-http-test.invalid/oidc/callback');
+      } finally {
+        if (originale === undefined) delete process.env.FRONTEND_PUBBLICO_BASE_URL;
+        else process.env.FRONTEND_PUBBLICO_BASE_URL = originale;
+      }
+    });
+
     await t.test('admin, primo PUT senza clientSecret: 400', async () => {
       const r = await fetch(`${base}/backoffice/impostazioni/oidc`, {
         method: 'PUT',

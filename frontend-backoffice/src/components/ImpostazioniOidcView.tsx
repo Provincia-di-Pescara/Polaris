@@ -1,9 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Copy, Check, KeyRound, Lock } from 'lucide-react';
-import { leggiConfigOidc, salvaConfigOidc, type ConfigOidc, type DatiSalvaConfigOidc, ErroreRichiestaApi } from '../api/impostazioniOidc.ts';
+import { leggiConfigOidc, leggiRedirectUri, salvaConfigOidc, type ConfigOidc, type DatiSalvaConfigOidc, ErroreRichiestaApi } from '../api/impostazioniOidc.ts';
 
 export const ImpostazioniOidcView: React.FC = () => {
   const [config, setConfig] = useState<ConfigOidc | null | undefined>(undefined);
+  // Caricato separatamente da `config`: è puro derivato di FRONTEND_PUBBLICO_BASE_URL,
+  // leggibile anche alla primissima configurazione, quando `config` è ancora `null`
+  // (GET /backoffice/impostazioni/oidc risponde 404 finché nulla è stato salvato).
+  const [redirectUri, setRedirectUri] = useState<string | null | undefined>(undefined);
   const [dati, setDati] = useState<DatiSalvaConfigOidc>({ issuer: '', clientId: '', clientSecret: undefined });
   const [errore, setErrore] = useState<string | null>(null);
   const [messaggioSalvato, setMessaggioSalvato] = useState<string | null>(null);
@@ -19,6 +23,9 @@ export const ImpostazioniOidcView: React.FC = () => {
         }
       })
       .catch((err) => setErrore(err instanceof ErroreRichiestaApi ? err.message : 'Impossibile caricare la configurazione OIDC.'));
+    leggiRedirectUri()
+      .then(setRedirectUri)
+      .catch(() => setRedirectUri(null));
   }, []);
 
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
@@ -39,8 +46,8 @@ export const ImpostazioniOidcView: React.FC = () => {
   };
 
   const handleCopiaRedirectUri = async (): Promise<void> => {
-    if (!config?.redirectUri) return;
-    await navigator.clipboard.writeText(config.redirectUri);
+    if (!redirectUri) return;
+    await navigator.clipboard.writeText(redirectUri);
     setCopiato(true);
     setTimeout(() => setCopiato(false), 2000);
   };
@@ -76,9 +83,11 @@ export const ImpostazioniOidcView: React.FC = () => {
           Calcolato dal server (frontend pubblico + <code>/oidc/callback</code>), non editabile — incollalo nella
           registrazione del client lato IdP.
         </p>
-        {config?.redirectUri ? (
+        {redirectUri === undefined ? (
+          <p style={{ color: 'var(--pa-text-muted)', fontSize: '0.85rem' }}>Caricamento…</p>
+        ) : redirectUri ? (
           <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <input className="form-control" value={config.redirectUri} readOnly style={{ fontFamily: 'monospace' }} />
+            <input className="form-control" value={redirectUri} readOnly style={{ fontFamily: 'monospace' }} />
             <button type="button" className="btn btn-secondary" onClick={handleCopiaRedirectUri}>
               {copiato ? <Check size={16} /> : <Copy size={16} />}
               <span>{copiato ? 'Copiato' : 'Copia'}</span>

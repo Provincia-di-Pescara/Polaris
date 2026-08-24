@@ -34,7 +34,7 @@ import {
   type RequestAutenticataPubblico,
 } from './auth/middleware.ts';
 import { costruisciUrlAutorizzazione, ErroreOidcNonConfigurato, ErroreScambioCode, ErroreStatoNonValido } from './oidc/flow.ts';
-import { leggiConfigOidcPubblica, scriviConfigOidc, ErroreClientSecretMancante } from './oidc/config.ts';
+import { leggiConfigOidcPubblica, scriviConfigOidc, redirectUriOidc, ErroreClientSecretMancante } from './oidc/config.ts';
 import { richiedeRuolo } from './auth/middleware.ts';
 import { registraOperazione, listaOperazioni } from './repository/logOperazioni.ts';
 import {
@@ -1543,6 +1543,20 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
       } catch (err) {
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
+    },
+  );
+
+  // redirectUri è puramente una funzione di FRONTEND_PUBBLICO_BASE_URL, indipendente
+  // dal fatto che issuer/clientId/secret siano già stati salvati -- endpoint dedicato,
+  // sempre 200, così un admin può leggerlo (e incollarlo nella registrazione client
+  // lato IdP) anche alla primissima configurazione, quando GET .../oidc risponde
+  // ancora 404 perché non esiste ancora nessuna riga in impostazioni_sistema.
+  app.get(
+    '/backoffice/impostazioni/oidc/redirect-uri',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    (_req, res) => {
+      res.status(200).json({ redirectUri: redirectUriOidc() });
     },
   );
 

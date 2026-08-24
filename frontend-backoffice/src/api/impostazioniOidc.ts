@@ -38,3 +38,12 @@ export function salvaConfigOidc(dati: DatiSalvaConfigOidc): Promise<ConfigOidc> 
     body: JSON.stringify(dati),
   });
 }
+
+// Indipendente dall'esistenza di una configurazione OIDC salvata (sempre 200,
+// mai 404) -- a differenza di leggiConfigOidc(), leggibile anche alla
+// primissima configurazione, prima che issuer/clientId/secret siano mai stati
+// salvati.
+export async function leggiRedirectUri(): Promise<string | null> {
+  const { redirectUri } = await richiedi<{ redirectUri: string | null }>('/backoffice/impostazioni/oidc/redirect-uri');
+  return redirectUri;
+}
