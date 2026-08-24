@@ -2,7 +2,13 @@ name: Release
 
 on:
   push:
-    branches: [master]
+    # Solo "dev" costruisce automaticamente ad ogni commit (canale mobile ":dev",
+    # "ultimo build testabile") — "master" riceve immagini SOLO da un tag esplicito
+    # (vX.Y.Z pulito -> anche ":latest", vX.Y.Z-id pre-release -> ":dev" pinnato).
+    # Deciso 2026-08-24: il vecchio trigger su ogni push a master produceva una
+    # build completa per ogni singolo commit, anche quelli minori — troppo per un
+    # ramo che riceve solo merge verso una release, mai commit di lavoro diretti.
+    branches: [dev]
     tags: ["v*"]
 
 env:
@@ -67,10 +73,11 @@ jobs:
               echo "tags=${IMMAGINE}:${VERSIONE},${IMMAGINE}:latest" >> "$GITHUB_OUTPUT"
             fi
           else
-            # Push diretto su master: il canale ":dev" è mobile, lo stesso nome tag
-            # copre ogni build che ci passa — senza un'identità propria, footer/Sentry
-            # non potrebbero mai distinguere un build dev dal successivo. Lo short SHA
-            # è l'unica cosa univoca disponibile qui.
+            # Push diretto sul branch "dev" (mai master, vedi trigger sopra): il
+            # canale ":dev" è mobile, lo stesso nome tag copre ogni build che ci
+            # passa — senza un'identità propria, footer/Sentry non potrebbero mai
+            # distinguere un build dev dal successivo. Lo short SHA è l'unica
+            # cosa univoca disponibile qui.
             echo "build_version=dev-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
             echo "tags=${IMMAGINE}:dev" >> "$GITHUB_OUTPUT"
           fi

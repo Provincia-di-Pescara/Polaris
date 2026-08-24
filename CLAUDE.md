@@ -55,7 +55,7 @@ Infrastruttura: Docker, CI/CD via GitHub Actions → GHCR, reverse proxy davanti
 
 ## Workflow di sviluppo
 
-Solo io e il committente su questo progetto: **lavoro diretto su `master`, mai PR**. Worktree/branch temporanei per isolamento durante l'implementazione vanno bene, ma l'integrazione finale è sempre merge diretto (fast-forward quando possibile) su `master`, mai una pull request da rivedere.
+Solo io e il committente su questo progetto: **mai PR**. Lavoro quotidiano diretto su branch `dev` (ogni push costruisce automaticamente `:dev` su GHCR, vedi `docs/claude/cicd-docker.md` — deciso 2026-08-24, prima si buildava ad ogni push su `master`, troppo per un ramo che riceve solo commit di lavoro). Quando pronti per una release vera: merge diretto (fast-forward quando possibile, mai una pull request da rivedere) `dev` → `master`, poi tag `vX.Y.Z` su `master` per pubblicare `:latest`. Worktree/branch temporanei aggiuntivi per isolamento durante l'implementazione vanno bene, ma confluiscono sempre in `dev`.
 
 **Bash tool, cwd può non persistere tra due call consecutive** (osservato più volte, non solo con subagent dispatch — vedi anche `docs/claude/backend-node.md`): un `cd sottocartella` in una call non garantisce che la call successiva parta da lì. Verificare con `pwd` prima di lanciare comandi con path relativi (`pnpm`, `vitest`), o usare sempre il path assoluto esplicito (`cd /c/Users/.../palestre/<dir> && comando`).
 
