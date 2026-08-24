@@ -16,6 +16,10 @@ FROM node:24-alpine
 # non solo dal driver pg (che parla il protocollo di rete, non fa dump/restore).
 RUN apk add --no-cache tzdata postgresql18-client
 ENV TZ=Europe/Rome NODE_ENV=production
+# Identità di build reale (tag git o dev-<sha>, decisa da release.yml) -- vedi
+# commento gemello in engine-go/Dockerfile.
+ARG BUILD_VERSION=sconosciuta
+RUN echo "$BUILD_VERSION" > /etc/polaris-build-version
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY backend-node/package.json ./

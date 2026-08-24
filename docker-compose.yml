@@ -38,11 +38,11 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       PORT: "8081"
-      # Sentry/GlitchTip, opzionale — vuoto = nessun reporting. APP_VERSION riusa
-      # IMAGE_TAG (il tag scelto al deploy, vedi docs/RUNBOOK-deploy.md), non
-      # embeddato nell'immagine: corretto anche su tag mobili (dev/latest).
+      # Sentry/GlitchTip, opzionale — vuoto = nessun reporting. La release
+      # riportata è l'identità di build baked nell'immagine a build time
+      # (/etc/polaris-build-version), non IMAGE_TAG: quel canale è mobile su
+      # dev/latest, quindi identico per build diverse e inutile per distinguerle.
       SENTRY_DSN: ${SENTRY_DSN_ENGINE:-}
-      APP_VERSION: ${IMAGE_TAG:-latest}
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,7 +92,6 @@ services:
       TRUST_PROXY: ${TRUST_PROXY:-}
       # Sentry/GlitchTip, opzionale — vedi commento gemello sul servizio "engine".
       SENTRY_DSN: ${SENTRY_DSN_BACKEND:-}
-      APP_VERSION: ${IMAGE_TAG:-latest}
       # Stesso volume del servizio "backup" sotto — il backend legge/scrive lì
       # per backup manuali + ripristino da UI (backup.ts), senza bisogno di
       # accesso shell al container schedulato. Vedi docs/claude/backend-node.md.
@@ -119,7 +118,6 @@ services:
       # Sentry/GlitchTip, opzionale — vedi commento gemello sul servizio "engine".
       # Iniettato a runtime dall'entrypoint nginx, mai a build time.
       SENTRY_DSN: ${SENTRY_DSN_PUBBLICO:-}
-      APP_VERSION: ${IMAGE_TAG:-latest}
     depends_on:
       backend:
         condition: service_started
@@ -133,7 +131,6 @@ services:
       - "${FRONTEND_BACKOFFICE_PORT:-8083}:80"
     environment:
       SENTRY_DSN: ${SENTRY_DSN_BACKOFFICE:-}
-      APP_VERSION: ${IMAGE_TAG:-latest}
     depends_on:
       backend:
         condition: service_started

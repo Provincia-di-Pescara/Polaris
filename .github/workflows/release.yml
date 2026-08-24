@@ -54,6 +54,9 @@ jobs:
           IMMAGINE="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.immagine }}"
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             VERSIONE="${GITHUB_REF#refs/tags/}"
+            # Identità di build reale (BUILD_VERSION, sotto): un tag git è univoco per
+            # costruzione, quindi coincide col canale stesso — nessun problema qui.
+            echo "build_version=${VERSIONE}" >> "$GITHUB_OUTPUT"
             if [[ "$VERSIONE" == *-* ]]; then
               # Pre-release semver (es. v1.0.0-dev.1, v1.0.0-rc.1 — identificatore dopo il
               # trattino, https://semver.org/#spec-item-9): mai promossa a "latest", ma
@@ -64,6 +67,11 @@ jobs:
               echo "tags=${IMMAGINE}:${VERSIONE},${IMMAGINE}:latest" >> "$GITHUB_OUTPUT"
             fi
           else
+            # Push diretto su master: il canale ":dev" è mobile, lo stesso nome tag
+            # copre ogni build che ci passa — senza un'identità propria, footer/Sentry
+            # non potrebbero mai distinguere un build dev dal successivo. Lo short SHA
+            # è l'unica cosa univoca disponibile qui.
+            echo "build_version=dev-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
             echo "tags=${IMMAGINE}:dev" >> "$GITHUB_OUTPUT"
           fi
 
@@ -73,5 +81,7 @@ jobs:
           file: ${{ matrix.dockerfile }}
           push: true
           tags: ${{ steps.tag.outputs.tags }}
+          build-args: |
+            BUILD_VERSION=${{ steps.tag.outputs.build_version }}
           cache-from: type=gha,scope=${{ matrix.immagine }}
           cache-to: type=gha,mode=max,scope=${{ matrix.immagine }}

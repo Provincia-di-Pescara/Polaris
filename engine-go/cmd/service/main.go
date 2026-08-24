@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,6 +21,19 @@ import (
 	"github.com/provincia/palestre-engine/internal/roundrobin"
 )
 
+// leggiVersioneBuild legge l'identità di build reale (tag git o dev-<sha>,
+// decisa da release.yml), baked nell'immagine a build time in un file — non
+// un env var IMAGE_TAG letto a runtime: quel canale è mobile su dev/latest,
+// quindi identico per build diverse e inutile per distinguerle in Sentry.
+// Stesso schema in backend-node.
+func leggiVersioneBuild() string {
+	dati, err := os.ReadFile("/etc/polaris-build-version")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(dati))
+}
+
 func main() {
 	// Opzionale per costruzione: mai un requisito per far girare il motore
 	// (test/CI restano invariati senza SENTRY_DSN). sendDefaultPii resta false
@@ -28,11 +42,7 @@ func main() {
 		if err := sentry.Init(sentry.ClientOptions{
 			Dsn:         sentryDSN,
 			Environment: os.Getenv("SENTRY_ENVIRONMENT"),
-			// APP_VERSION è il tag immagine scelto al deploy (docker-compose.yml
-			// riusa IMAGE_TAG, vedi docs/RUNBOOK-deploy.md) — non embeddato a build
-			// time: su tag mobili (dev/latest) riflette cosa gira davvero adesso,
-			// non un valore fisso nell'immagine.
-			Release: os.Getenv("APP_VERSION"),
+			Release:     leggiVersioneBuild(),
 		}); err != nil {
 			log.Printf("inizializzazione Sentry fallita (non bloccante): %v", err)
 		}

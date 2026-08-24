@@ -1,5 +1,18 @@
 import * as Sentry from '@sentry/node';
 import type { Express } from 'express';
+import { readFileSync } from 'node:fs';
+
+// Identità di build reale (tag git o dev-<sha>, decisa da release.yml), baked
+// nell'immagine a build time in un file — non un env var IMAGE_TAG letto a
+// runtime: quel canale è mobile su dev/latest, quindi identico per build diverse
+// e inutile per distinguerle in Sentry. Stesso schema in engine-go.
+function leggiVersioneBuild(): string | undefined {
+  try {
+    return readFileSync('/etc/polaris-build-version', 'utf-8').trim();
+  } catch {
+    return undefined;
+  }
+}
 
 // Opzionale per costruzione: mai un requisito per far girare l'app (dev/test/CI
 // restano invariati senza SENTRY_DSN impostata).
@@ -9,11 +22,7 @@ export function inizializzaSentry(): void {
   Sentry.init({
     dsn,
     environment: process.env.NODE_ENV ?? 'development',
-    // APP_VERSION è il tag immagine scelto al deploy (docker-compose.yml riusa
-    // IMAGE_TAG, vedi docs/RUNBOOK-deploy.md) — non embeddato a build time: su tag
-    // mobili (dev/latest) riflette cosa gira davvero adesso, non un valore fisso
-    // nell'immagine. Stesso schema in engine-go.
-    release: process.env.APP_VERSION,
+    release: leggiVersioneBuild(),
     // Mai catturare body/cookie/header di default: il progetto tratta dati
     // GDPR-sensibili (art. 53 Doc Principale) — solo messaggio+stack, mai PII
     // implicita da una richiesta HTTP.

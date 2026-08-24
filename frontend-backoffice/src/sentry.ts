@@ -1,10 +1,12 @@
 import * as Sentry from '@sentry/react';
 
-// Iniettati a runtime dall'entrypoint nginx (public/runtime-config.js, sovrascritto
-// da SENTRY_DSN/APP_VERSION del container all'avvio) — mai a build time: la stessa
-// immagine gira su più istanze con DSN/versione diversi. Stringa vuota di default
-// (mai `undefined` non dichiarato) se il file non è stato rigenerato (dev locale,
-// `pnpm dev`: il file statico in public/ resta col placeholder vuoto).
+// Iniettati a runtime dall'entrypoint nginx (public/runtime-config.js, rigenerato
+// all'avvio del container): SENTRY_DSN dall'env (è per-istanza, decisa al deploy),
+// APP_VERSION dall'identità di build baked in immagine a build time
+// (/etc/polaris-build-version — mai dal canale IMAGE_TAG a runtime, mobile su
+// dev/latest e quindi inutile per distinguere build diverse). Stringa vuota di
+// default (mai `undefined` non dichiarato) se il file non è stato rigenerato
+// (dev locale, `pnpm dev`: il file statico in public/ resta col placeholder vuoto).
 function runtimeConfig(): { sentryDsn: string; appVersion: string } {
   const g = globalThis as { __SENTRY_DSN__?: string; __APP_VERSION__?: string };
   return { sentryDsn: g.__SENTRY_DSN__ ?? '', appVersion: g.__APP_VERSION__ ?? '' };
