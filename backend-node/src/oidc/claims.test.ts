@@ -74,8 +74,19 @@ test('claim name con un solo token: nome pieno, cognome vuoto', () => {
   assert.equal(claims.cognome, '');
 });
 
-test('nessun claim fiscal_number in nessuna forma: errore esplicito', () => {
-  assert.throws(() => estraiClaimPersona({ sub: 'xyz', given_name: 'Foo', family_name: 'Bar' }));
+test('nessun claim fiscal_number in nessuna forma: errore esplicito, elenca i NOMI dei claim presenti (mai i valori, PII)', () => {
+  assert.throws(
+    () => estraiClaimPersona({ sub: 'xyz', given_name: 'Foo', family_name: 'Bar' }),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      // I nomi dei claim aiutano a diagnosticare un IdP reale con nomi diversi
+      // da quelli tentati (trovato in produzione 2026-08-24) -- il valore
+      // "Foo"/"Bar" non deve mai comparire nel messaggio.
+      assert.match(err.message, /sub, given_name, family_name/);
+      assert.doesNotMatch(err.message, /Foo|Bar/);
+      return true;
+    },
+  );
 });
 
 test('claim array (a volte i provider OIDC restituiscono array): usa il primo valore', () => {

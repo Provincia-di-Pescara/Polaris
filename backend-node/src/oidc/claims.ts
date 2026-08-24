@@ -40,7 +40,13 @@ export function estraiClaimPersona(payload: Record<string, unknown>): ClaimPerso
   ]).toUpperCase();
 
   if (!fiscalGrezzo) {
-    throw new Error('nessun claim codice fiscale trovato nel token OIDC (fiscal_number/codice_fiscale/...)');
+    // Solo i NOMI dei claim presenti nel payload, mai i valori (dati personali,
+    // art. 53 Doc Principale) — permette di capire quale nome usa davvero l'IdP
+    // reale senza esporre PII nei log/Sentry. Trovato in produzione (2026-08-24):
+    // nessuno degli 8 nomi tentati corrispondeva al claim del vero pa-sso-proxy.
+    throw new Error(
+      `nessun claim codice fiscale trovato nel token OIDC (fiscal_number/codice_fiscale/...) — claim presenti: ${Object.keys(payload).join(', ')}`,
+    );
   }
 
   // "TIN" + codice paese ISO a 2 lettere + "-" (es. TINIT- per l'Italia)
