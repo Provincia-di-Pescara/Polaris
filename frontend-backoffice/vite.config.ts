@@ -14,6 +14,7 @@ export default defineConfig({
     proxy: {
       '/auth': targetBackend,
       '/backoffice': targetBackend,
+      '/stagioni': targetBackend,
     },
   },
   test: {
