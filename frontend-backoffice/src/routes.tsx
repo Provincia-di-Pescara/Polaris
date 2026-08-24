@@ -9,6 +9,7 @@ import { ImpiantiSpaziView } from './components/ImpiantiSpaziView.tsx';
 import { DelegheAccreditamentiView } from './components/DelegheAccreditamentiView.tsx';
 import { ParametriSistemaView } from './components/ParametriSistemaView.tsx';
 import { ImpostazioniOidcView } from './components/ImpostazioniOidcView.tsx';
+import { UtentiView } from './components/UtentiView.tsx';
 import { AuditSorteggioView } from './components/AuditSorteggioView.tsx';
 import { StatisticheView } from './components/StatisticheView.tsx';
 
@@ -36,6 +37,7 @@ export const routes: RouteObject[] = [
             children: [
               { path: 'parametri-sistema', element: <ParametriSistemaView /> },
               { path: 'impostazioni-oidc', element: <ImpostazioniOidcView /> },
+              { path: 'utenti', element: <UtentiView /> },
             ],
           },
           { path: 'audit-sorteggio', element: <AuditSorteggioView /> },
