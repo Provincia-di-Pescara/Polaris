@@ -61,6 +61,7 @@ describe('Sidebar', () => {
     expect(screen.getByText('Utenti Backoffice')).toBeInTheDocument();
     expect(screen.getByText('Backup & Ripristino')).toBeInTheDocument();
     expect(screen.getByText('Stagioni')).toBeInTheDocument();
+    expect(screen.getByText('Fonte Dati')).toBeInTheDocument();
   });
 
   it('nessuna versione/stato fabbricati nella sidebar (v2.4.0/Engine Go: Connected non devono più esistere)', () => {

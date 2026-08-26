@@ -12,6 +12,7 @@ import {
   Users,
   DatabaseBackup,
   CalendarRange,
+  Database,
   ChevronDown,
   ChevronRight
 } from 'lucide-react';
@@ -58,6 +59,7 @@ export const Sidebar: React.FC = () => {
         { id: 'utenti', label: 'Utenti Backoffice', icon: Users },
         { id: 'backup', label: 'Backup & Ripristino', icon: DatabaseBackup },
         { id: 'stagioni', label: 'Stagioni', icon: CalendarRange },
+        { id: 'fonte-dati', label: 'Fonte Dati', icon: Database },
       ],
     },
     { tipo: 'link', id: 'audit-sorteggio', label: 'Audit Log & Sorteggi HMAC', icon: ShieldCheck, roles: ['admin', 'operatore'] },

@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
 import {
-  creaIstituzione, aggiornaIstituzione, cercaAnagraficaScuole, leggiUrlAnagraficaScuole, salvaUrlAnagraficaScuole,
+  creaIstituzione, aggiornaIstituzione, cercaAnagraficaScuole,
   type Istituzione, type DatiIstituzione, type ScuolaAnagrafica, ErroreRichiestaApi,
 } from '../../api/impiantiSpazi.ts';
-import { useAuth } from '../../auth/AuthContext.tsx';
 import { Search } from 'lucide-react';
 
 interface IstituzioneFormProps {
@@ -13,7 +12,6 @@ interface IstituzioneFormProps {
 }
 
 export function IstituzioneForm({ istituzioneEsistente, onSalvata, onAnnulla }: IstituzioneFormProps): React.ReactElement {
-  const { utente } = useAuth();
   const [denominazione, setDenominazione] = useState(istituzioneEsistente?.denominazione ?? '');
   const [codiceMeccanografico, setCodiceMeccanografico] = useState(istituzioneEsistente?.codiceMeccanografico ?? '');
   const [indirizzo, setIndirizzo] = useState(istituzioneEsistente?.indirizzo ?? '');
@@ -28,8 +26,6 @@ export function IstituzioneForm({ istituzioneEsistente, onSalvata, onAnnulla }: 
   const [ricercaInCorso, setRicercaInCorso] = useState(false);
   const [erroreRicerca, setErroreRicerca] = useState<string | null>(null);
   const [anagraficaNonConfigurata, setAnagraficaNonConfigurata] = useState(false);
-  const [urlAnagrafica, setUrlAnagrafica] = useState('');
-  const [salvataggioUrlInCorso, setSalvataggioUrlInCorso] = useState(false);
 
   const handleCerca = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
@@ -56,20 +52,6 @@ export function IstituzioneForm({ istituzioneEsistente, onSalvata, onAnnulla }: 
     setIndirizzo([s.indirizzo, s.comune].filter(Boolean).join(', '));
     setRisultatiRicerca(null);
     setRicercaQuery('');
-  };
-
-  const handleSalvaUrlAnagrafica = async (e: React.FormEvent): Promise<void> => {
-    e.preventDefault();
-    setSalvataggioUrlInCorso(true);
-    try {
-      await salvaUrlAnagraficaScuole(urlAnagrafica);
-      setAnagraficaNonConfigurata(false);
-      setUrlAnagrafica('');
-    } catch (err) {
-      setErroreRicerca(err instanceof ErroreRichiestaApi ? err.message : 'Errore imprevisto durante il salvataggio.');
-    } finally {
-      setSalvataggioUrlInCorso(false);
-    }
   };
 
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
@@ -119,25 +101,9 @@ export function IstituzioneForm({ istituzioneEsistente, onSalvata, onAnnulla }: 
 
         {anagraficaNonConfigurata && (
           <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
-            <div style={{ color: 'var(--pa-danger)' }}>URL dell'anagrafica MIUR non ancora configurato.</div>
-            {utente?.ruolo === 'admin' ? (
-              <form onSubmit={handleSalvaUrlAnagrafica} style={{ display: 'flex', gap: '0.5rem', marginTop: '0.35rem' }}>
-                <input
-                  aria-label="URL anagrafica MIUR"
-                  className="form-control"
-                  type="url"
-                  value={urlAnagrafica}
-                  onChange={(e) => setUrlAnagrafica(e.target.value)}
-                  placeholder="https://dati.istruzione.it/.../anagrafica.json"
-                  required
-                />
-                <button type="submit" className="btn btn-secondary btn-sm" disabled={salvataggioUrlInCorso}>
-                  {salvataggioUrlInCorso ? 'Salvo…' : 'Salva URL'}
-                </button>
-              </form>
-            ) : (
-              <div style={{ color: 'var(--pa-text-muted)' }}>Chiedi a un amministratore di configurarlo dalle Impostazioni.</div>
-            )}
+            <div style={{ color: 'var(--pa-danger)' }}>
+              URL dell'anagrafica MIUR non ancora configurato. Configuralo da Impostazioni → Fonte Dati.
+            </div>
           </div>
         )}
 

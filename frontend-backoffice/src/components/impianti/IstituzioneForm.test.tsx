@@ -2,24 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as api from '../../api/impiantiSpazi.ts';
-import * as AuthContextModule from '../../auth/AuthContext.tsx';
-import type { Utente } from '../../auth/AuthContext.tsx';
 import { ErroreRichiestaApi } from '../../api/client.ts';
 import { IstituzioneForm } from './IstituzioneForm.tsx';
-
-function mockUtente(ruolo: Utente['ruolo']): void {
-  vi.spyOn(AuthContextModule, 'useAuth').mockReturnValue({
-    utente: { email: 'test@example.com', ruolo, sub: 'u1' },
-    caricamento: false,
-    login: vi.fn(),
-    logout: vi.fn(),
-  });
-}
 
 describe('IstituzioneForm', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    mockUtente('admin');
   });
 
   it('creazione: submit chiama creaIstituzione coi campi compilati', async () => {
@@ -88,41 +76,13 @@ describe('IstituzioneForm', () => {
     expect((screen.getByLabelText(/^indirizzo$/i) as HTMLInputElement).value).toBe('Via Napoli 2, PESCARA');
   });
 
-  it('ricerca anagrafica: 503 (URL non configurato), admin vede il form per configurarlo', async () => {
+  it('ricerca anagrafica: 503 (URL non configurato), rimanda a Impostazioni → Fonte Dati', async () => {
     vi.spyOn(api, 'cercaAnagraficaScuole').mockRejectedValue(new ErroreRichiestaApi(503, 'URL non configurato'));
-    mockUtente('admin');
 
     render(<IstituzioneForm onSalvata={() => {}} onAnnulla={() => {}} />);
     await userEvent.type(screen.getByLabelText(/cerca nell'anagrafica miur/i), 'qualcosa');
     await userEvent.click(screen.getByRole('button', { name: /^cerca$/i }));
 
-    expect(await screen.findByLabelText(/url anagrafica miur/i)).toBeInTheDocument();
-  });
-
-  it('ricerca anagrafica: 503, operatore NON vede il form di configurazione (solo admin può salvare l\'URL)', async () => {
-    vi.spyOn(api, 'cercaAnagraficaScuole').mockRejectedValue(new ErroreRichiestaApi(503, 'URL non configurato'));
-    mockUtente('operatore');
-
-    render(<IstituzioneForm onSalvata={() => {}} onAnnulla={() => {}} />);
-    await userEvent.type(screen.getByLabelText(/cerca nell'anagrafica miur/i), 'qualcosa');
-    await userEvent.click(screen.getByRole('button', { name: /^cerca$/i }));
-
-    expect(await screen.findByText(/chiedi a un amministratore/i)).toBeInTheDocument();
-    expect(screen.queryByLabelText(/url anagrafica miur/i)).not.toBeInTheDocument();
-  });
-
-  it('configurazione URL anagrafica: submit chiama salvaUrlAnagraficaScuole', async () => {
-    vi.spyOn(api, 'cercaAnagraficaScuole').mockRejectedValue(new ErroreRichiestaApi(503, 'URL non configurato'));
-    const salvaSpy = vi.spyOn(api, 'salvaUrlAnagraficaScuole').mockResolvedValue({ url: 'https://esempio.it/anagrafica.json' });
-
-    render(<IstituzioneForm onSalvata={() => {}} onAnnulla={() => {}} />);
-    await userEvent.type(screen.getByLabelText(/cerca nell'anagrafica miur/i), 'qualcosa');
-    await userEvent.click(screen.getByRole('button', { name: /^cerca$/i }));
-
-    const campoUrl = await screen.findByLabelText(/url anagrafica miur/i);
-    await userEvent.type(campoUrl, 'https://esempio.it/anagrafica.json');
-    await userEvent.click(screen.getByRole('button', { name: /salva url/i }));
-
-    expect(salvaSpy).toHaveBeenCalledWith('https://esempio.it/anagrafica.json');
+    expect(await screen.findByText(/fonte dati/i)).toBeInTheDocument();
   });
 });
