@@ -115,7 +115,15 @@ descrivi('ImpiantiSpaziView', () => {
   it('crea una istituzione scolastica da UI (pannello Anagrafiche)', async () => {
     await loginComeAdmin();
 
-    render(<ImpiantiSpaziView />);
+    // AuthProvider necessario qui (a differenza degli altri render bare di
+    // <ImpiantiSpaziView /> in questo file): IstituzioneForm ora usa useAuth()
+    // per decidere se mostrare la configurazione dell'URL anagrafica MIUR
+    // solo all'admin -- useAuth lancia fuori da un provider.
+    render(
+      <AuthProvider>
+        <ImpiantiSpaziView />
+      </AuthProvider>,
+    );
 
     await waitFor(() => expect(screen.getByRole('button', { name: /nuova istituzione/i })).toBeInTheDocument(), WAIT_FOR_TIMEOUT);
     await userEvent.click(screen.getByRole('button', { name: /nuova istituzione/i }));

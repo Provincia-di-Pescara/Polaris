@@ -151,6 +151,28 @@ export function aggiornaIstituzione(id: string, dati: DatiIstituzione): Promise<
   return richiedi(`/backoffice/istituzioni/${encodeURIComponent(id)}`, corpoJsonPut(dati));
 }
 
+// "Once only": ricerca nell'anagrafica open data del MIUR (URL configurabile,
+// vedi leggiUrlAnagraficaScuole/salvaUrlAnagraficaScuole sotto) invece di
+// ritrascrivere a mano denominazione/indirizzo, già pubblici altrove.
+export interface ScuolaAnagrafica {
+  codice: string;
+  denominazione: string;
+  comune: string;
+  indirizzo: string;
+}
+
+export function cercaAnagraficaScuole(q: string): Promise<ScuolaAnagrafica[]> {
+  return richiedi(`/backoffice/istituzioni/anagrafica-ricerca?q=${encodeURIComponent(q)}`);
+}
+
+export function leggiUrlAnagraficaScuole(): Promise<{ url: string | null }> {
+  return richiedi('/backoffice/impostazioni/anagrafica-scuole');
+}
+
+export function salvaUrlAnagraficaScuole(url: string): Promise<{ url: string }> {
+  return richiedi('/backoffice/impostazioni/anagrafica-scuole', corpoJsonPut({ url }));
+}
+
 // --- Impianti ---
 
 export function listaImpianti(istituzioneScolasticaId?: string): Promise<Impianto[]> {
