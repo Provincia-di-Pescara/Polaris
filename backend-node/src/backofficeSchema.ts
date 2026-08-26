@@ -36,6 +36,14 @@ export const schemaQueryListaImpianti = z.object({
   istituzioneScolasticaId: z.string().uuid().optional(),
 });
 
+export const schemaQueryRicercaAnagraficaScuole = z.object({
+  q: z.string().min(2, 'servono almeno 2 caratteri per la ricerca'),
+});
+
+export const schemaImpostazioneAnagraficaScuole = z.object({
+  url: z.string().url(),
+});
+
 export const schemaCreaSpazio = z.object({
   impiantoId: z.string().uuid(),
   denominazione: z.string().min(1),

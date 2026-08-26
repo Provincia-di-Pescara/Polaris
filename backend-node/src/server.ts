@@ -60,11 +60,12 @@ import { ErroreValoreDuplicato, ErroreNonTrovato, ErroreStatoNonValidoPerTransiz
 import { creaDisciplina, listaDiscipline, aggiornaDisciplina } from './discipline.ts';
 import { listaClassiAttivita } from './classiAttivita.ts';
 import { creaIstituzione, listaIstituzioni, trovaIstituzionePerId, aggiornaIstituzione } from './istituzioni.ts';
+import { cercaScuole, leggiUrlAnagraficaScuole, scriviUrlAnagraficaScuole, ErroreAnagraficaNonConfigurata } from './anagraficaScuole.ts';
 import { creaImpianto, listaImpianti, trovaImpiantoPerId, aggiornaImpianto } from './impianti.ts';
 import { creaSpazio, listaSpaziPerImpianto, trovaSpazioPerId, aggiornaSpazio } from './spazi.ts';
 import { creaSlot, listaSlotPerStagione, trovaSlotPerId, aggiornaSlot, ErroreSovrapposizioneSlot } from './slot.ts';
 import { leggiVersioneAttiva, leggiVersionePerId, listaVersioni, creaVersione } from './repository/parametrico.ts';
-import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaAggiornaStagione, schemaRespingiDelega, schemaQueryListaDeleghe, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione, schemaCreaProvvedimento, schemaQueryListaLogOperazioni, schemaRipristinoBackup } from './backofficeSchema.ts';
+import { schemaCreaDisciplina, schemaAggiornaDisciplina, schemaCreaIstituzione, schemaAggiornaIstituzione, schemaCreaImpianto, schemaAggiornaImpianto, schemaQueryListaImpianti, schemaCreaSpazio, schemaAggiornaSpazio, schemaCreaSlot, schemaAggiornaSlot, schemaQueryListaSlot, schemaCreaStagione, schemaAggiornaStagione, schemaRespingiDelega, schemaQueryListaDeleghe, schemaImpostazioniOidc, schemaCreaUtenteBackoffice, schemaAggiornaUtenteBackoffice, schemaCambiaStatoUtenteBackoffice, schemaCreaVersioneParametrico, schemaCreaIndisponibilita, schemaFiltriVariazioni, schemaRegistraUtilizzo, schemaRigettaGiustificazione, schemaCreaProvvedimento, schemaQueryListaLogOperazioni, schemaRipristinoBackup, schemaQueryRicercaAnagraficaScuole, schemaImpostazioneAnagraficaScuole } from './backofficeSchema.ts';
 import { listaBackup, eseguiBackupManuale, elencoTabelle, eseguiRipristino, percorsoBackupValido, ErroreBackupNonTrovato, ErrorePercorsoNonValido } from './backup.ts';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
@@ -652,6 +653,38 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     }
   });
 
+  // "Once only": ricerca nell'anagrafica open data del MIUR (URL configurabile,
+  // vedi le due route sotto) per denominazione/codice meccanografico, invece di
+  // ritrascrivere a mano denominazione/indirizzo già pubblici altrove. Stesso
+  // ruolo della CRUD istituzioni (admin+operatore), non solo admin: la ricerca
+  // in sé non modifica nulla, la modifica dell'URL sorgente sì (route sotto).
+  // Registrata PRIMA di "/backoffice/istituzioni/:id": Express matcha le route
+  // nell'ordine di registrazione, un :id generico registrato prima avrebbe
+  // catturato "anagrafica-ricerca" come se fosse un id (bug reale, trovato dai
+  // test HTTP -- 400 invece di 200/503, comeErroreRiferimentoNonValido su un
+  // UUID malformato che in realtà era il path della route specifica).
+  app.get(
+    '/backoffice/istituzioni/anagrafica-ricerca',
+    richiedeAutenticazione,
+    richiedeRuolo('admin', 'operatore'),
+    async (req, res) => {
+      const parsed = schemaQueryRicercaAnagraficaScuole.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        res.status(200).json(await cercaScuole(pool, parsed.data.q));
+      } catch (err) {
+        if (err instanceof ErroreAnagraficaNonConfigurata) {
+          res.status(503).json({ errore: err.message });
+          return;
+        }
+        res.status(502).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
   app.get(
     '/backoffice/istituzioni/:id',
     richiedeAutenticazione,
@@ -714,6 +747,46 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(400).json({ errore: erroreRiferimento.message });
           return;
         }
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.get(
+    '/backoffice/impostazioni/anagrafica-scuole',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (_req, res) => {
+      try {
+        res.status(200).json({ url: await leggiUrlAnagraficaScuole(pool) });
+      } catch (err) {
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  app.put(
+    '/backoffice/impostazioni/anagrafica-scuole',
+    richiedeAutenticazione,
+    richiedeRuolo('admin'),
+    async (req: RequestAutenticata, res) => {
+      const parsed = schemaImpostazioneAnagraficaScuole.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+        return;
+      }
+      try {
+        await eseguiInTransazione(pool, async (client) => {
+          await scriviUrlAnagraficaScuole(client, parsed.data.url, req.utente!.sub);
+          await registraOperazione(client, {
+            attore: { tipo: 'backoffice', utenteBackofficeId: req.utente!.sub, ruolo: req.utente!.ruolo },
+            azione: 'aggiorna_impostazioni_anagrafica_scuole',
+            entitaTipo: 'impostazioni_sistema',
+            dettaglio: { url: parsed.data.url },
+          });
+        });
+        res.status(200).json({ url: parsed.data.url });
+      } catch (err) {
         res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
       }
     },

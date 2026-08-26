@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { createServer, type Server } from 'node:http';
 import { Pool } from 'pg';
 import { creaApp } from './server.ts';
 import { hashPassword } from './auth/password.ts';
@@ -206,6 +207,102 @@ test(
       assert.equal(r.status, 200);
       const body = (await r.json()) as { denominazione: string };
       assert.equal(body.denominazione, 'IIS Rinominato');
+    });
+  },
+);
+
+test(
+  'GET/PUT /backoffice/impostazioni/anagrafica-scuole e GET /backoffice/istituzioni/anagrafica-ricerca',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const pool = new Pool({ connectionString: dsn });
+    const { base, chiudi } = await avviaServerTest(pool);
+
+    let mockServer: Server | undefined;
+    const mockUrl = await new Promise<string>((resolve) => {
+      mockServer = createServer((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            '@graph': [
+              { 'miur:CODICESCUOLA': 'PEHTTP001', 'miur:DENOMINAZIONESCUOLA': 'IC HTTP TEST', 'miur:DESCRIZIONECOMUNE': 'Pescara', 'miur:INDIRIZZOSCUOLA': 'Via Test 1' },
+            ],
+          }),
+        );
+      });
+      mockServer.listen(0, '127.0.0.1', () => {
+        const address = mockServer!.address();
+        if (address === null || typeof address === 'string') throw new Error('indirizzo mock non disponibile');
+        resolve(`http://127.0.0.1:${address.port}/anagrafica.json`);
+      });
+    });
+
+    t.after(async () => {
+      chiudi();
+      await new Promise<void>((resolve) => mockServer!.close(() => resolve()));
+      await pool.query(`DELETE FROM impostazioni_sistema WHERE chiave = 'anagrafica_scuole_url'`);
+      return pool.end();
+    });
+
+    const admin = await creaUtenteBackofficeTest(pool, 'admin');
+    const operatore = await creaUtenteBackofficeTest(pool, 'operatore');
+
+    await t.test('operatore: 403 su GET/PUT impostazioni (solo admin)', async () => {
+      const rGet = await fetch(`${base}/backoffice/impostazioni/anagrafica-scuole`, {
+        headers: { Authorization: `Bearer ${operatore.token}` },
+      });
+      assert.equal(rGet.status, 403);
+      const rPut = await fetch(`${base}/backoffice/impostazioni/anagrafica-scuole`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${operatore.token}` },
+        body: JSON.stringify({ url: mockUrl }),
+      });
+      assert.equal(rPut.status, 403);
+    });
+
+    await t.test('operatore: 503 su ricerca prima che l\'URL sia configurato', async () => {
+      const r = await fetch(`${base}/backoffice/istituzioni/anagrafica-ricerca?q=pescara`, {
+        headers: { Authorization: `Bearer ${operatore.token}` },
+      });
+      assert.equal(r.status, 503);
+    });
+
+    await t.test('admin, PUT: 200, log_operazioni scritto', async () => {
+      const r = await fetch(`${base}/backoffice/impostazioni/anagrafica-scuole`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+        body: JSON.stringify({ url: mockUrl }),
+      });
+      assert.equal(r.status, 200);
+
+      const log = await pool.query(
+        `SELECT 1 FROM log_operazioni WHERE utente_backoffice_id = $1 AND azione = 'aggiorna_impostazioni_anagrafica_scuole'`,
+        [admin.id],
+      );
+      assert.equal(log.rowCount, 1);
+
+      const rGet = await fetch(`${base}/backoffice/impostazioni/anagrafica-scuole`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      const body = (await rGet.json()) as { url: string };
+      assert.equal(body.url, mockUrl);
+    });
+
+    await t.test('operatore, ricerca dopo la configurazione: 200, trova la scuola per denominazione', async () => {
+      const r = await fetch(`${base}/backoffice/istituzioni/anagrafica-ricerca?q=${encodeURIComponent('http test')}`, {
+        headers: { Authorization: `Bearer ${operatore.token}` },
+      });
+      assert.equal(r.status, 200);
+      const risultati = (await r.json()) as Array<{ codice: string; denominazione: string }>;
+      assert.equal(risultati.length, 1);
+      assert.equal(risultati[0]!.codice, 'PEHTTP001');
+    });
+
+    await t.test('ricerca con query troppo corta (< 2 caratteri): 400', async () => {
+      const r = await fetch(`${base}/backoffice/istituzioni/anagrafica-ricerca?q=a`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      assert.equal(r.status, 400);
     });
   },
 );
