@@ -89,7 +89,7 @@ Residui:
 - `assegnazioni.isf_al_momento` lasciato NULL — da valorizzare quando servirà in dashboard/audit (nota: `GET /pubblico/stagioni/:id/{proposta,settimana-tipo-definitiva}` calcola l'ISF a runtime via query, non legge questa colonna — vedi Fase 4).
 - ~~Riassegnazione finale (B.29) — dopo la concertazione~~ ✅ **Fatto**: `EseguiRiassegnazioneResidua`, riusa `EseguiRoundRobin` senza nuova logica algoritmica (thin wrapper su `tipo` parametrizzato).
 
-### Fase 4 — Backend Node (🔶 in corso)
+### Fase 4 — Backend Node (✅ completata, residuo solo hardening punto 10)
 Fatto: scaffold, `GET /healthz`, `GET /stagioni`, autenticazione locale backoffice completa (scrypt, JWT HS256 pinnato con audience, refresh rotation, rate limit, no user enumeration), OIDC SPID/CIE completa (PKCE, state one-shot in Postgres, verifica JWKS, JWT propri, protezione login-CSRF con cookie firmato). Tutto verificato con Postgres reale e IdP mock realistico.
 
 Da fare (ordine consigliato):
@@ -106,25 +106,21 @@ Da fare (ordine consigliato):
 9. **Job housekeeping**: pulizia `oidc_stato_pkce` scadute non consumate, sessioni scadute, retention `log_operazioni` (30gg 🔧) — mai su verbali/assegnazioni/settimana tipo (retention legale fissa). ✅ **Fatto**: `src/housekeeping/` (vedi CLAUDE.md sezione Backend Node).
 10. **Hardening rimandato**: CORS + helmet (insieme al design del reverse proxy), `app.set('trust proxy', ...)` quando c'è il proxy (senza, `req.ip` e il rate limiting per IP vedono l'IP del proxy), lockout per-account (migration dedicata).
 
-### Fase 5 — Frontend (❌ da avviare)
-Due app React 19.2 + TS 7 in pnpm workspace (da creare `pnpm-workspace.yaml`; oggi `backend-node` è un pacchetto singolo).
-- **Pubblico**: login SPID/CIE (redirect flow già pronto lato backend), onboarding associazione/delega, domanda, preferenze slot, dashboard esiti/ISF, concertazione, calendario.
-- **Backoffice**: wizard primo avvio, login locale, gestione per ruolo (admin: impostazioni+parametri+utenti; operatore: deleghe, CRUD impianti/slot, istruttoria, avvio elaborazioni, monitoraggio).
-- Requisiti PA: accessibilità (AGID/WCAG), i18n non richiesta (solo italiano).
+### Fase 5 — Frontend (✅ completata)
+Due app React 19.2 + TS 7. Entrambe collegate alle API reali.
+- **Pubblico**: login OIDC SPID/CIE, onboarding associazione/delega, domanda, preferenze slot, esiti/ISF, concertazione, calendario definitivo — tutte le 6 view fatte.
+- **Backoffice**: wizard primo avvio, login locale, gestione per ruolo (admin: impostazioni+parametri+utenti+backup; operatore: deleghe, CRUD impianti/slot, istruttoria, avvio elaborazioni, monitoraggio) — tutte le 6 view fatte.
+- Requisiti PA: accessibilità (AGID/WCAG) non ancora auditata, i18n non richiesta (solo italiano).
 
-### Fase 6 — Infrastruttura e CI/CD (🔶 parziale)
-Fatto: compose prod/dev verificati con bring-up reale, CI (test Go+Node contro Postgres 18 reale, typecheck, gofmt/vet, validazione compose) e release (build+push GHCR, job migrate) verdi su GitHub.
-Da fare:
-- Reverse proxy (Caddy/Traefik/nginx — da decidere) davanti a backend+frontend: TLS, security headers, insieme a CORS/helmet.
-- Secret `PRODUCTION_DATABASE_URL` + decisione raggiungibilità DB di produzione dal runner (self-hosted vs endpoint con allowlist).
-- Deploy effettivo (target infrastrutturale dell'Ente non ancora noto).
-- **Backup/restore Postgres**: strategia non ancora definita (pg_dump schedulato? volume snapshot?) — obbligatoria prima del go-live, i verbali hanno valore legale.
+### Fase 6 — Infrastruttura e CI/CD (✅ completata)
+Fatto: compose prod/dev verificati con bring-up reale, CI (test Go+Node contro Postgres 18 reale, typecheck, gofmt/vet, validazione compose) e release (build+push GHCR, job migrate) verdi su GitHub con run reali su `dev` (2026-08-26), sistema up e running in produzione. Backup/restore Postgres fatto (UI backoffice + runbook).
+Residuo minore, non bloccante: hardening CORS/helmet espliciti lato Node (Traefik già davanti come reverse proxy reale, `TRUST_PROXY` impostato).
 
-### Fase 7 — Collaudo e taratura (❌ da pianificare)
-- **Dataset realistico**: generatore di dati di test (N associazioni, impianti reali della provincia, domande verosimili) per simulazioni end-to-end.
-- **Taratura CSD** (art. A.11): iterazioni sul dataset verificando assenza di incentivi a dichiarazioni strategiche (FD gonfiato).
-- **Verifica OIDC contro il vero pa-sso-proxy** con credenziali reali (client_id/secret/issuer/redirect_uri) — mai testato, solo mock protocol-faithful. Include conferma di come il proxy segnala SPID vs CIE vs eIDAS nei claim (oggi `OIDC_PROVIDER_DEFAULT='spid'` placeholder).
-- **Validazione parametri 🔺 con l'Ente** → produzione dell'allegato parametrico ufficiale → nuova versione in `parametrico_versioni`.
+### Fase 7 — Collaudo e taratura (🔶 in corso)
+- **OIDC contro il vero pa-sso-proxy**: ✅ verificato e funzionante (2026-08-28) — bug reali trovati e corretti (issuer, `kid` mancante, claim da UserInfo, vedi `docs/claude/oidc-spid-cie.md`). Rimosso di conseguenza `OIDC_PROVIDER_DEFAULT='spid'` hardcoded: il proxy non segnala mai quale IdP ha autenticato, valore ora opaco (`OIDC_PROVIDER='pa-sso-proxy'`, colonna `oidc_provider` senza più CHECK enum, migration `000023`).
+- **Prenotazioni "spot"** per le 7 categorie non-sportive (`tipologia_soggetto`): specifica rimandata deliberatamente — verrà definita insieme al resto della Fase 15 (gestione stagionale) quando una stagione reale sarà live, non prima (decisione del committente).
+- **Taratura CSD** (art. A.11) e **validazione parametri 🔺 con l'Ente**: deliberatamente per ultimi — il parametrico è versionato e modificabile da UI senza migrazione, quindi non blocca la messa in esercizio del resto del sistema (decisione del committente: prima tutto funzionale, poi si tara).
+- **Dataset realistico**: generatore di dati di test (N associazioni, impianti reali della provincia, domande verosimili) per simulazioni end-to-end — prerequisito della taratura CSD.
 - **Riproducibilità da terzi**: esercizio pratico — ricalcolo di un sorteggio e di un'elaborazione completa da parte di un verificatore esterno con soli dati pubblicati.
 - Security review complessiva + test di carico sulla concertazione (unico punto con concorrenza reale).
 
@@ -196,8 +192,8 @@ Richiedono l'Ente/stakeholder:
 1. **FD = fabbisogno ottimale o minimo?** (art. 5 Doc Principale vs "FD" unico di Allegato A) — implementato ottimale, da confermare. [Fase 7]
 2. ~~Quota nuove associazioni (art. 12)~~ **Decisa** (2026-07-25): parametro con default 0, vedi §7-bis. Resta all'Ente solo la scelta del valore.
 3. **Allegato parametrico ufficiale**: tutti i valori 🔺 (moltiplicatore peso→minuti 60, peso fasce pregiate 1,25, limiti concentrazione 600/4/2/1, CSD, soglie mancato utilizzo 1/2/3, scostamento 20%, soglia compensazione ISF 0,20). [prima del go-live, non blocca lo sviluppo]
-4. **Credenziali pa-sso-proxy** per la verifica OIDC reale. [Fase 7]
-5. **Infrastruttura di produzione** (dove gira, come il runner CI raggiunge il DB). [Fase 6]
+4. ~~Credenziali pa-sso-proxy per la verifica OIDC reale~~ **Fatto** (2026-08-28): verificato e funzionante contro il proxy reale.
+5. **Infrastruttura di produzione** (dove gira, come il runner CI raggiunge il DB). **Fatto**: VM con Portainer + Traefik file-based, sistema up e running.
 
 Tecniche (si decidono in sviluppo):
 6. Scelta reverse proxy e design rete container (con CORS/helmet/trust-proxy).

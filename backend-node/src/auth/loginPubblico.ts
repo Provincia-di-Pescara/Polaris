@@ -12,9 +12,10 @@ import { ErroreRefreshTokenNonValido } from './errori.ts';
 import { registraOperazione } from '../repository/logOperazioni.ts';
 
 const DURATA_REFRESH_TOKEN_MS = 7 * 24 * 60 * 60 * 1000;
-// Placeholder: pa-sso-proxy federa sia SPID che CIE, la distinzione esatta nel claim
-// del token va confermata con l'Ente prima del go-live (vedi CLAUDE.md).
-const OIDC_PROVIDER_DEFAULT = 'spid' as const;
+// pa-sso-proxy non espone nei claim quale IdP (SPID/CIE/eIDAS) ha autenticato
+// l'utente — resta interamente nel proxy, valore opaco lato nostro (vedi
+// docs/claude/oidc-spid-cie.md).
+const OIDC_PROVIDER = 'pa-sso-proxy';
 
 export interface EsitoAutenticazionePubblica {
   accessToken: string;
@@ -56,7 +57,7 @@ export async function eseguiCallbackOidc(
     nome: claims.nome,
     cognome: claims.cognome,
     oidcSubject,
-    oidcProvider: OIDC_PROVIDER_DEFAULT,
+    oidcProvider: OIDC_PROVIDER,
   });
 
   // Audit log art. B.39. L'associazione rappresentata qui non c'è ancora: al login la
@@ -67,7 +68,7 @@ export async function eseguiCallbackOidc(
     azione: 'login',
     entitaTipo: 'persone_fisiche',
     entitaId: persona.id,
-    dettaglio: { provider: OIDC_PROVIDER_DEFAULT },
+    dettaglio: { provider: OIDC_PROVIDER },
     ipAddress,
   });
 

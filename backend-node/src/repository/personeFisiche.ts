@@ -13,7 +13,9 @@ export interface DatiLoginOidc {
   nome: string;
   cognome: string;
   oidcSubject: string;
-  oidcProvider: 'spid' | 'cie' | 'eidas';
+  // Il proxy pa-sso-proxy non espone quale IdP (SPID/CIE/eIDAS) ha autenticato
+  // l'utente: resta un valore opaco lato nostro, mai un enum da discriminare.
+  oidcProvider: string;
 }
 
 interface RigaPersona {
