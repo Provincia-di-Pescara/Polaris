@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { Db } from '../db.ts';
 import { hashPassword } from './password.ts';
 import { registraOperazione } from '../repository/logOperazioni.ts';
-import type { Email } from '../email/smtp.ts';
+import { corpoEmailConLink, type Email } from '../email/smtp.ts';
 
 // Bootstrap del primo admin (wizard primo avvio): l'account nasce 'in_attesa_verifica'
 // e diventa attivo solo con il token ricevuto via email — così l'indirizzo del primo
@@ -90,19 +90,20 @@ export async function richiediPrimoAdmin(
     [dati.email, passwordHash, dati.nome, dati.cognome, hashToken(token), new Date(Date.now() + TTL_TOKEN_VERIFICA_MS)],
   );
 
-  await inviaEmailFn({
-    a: dati.email,
-    oggetto: 'POLARIS — attivazione account amministratore',
-    testo: [
+  {
+    const urlVerifica = `${baseUrl}/bootstrap/verifica?token=${token}`;
+    const primaDelLink = [
       `Buongiorno ${dati.nome} ${dati.cognome},`,
-      '',
       'per completare la creazione del primo account amministratore di POLARIS apra questo link:',
-      '',
-      `${baseUrl}/bootstrap/verifica?token=${token}`,
-      '',
-      'Il link scade tra 24 ore. Se non ha richiesto questa attivazione, ignori questa email.',
-    ].join('\n'),
-  });
+    ];
+    const dopoIlLink = ['Il link scade tra 24 ore. Se non ha richiesto questa attivazione, ignori questa email.'];
+    await inviaEmailFn({
+      a: dati.email,
+      oggetto: 'POLARIS — attivazione account amministratore',
+      testo: [...primaDelLink, '', urlVerifica, '', ...dopoIlLink].join('\n'),
+      html: corpoEmailConLink(primaDelLink, urlVerifica, dopoIlLink),
+    });
+  }
 }
 
 export async function verificaPrimoAdmin(db: Db, token: string): Promise<{ id: string; email: string }> {

@@ -1,4 +1,4 @@
-import { richiedi } from './client.ts';
+import { richiedi, apiFetch, ErroreRichiestaApi } from './client.ts';
 
 export interface UtenteBackoffice {
   id: string;
@@ -62,4 +62,25 @@ export function cambiaStatoUtente(id: string, stato: 'attivo' | 'disattivato'): 
 // — usato sia per il primo invito perso sia per un reset password vero e proprio.
 export function richiediResetPassword(id: string): Promise<UtenteBackoffice> {
   return richiedi(`/backoffice/utenti/${encodeURIComponent(id)}/reset-password`, { method: 'POST' });
+}
+
+// Pubblico, mai autenticato: il destinatario dell'invito (o del reset password)
+// imposta qui la propria password consumando il token one-shot ricevuto via email.
+export async function accettaInvito(dati: { token: string; password: string }): Promise<UtenteBackoffice> {
+  const r = await apiFetch('/backoffice/utenti/accetta-invito', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(dati),
+  });
+  if (!r.ok) {
+    let messaggio = r.statusText || `HTTP ${r.status}`;
+    try {
+      const corpo = (await r.json()) as { errore?: unknown };
+      if (typeof corpo.errore === 'string') messaggio = corpo.errore;
+    } catch {
+      // body non JSON: resta lo status text
+    }
+    throw new ErroreRichiestaApi(r.status, messaggio);
+  }
+  return r.json() as Promise<UtenteBackoffice>;
 }

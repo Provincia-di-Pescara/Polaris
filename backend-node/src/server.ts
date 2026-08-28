@@ -26,7 +26,7 @@ import {
   ErroreBootstrapNonDisponibile,
   ErroreTokenVerificaNonValido,
 } from './auth/bootstrapAdmin.ts';
-import { creaTrasportoDaEnv, inviaEmail, type Email } from './email/smtp.ts';
+import { creaTrasportoDaEnv, inviaEmail, corpoEmailConLink, type Email } from './email/smtp.ts';
 import {
   richiedeAutenticazione,
   richiedeAutenticazionePubblico,
@@ -1888,19 +1888,20 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         // reset-password, non tiene occupata una connessione del pool per la durata SMTP.
         // Se l'invio fallisce, l'utente resta comunque creato in_attesa_verifica — un
         // admin può rigenerare l'invito con reset-password se l'email si perde.
-        await inviaEmailFn({
-          a: utente.email,
-          oggetto: 'POLARIS — invito account backoffice',
-          testo: [
+        {
+          const urlInvito = `${backofficeBaseUrl}/utenti/accetta-invito?token=${token}`;
+          const primaDelLink = [
             `Buongiorno ${utente.nome} ${utente.cognome},`,
-            '',
             'è stato creato per lei un account sul backoffice POLARIS. Per attivarlo e impostare la password apra questo link:',
-            '',
-            `${backofficeBaseUrl}/utenti/accetta-invito?token=${token}`,
-            '',
-            'Il link scade tra 24 ore.',
-          ].join('\n'),
-        });
+          ];
+          const dopoIlLink = ['Il link scade tra 24 ore.'];
+          await inviaEmailFn({
+            a: utente.email,
+            oggetto: 'POLARIS — invito account backoffice',
+            testo: [...primaDelLink, '', urlInvito, '', ...dopoIlLink].join('\n'),
+            html: corpoEmailConLink(primaDelLink, urlInvito, dopoIlLink),
+          });
+        }
         res.status(201).json(aPubblico(utente));
       } catch (err) {
         if (err instanceof ErroreValoreDuplicato) {
@@ -2059,19 +2060,20 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           res.status(404).json({ errore: 'utente non trovato' });
           return;
         }
-        await inviaEmailFn({
-          a: risultato.utente.email,
-          oggetto: 'POLARIS — reimposta la password del tuo account backoffice',
-          testo: [
+        {
+          const urlReset = `${backofficeBaseUrl}/utenti/accetta-invito?token=${risultato.token}`;
+          const primaDelLink = [
             `Buongiorno ${risultato.utente.nome} ${risultato.utente.cognome},`,
-            '',
             'è stato richiesto un reset della password del suo account backoffice POLARIS. Per impostarne una nuova apra questo link:',
-            '',
-            `${backofficeBaseUrl}/utenti/accetta-invito?token=${risultato.token}`,
-            '',
-            'Il link scade tra 24 ore. Le sessioni attive precedenti sono state disconnesse.',
-          ].join('\n'),
-        });
+          ];
+          const dopoIlLink = ['Il link scade tra 24 ore. Le sessioni attive precedenti sono state disconnesse.'];
+          await inviaEmailFn({
+            a: risultato.utente.email,
+            oggetto: 'POLARIS — reimposta la password del tuo account backoffice',
+            testo: [...primaDelLink, '', urlReset, '', ...dopoIlLink].join('\n'),
+            html: corpoEmailConLink(primaDelLink, urlReset, dopoIlLink),
+          });
+        }
         res.status(200).json(aPubblico(risultato.utente));
       } catch (err) {
         if (err instanceof ErroreUltimoAdmin || err instanceof ErroreUtenteDisattivato) {

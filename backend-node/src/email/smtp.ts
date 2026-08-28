@@ -47,6 +47,7 @@ export interface Email {
   a: string;
   oggetto: string;
   testo: string;
+  html?: string;
 }
 
 export async function inviaEmail(trasporto: TrasportoEmail, email: Email): Promise<void> {
@@ -55,5 +56,27 @@ export async function inviaEmail(trasporto: TrasportoEmail, email: Email): Promi
     to: email.a,
     subject: email.oggetto,
     text: email.testo,
+    ...(email.html ? { html: email.html } : {}),
   });
+}
+
+function escapeHtml(valore: string): string {
+  return valore
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// HTML minimale per email transazionali con link di attivazione: nessun client
+// email plain-text-only nel 2026, ma senza <a> molti client non rendono l'URL
+// cliccabile — solo testo, senza formattazione, un link vero basta. `paragrafiPrima`
+// precede il link (saluto, spiegazione), `paragrafiDopo` lo segue (scadenza, avvisi).
+export function corpoEmailConLink(paragrafiPrima: string[], url: string, paragrafiDopo: string[] = []): string {
+  return [
+    ...paragrafiPrima.map((p) => `<p>${escapeHtml(p)}</p>`),
+    `<p><a href="${escapeHtml(url)}">${escapeHtml(url)}</a></p>`,
+    ...paragrafiDopo.map((p) => `<p>${escapeHtml(p)}</p>`),
+  ].join('\n');
 }

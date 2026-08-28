@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import {
   Layers,
@@ -17,6 +17,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.tsx';
+import { listaDeleghe } from '../api/deleghe.ts';
 
 interface VoceSemplice {
   tipo: 'link';
@@ -43,10 +44,24 @@ export const Sidebar: React.FC = () => {
   const role = utente!.ruolo;
   const currentTab = location.pathname === '/' ? 'control-room' : location.pathname.replace(/^\//, '');
 
+  const [delegheInAttesa, setDelegheInAttesa] = useState(0);
+  useEffect(() => {
+    listaDeleghe({ stato: 'in_attesa' })
+      .then((deleghe) => setDelegheInAttesa(deleghe.length))
+      .catch(() => setDelegheInAttesa(0));
+  }, []);
+
   const menuItems: Array<VoceSemplice | VoceGruppo> = [
     { tipo: 'link', id: 'control-room', label: 'Control Room Procedura', icon: Layers, roles: ['admin', 'operatore'] },
     { tipo: 'link', id: 'impianti-spazi', label: 'Impianti & Spazi Sportivi', icon: Building2, roles: ['admin', 'operatore'] },
-    { tipo: 'link', id: 'deleghe-accreditamenti', label: 'Deleghe & Accreditamenti', icon: FileCheck2, roles: ['admin', 'operatore'], badge: '2' },
+    {
+      tipo: 'link',
+      id: 'deleghe-accreditamenti',
+      label: 'Deleghe & Accreditamenti',
+      icon: FileCheck2,
+      roles: ['admin', 'operatore'],
+      ...(delegheInAttesa > 0 ? { badge: String(delegheInAttesa) } : {}),
+    },
     {
       tipo: 'gruppo',
       id: 'impostazioni',
