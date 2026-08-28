@@ -371,9 +371,12 @@ test(
       assert.equal(esito, null);
     });
 
-    await t.test('completaResetAutonomo con token sbagliato: rigettato, sessione preesistente ancora viva', async () => {
+    await t.test('completaResetAutonomo con token sbagliato: rigettato, sessione preesistente ancora attiva', async () => {
       await assert.rejects(() => completaResetAutonomo(pool, 'token-inventato-non-valido-0000000000000000000000000000000000000000000000000000000000000', 'nuova-password-lunga-1'), ErroreTokenInvitoNonValido);
-      const sessioni = await pool.query('SELECT 1 FROM sessioni_backoffice WHERE utente_backoffice_id = $1', [utenteId]);
+      const sessioni = await pool.query(
+        'SELECT 1 FROM sessioni_backoffice WHERE utente_backoffice_id = $1 AND revocata_il IS NULL',
+        [utenteId],
+      );
       assert.equal(sessioni.rowCount, 1);
     });
 
@@ -385,7 +388,12 @@ test(
         await revocaSessioniUtente(client, aggiornato.id);
       });
 
-      const sessioniDopo = await pool.query('SELECT 1 FROM sessioni_backoffice WHERE utente_backoffice_id = $1', [utenteId]);
+      // revocaSessioniUtente marca revocata_il (soft-revoke), non cancella la riga —
+      // la sessione va cercata tra quelle ancora attive, non tra tutte le righe.
+      const sessioniDopo = await pool.query(
+        'SELECT 1 FROM sessioni_backoffice WHERE utente_backoffice_id = $1 AND revocata_il IS NULL',
+        [utenteId],
+      );
       assert.equal(sessioniDopo.rowCount, 0);
 
       await assert.rejects(() => completaResetAutonomo(pool, token, 'altra-password-lunga-2'), ErroreTokenInvitoNonValido);
