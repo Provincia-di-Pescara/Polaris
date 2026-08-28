@@ -8,6 +8,8 @@ import {
   cambiaStatoUtente,
   impostaNuovoInvito,
   completaInvito,
+  richiediResetPasswordAutonomo,
+  completaResetAutonomo,
   trovaUtentePerId,
   ErroreUltimoAdmin,
   ErroreTokenInvitoNonValido,
@@ -328,6 +330,65 @@ test(
       );
       assert.equal(dopo.rows[0]!.token_verifica_hash, null);
       assert.equal(dopo.rows[0]!.token_verifica_scade_il, null);
+    });
+  },
+);
+
+test(
+  'reset password self-service: account resta attivo durante la richiesta, sessioni revocate solo al completamento, token invalido rigettato',
+  { skip: dsn ? false : 'TEST_DATABASE_URL non impostata' },
+  async (t) => {
+    const { pool, distruggi } = await creaDatabaseDedicato(dsn!);
+    t.after(distruggi);
+    await svuota(pool);
+
+    const email = `self-service-${randomUUID()}@test.local`;
+    const inserito = await pool.query<{ id: string }>(
+      `INSERT INTO utenti_backoffice (email, password_hash, nome, cognome, ruolo, stato)
+       VALUES ($1, 'scrypt:1:1:1:aa:bb', 'Auto', 'Servizio', 'operatore', 'attivo') RETURNING id`,
+      [email],
+    );
+    const utenteId = inserito.rows[0]!.id;
+
+    await creaSessione(pool, {
+      utenteBackofficeId: utenteId,
+      refreshTokenHash: 'hash-sessione-preesistente',
+      scadeIl: new Date(Date.now() + 60_000),
+    });
+
+    let token = '';
+    await t.test('richiediResetPasswordAutonomo: token generato, account resta attivo (a differenza di impostaNuovoInvito)', async () => {
+      const esito = await richiediResetPasswordAutonomo(pool, email);
+      assert.ok(esito);
+      token = esito!.token;
+
+      const dopoRichiesta = await trovaUtentePerId(pool, utenteId);
+      assert.equal(dopoRichiesta?.stato, 'attivo', 'un attaccante che conosce solo l\'email non deve poter bloccare il login');
+    });
+
+    await t.test('email inesistente: nessun errore, nessuna riga toccata (no enumeration)', async () => {
+      const esito = await richiediResetPasswordAutonomo(pool, `inesistente-${randomUUID()}@test.local`);
+      assert.equal(esito, null);
+    });
+
+    await t.test('completaResetAutonomo con token sbagliato: rigettato, sessione preesistente ancora viva', async () => {
+      await assert.rejects(() => completaResetAutonomo(pool, 'token-inventato-non-valido-0000000000000000000000000000000000000000000000000000000000000', 'nuova-password-lunga-1'), ErroreTokenInvitoNonValido);
+      const sessioni = await pool.query('SELECT 1 FROM sessioni_backoffice WHERE utente_backoffice_id = $1', [utenteId]);
+      assert.equal(sessioni.rowCount, 1);
+    });
+
+    await t.test('completaResetAutonomo con token corretto: password aggiornata, token consumato one-shot', async () => {
+      await eseguiInTransazione(pool, async (client) => {
+        const aggiornato = await completaResetAutonomo(client, token, 'nuova-password-lunga-1');
+        assert.equal(aggiornato.stato, 'attivo');
+        assert.ok(await verificaPassword('nuova-password-lunga-1', aggiornato.passwordHash));
+        await revocaSessioniUtente(client, aggiornato.id);
+      });
+
+      const sessioniDopo = await pool.query('SELECT 1 FROM sessioni_backoffice WHERE utente_backoffice_id = $1', [utenteId]);
+      assert.equal(sessioniDopo.rowCount, 0);
+
+      await assert.rejects(() => completaResetAutonomo(pool, token, 'altra-password-lunga-2'), ErroreTokenInvitoNonValido);
     });
   },
 );

@@ -263,17 +263,23 @@ export async function impostaNuovoInvito(
   return { utente: daRiga(riga), token };
 }
 
-// Self-service ("password dimenticata"), a differenza di impostaNuovoInvito: nessun
-// chiamante admin, nessun controllo ultimo-admin — è la stessa persona che rientra
-// in possesso del proprio account via email verificata, il conteggio admin attivi
-// non cambia nel tempo (torna 'attivo' completando l'invito). Il chiamante (route
-// pubblica) decide se e cosa rispondere: null qui non deve mai distinguersi da un
-// invio riuscito lato client, altrimenti si abilita enumerazione email.
+// Self-service ("password dimenticata"): a differenza di impostaNuovoInvito, nessun
+// chiamante admin autenticato — la richiesta è pubblica, chiunque può inviarla
+// conoscendo solo un'email. Per questo NON usa stato/token_verifica_* (che
+// forzerebbero l'account in 'in_attesa_verifica', bloccandone il login: un
+// attaccante che conosce l'email di un admin potrebbe tenerlo fuori a tempo
+// indeterminato senza aver mai dimostrato nulla). Colonna dedicata
+// token_reset_hash/token_reset_scade_il, indipendente dallo stato dell'account —
+// l'account resta 'attivo' e utilizzabile per tutta la finestra del token; solo
+// il completamento (prova di possesso della casella email) cambia la password.
+// Il chiamante (route pubblica) decide se e cosa rispondere: null qui non deve
+// mai distinguersi da un invio riuscito lato client, altrimenti si abilita
+// enumerazione email.
 export async function richiediResetPasswordAutonomo(db: Db, email: string): Promise<{ utente: UtenteBackoffice; token: string } | null> {
   const token = randomBytes(32).toString('hex');
   const r = await db.query<RigaUtenteBackoffice>(
     `UPDATE utenti_backoffice
-     SET stato = 'in_attesa_verifica', token_verifica_hash = $2, token_verifica_scade_il = $3, token_verifica_scopo = 'invito_utente'
+     SET token_reset_hash = $2, token_reset_scade_il = $3
      WHERE email = $1 AND stato = 'attivo'
      RETURNING ${COLONNE_SELECT}`,
     [email, hashToken(token), new Date(Date.now() + TTL_TOKEN_INVITO_MS)],
@@ -283,6 +289,25 @@ export async function richiediResetPasswordAutonomo(db: Db, email: string): Prom
     return null;
   }
   return { utente: daRiga(riga), token };
+}
+
+// Completa il reset self-service: password_hash aggiornato, token consumato
+// one-shot. Non tocca stato/token_verifica_* (namespace separato da completaInvito)
+// — a differenza di quel flusso, l'account non era mai stato disattivato.
+export async function completaResetAutonomo(db: Db, token: string, password: string): Promise<UtenteBackoffice> {
+  const passwordHash = await hashPassword(password);
+  const r = await db.query<RigaUtenteBackoffice>(
+    `UPDATE utenti_backoffice
+     SET password_hash = $2, token_reset_hash = NULL, token_reset_scade_il = NULL
+     WHERE token_reset_hash = $1 AND stato = 'attivo' AND token_reset_scade_il > now()
+     RETURNING ${COLONNE_SELECT}`,
+    [hashToken(token), passwordHash],
+  );
+  const riga = r.rows[0];
+  if (!riga) {
+    throw new ErroreTokenInvitoNonValido('token non valido o scaduto');
+  }
+  return daRiga(riga);
 }
 
 export async function completaInvito(db: Db, token: string, password: string): Promise<UtenteBackoffice> {

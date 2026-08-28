@@ -53,6 +53,7 @@ import {
   impostaNuovoInvito,
   richiediResetPasswordAutonomo,
   completaInvito,
+  completaResetAutonomo,
   ErroreUltimoAdmin,
   ErroreTokenInvitoNonValido,
   aPubblico,
@@ -406,6 +407,16 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     }
     try {
       const esito = await richiediResetPasswordAutonomo(pool, parsed.data.email);
+      // Risposta inviata SUBITO, prima di un eventuale invio email: il round-trip
+      // SMTP (centinaia di ms-secondi) è un canale laterale di enumerazione molto
+      // più marcato del solo scarto tra query DB — un endpoint pubblico non
+      // autenticato non deve rivelare via timing se l'email esiste. Nessun
+      // registraOperazione qui: la richiesta è anonima/non verificata (chiunque
+      // conosca l'email può inviarla), attribuirla all'account come se l'avesse
+      // fatta il suo titolare falsificherebbe l'audit log (art. B.39) — l'azione
+      // viene tracciata solo al completamento, quando il possesso del token la
+      // rende attendibile (vedi /backoffice/utenti/accetta-invito).
+      res.status(200).json({ messaggio: 'se l\'indirizzo corrisponde a un account attivo, riceverà un\'email con le istruzioni' });
       if (esito) {
         const urlReset = `${backofficeBaseUrl}/utenti/accetta-invito?token=${esito.token}`;
         const primaDelLink = [
@@ -413,22 +424,21 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
           'è stato richiesto un reset della password del suo account backoffice POLARIS. Se non è stato lei, ignori questa email. Per impostarne una nuova apra questo link:',
         ];
         const dopoIlLink = ['Il link scade tra 24 ore.'];
-        await inviaEmailFn({
+        // Fire-and-forget deliberato (vedi commento sopra sul timing): un eventuale
+        // fallimento SMTP resta comunque catturato, non silenzioso — stesso
+        // meccanismo con cui questo processo intercetta ogni errore che sfugge a
+        // un try/catch applicativo (sentry.ts:catturaErroriProcesso).
+        void inviaEmailFn({
           a: esito.utente.email,
           oggetto: 'POLARIS — reimposta la password del tuo account backoffice',
           testo: [...primaDelLink, '', urlReset, '', ...dopoIlLink].join('\n'),
           html: corpoEmailConLink(primaDelLink, urlReset, dopoIlLink),
         });
-        await registraOperazione(pool, {
-          attore: { tipo: 'backoffice', utenteBackofficeId: esito.utente.id, ruolo: esito.utente.ruolo },
-          azione: 'richiesta_reset_password_autonomo',
-          entitaTipo: 'utenti_backoffice',
-          entitaId: esito.utente.id,
-        });
       }
-      res.status(200).json({ messaggio: 'se l\'indirizzo corrisponde a un account attivo, riceverà un\'email con le istruzioni' });
     } catch (err) {
-      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      if (!res.headersSent) {
+        res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+      }
     }
   });
 
@@ -2141,10 +2151,28 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
     }
     try {
       const utente = await eseguiInTransazione(pool, async (client) => {
-        const u = await completaInvito(client, parsed.data.token, parsed.data.password);
+        // Due namespace di token indipendenti condividono questa pagina/endpoint:
+        // token_verifica_hash (invito admin / reset admin-triggered, completaInvito)
+        // e token_reset_hash (self-service "password dimenticata",
+        // completaResetAutonomo) — si prova il primo, poi il secondo. Il possesso
+        // del token è qui la prova d'identità: solo a questo punto (mai alla sola
+        // richiesta) l'operazione è attribuibile al titolare dell'account.
+        let u;
+        let azione: 'accetta_invito_utente_backoffice' | 'reset_password_autonomo_completato';
+        try {
+          u = await completaInvito(client, parsed.data.token, parsed.data.password);
+          azione = 'accetta_invito_utente_backoffice';
+        } catch (err) {
+          if (!(err instanceof ErroreTokenInvitoNonValido)) {
+            throw err;
+          }
+          u = await completaResetAutonomo(client, parsed.data.token, parsed.data.password);
+          azione = 'reset_password_autonomo_completato';
+          await revocaSessioniUtente(client, u.id);
+        }
         await registraOperazione(client, {
           attore: { tipo: 'backoffice', utenteBackofficeId: u.id, ruolo: u.ruolo },
-          azione: 'accetta_invito_utente_backoffice',
+          azione,
           entitaTipo: 'utenti_backoffice',
           entitaId: u.id,
         });
