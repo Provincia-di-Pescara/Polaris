@@ -263,6 +263,28 @@ export async function impostaNuovoInvito(
   return { utente: daRiga(riga), token };
 }
 
+// Self-service ("password dimenticata"), a differenza di impostaNuovoInvito: nessun
+// chiamante admin, nessun controllo ultimo-admin — è la stessa persona che rientra
+// in possesso del proprio account via email verificata, il conteggio admin attivi
+// non cambia nel tempo (torna 'attivo' completando l'invito). Il chiamante (route
+// pubblica) decide se e cosa rispondere: null qui non deve mai distinguersi da un
+// invio riuscito lato client, altrimenti si abilita enumerazione email.
+export async function richiediResetPasswordAutonomo(db: Db, email: string): Promise<{ utente: UtenteBackoffice; token: string } | null> {
+  const token = randomBytes(32).toString('hex');
+  const r = await db.query<RigaUtenteBackoffice>(
+    `UPDATE utenti_backoffice
+     SET stato = 'in_attesa_verifica', token_verifica_hash = $2, token_verifica_scade_il = $3, token_verifica_scopo = 'invito_utente'
+     WHERE email = $1 AND stato = 'attivo'
+     RETURNING ${COLONNE_SELECT}`,
+    [email, hashToken(token), new Date(Date.now() + TTL_TOKEN_INVITO_MS)],
+  );
+  const riga = r.rows[0];
+  if (!riga) {
+    return null;
+  }
+  return { utente: daRiga(riga), token };
+}
+
 export async function completaInvito(db: Db, token: string, password: string): Promise<UtenteBackoffice> {
   const passwordHash = await hashPassword(password);
   const r = await db.query<RigaUtenteBackoffice>(

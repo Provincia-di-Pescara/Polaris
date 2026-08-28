@@ -13,6 +13,7 @@ import { eseguiCallbackOidc, eseguiLogoutPubblico, eseguiRefreshPubblico } from 
 import { ErroreCredenzialiNonValide, ErroreRefreshTokenNonValido, ErroreUtenteDisattivato } from './auth/errori.ts';
 import {
   schemaAccettaInvitoUtente,
+  schemaPasswordDimenticata,
   schemaBootstrapPrimoAdmin,
   schemaBootstrapVerifica,
   schemaLoginRequest,
@@ -50,6 +51,7 @@ import {
   aggiornaUtente,
   cambiaStatoUtente,
   impostaNuovoInvito,
+  richiediResetPasswordAutonomo,
   completaInvito,
   ErroreUltimoAdmin,
   ErroreTokenInvitoNonValido,
@@ -385,6 +387,47 @@ export function creaApp(pool: Pool, dipendenze: DipendenzeApp = {}): Express {
         res.status(403).json({ errore: 'utente disattivato' });
         return;
       }
+      res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // Self-service, mai autenticato: risposta sempre 200 con messaggio generico,
+  // indipendentemente dal fatto che l'email corrisponda a un account esistente/attivo
+  // — stesso principio "no user enumeration" già seguito per /auth/login.
+  app.post('/auth/password-dimenticata', limitatoreLogin, async (req, res) => {
+    const parsed = schemaPasswordDimenticata.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ errore: 'richiesta non valida', dettagli: parsed.error.issues });
+      return;
+    }
+    if (!inviaEmailFn || !backofficeBaseUrl) {
+      res.status(503).json({ errore: 'SMTP non configurato (SMTP_HOST/BACKOFFICE_BASE_URL in .env)' });
+      return;
+    }
+    try {
+      const esito = await richiediResetPasswordAutonomo(pool, parsed.data.email);
+      if (esito) {
+        const urlReset = `${backofficeBaseUrl}/utenti/accetta-invito?token=${esito.token}`;
+        const primaDelLink = [
+          `Buongiorno ${esito.utente.nome} ${esito.utente.cognome},`,
+          'è stato richiesto un reset della password del suo account backoffice POLARIS. Se non è stato lei, ignori questa email. Per impostarne una nuova apra questo link:',
+        ];
+        const dopoIlLink = ['Il link scade tra 24 ore.'];
+        await inviaEmailFn({
+          a: esito.utente.email,
+          oggetto: 'POLARIS — reimposta la password del tuo account backoffice',
+          testo: [...primaDelLink, '', urlReset, '', ...dopoIlLink].join('\n'),
+          html: corpoEmailConLink(primaDelLink, urlReset, dopoIlLink),
+        });
+        await registraOperazione(pool, {
+          attore: { tipo: 'backoffice', utenteBackofficeId: esito.utente.id, ruolo: esito.utente.ruolo },
+          azione: 'richiesta_reset_password_autonomo',
+          entitaTipo: 'utenti_backoffice',
+          entitaId: esito.utente.id,
+        });
+      }
+      res.status(200).json({ messaggio: 'se l\'indirizzo corrisponde a un account attivo, riceverà un\'email con le istruzioni' });
+    } catch (err) {
       res.status(500).json({ errore: err instanceof Error ? err.message : String(err) });
     }
   });

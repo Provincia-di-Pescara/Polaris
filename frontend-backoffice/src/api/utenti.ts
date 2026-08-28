@@ -64,6 +64,27 @@ export function richiediResetPassword(id: string): Promise<UtenteBackoffice> {
   return richiedi(`/backoffice/utenti/${encodeURIComponent(id)}/reset-password`, { method: 'POST' });
 }
 
+// Pubblico, mai autenticato: risposta sempre 200 con messaggio generico (no user
+// enumeration lato backend) — il chiamante mostra sempre lo stesso esito, che
+// l'email corrisponda o meno a un account.
+export async function richiediPasswordDimenticata(email: string): Promise<void> {
+  const r = await apiFetch('/auth/password-dimenticata', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+  if (!r.ok) {
+    let messaggio = r.statusText || `HTTP ${r.status}`;
+    try {
+      const corpo = (await r.json()) as { errore?: unknown };
+      if (typeof corpo.errore === 'string') messaggio = corpo.errore;
+    } catch {
+      // body non JSON: resta lo status text
+    }
+    throw new ErroreRichiestaApi(r.status, messaggio);
+  }
+}
+
 // Pubblico, mai autenticato: il destinatario dell'invito (o del reset password)
 // imposta qui la propria password consumando il token one-shot ricevuto via email.
 export async function accettaInvito(dati: { token: string; password: string }): Promise<UtenteBackoffice> {

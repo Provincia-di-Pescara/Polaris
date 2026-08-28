@@ -35,3 +35,8 @@ export const schemaAccettaInvitoUtente = z.object({
   password: z.string().min(12),
 });
 export type AccettaInvitoUtenteRequest = z.infer<typeof schemaAccettaInvitoUtente>;
+
+export const schemaPasswordDimenticata = z.object({
+  email: z.string().email(),
+});
+export type PasswordDimenticataRequest = z.infer<typeof schemaPasswordDimenticata>;

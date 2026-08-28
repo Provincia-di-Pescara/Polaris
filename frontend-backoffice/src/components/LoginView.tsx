@@ -133,6 +133,10 @@ export function LoginView(): React.ReactElement {
           {inCorso ? 'Accesso in corso...' : 'Accedi'}
         </button>
 
+        <Link to="/password-dimenticata" style={{ textAlign: 'center', fontSize: '0.85rem' }}>
+          Password dimenticata?
+        </Link>
+
         {bootstrapDisponibile && (
           <Link to="/bootstrap" style={{ textAlign: 'center', fontSize: '0.85rem' }}>
             Nessun amministratore configurato? Crea il primo account

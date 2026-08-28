@@ -5,6 +5,7 @@ import { LoginView } from './components/LoginView.tsx';
 import { BootstrapView } from './components/BootstrapView.tsx';
 import { BootstrapVerificaView } from './components/BootstrapVerificaView.tsx';
 import { AccettaInvitoView } from './components/AccettaInvitoView.tsx';
+import { PasswordDimenticataView } from './components/PasswordDimenticataView.tsx';
 import { ControlRoomView } from './components/ControlRoomView.tsx';
 import { ImpiantiSpaziView } from './components/ImpiantiSpaziView.tsx';
 import { DelegheAccreditamentiView } from './components/DelegheAccreditamentiView.tsx';
@@ -25,6 +26,7 @@ export const routes: RouteObject[] = [
   { path: '/bootstrap', element: <BootstrapView /> },
   { path: '/bootstrap/verifica', element: <BootstrapVerificaView /> },
   { path: '/utenti/accetta-invito', element: <AccettaInvitoView /> },
+  { path: '/password-dimenticata', element: <PasswordDimenticataView /> },
   {
     element: <ProtectedRoute />,
     children: [
